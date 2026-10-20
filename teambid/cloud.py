@@ -144,9 +144,10 @@ def unpack(raw, workspace=None, keep_backups=3):
 # ---------------------------------------------------------------- remote (GitHub release asset)
 def remote_version(rp=None):
     rp = rp or repo()
-    r = _gh("api", f"repos/{rp}/releases/tags/{TAG}", "--jq",
-            f'.assets[] | select(.name=="{ASSET}") | "\\(.id)-\\(.updated_at)"', check=False)
-    return r.stdout.strip() or None if r.returncode == 0 else None
+    # the releases list (not /tags/) also shows a draft release, which is what an empty repo gets
+    r = _gh("api", f"repos/{rp}/releases", "--jq",
+            f'.[] | select(.tag_name=="{TAG}") | .assets[] | select(.name=="{ASSET}") | "\\(.id)-\\(.updated_at)"', check=False)
+    return (r.stdout.strip().splitlines() or [None])[0] if r.returncode == 0 else None
 
 
 def busy(rp=None, _cache={}):
