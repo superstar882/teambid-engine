@@ -242,12 +242,14 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
     lanes = prefs.get("lanes") or member["profile"].get("lanes") or ["backend"]
     lane_pats = _lane_pattern(lanes)
     reasons = Counter()
-    hits = []
+    hits, rejected = [], set()          # rejected: seen in this scan and failed a real test (not just the date window)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
         sc, why = score_job(job, member, lane_pats, today)
         if sc is None:
             reasons[why] += 1
+            if why != "old":
+                rejected.add(job["id"])
             continue
         hits.append((sc, why, job))
     hits.sort(key=lambda x: -x[0])
@@ -305,6 +307,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
     for sc, why, job in uniq:
         if sc < min_score:
             reasons["low score"] += 1
+            rejected.add(job["id"])
             continue
         tier = "best" if sc >= 60 else "consider"
         cur = con.execute("SELECT 1 FROM matches WHERE member_id=? AND job_id=?", (member["id"], job["id"])).fetchone()
@@ -316,6 +319,15 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
                         (member["id"], job["id"], sc, tier, json.dumps(why), stamp, stamp))
             new += 1
         best += tier == "best"
+    # jobs that matched before but now fail a real test (a fixed filter, a changed preference, a hybrid label) leave
+    # the list, unless the member already acted on them (saved, skipped, applying). Jobs that only aged out stay.
+    con.execute("CREATE TEMP TABLE IF NOT EXISTS rejected_now (id INTEGER PRIMARY KEY)")
+    con.execute("DELETE FROM rejected_now")
+    con.executemany("INSERT OR IGNORE INTO rejected_now VALUES (?)", [(i,) for i in rejected])
+    gone = con.execute("DELETE FROM matches WHERE member_id=? AND status='new' AND job_id IN (SELECT id FROM rejected_now)",
+                       (member["id"],)).rowcount
+    if gone:
+        log(f"  {member['name']}: {gone} earlier matches no longer fit and were removed")
     total = sum(1 for sc, _, _ in uniq if sc >= min_score)
     write_member_report(con, member, stamp, reasons, total)
     log(f"  {member['name']}: {total} matches ({new} new, {best} best)")
