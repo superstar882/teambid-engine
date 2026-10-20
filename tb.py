@@ -256,7 +256,7 @@ def _run(a, ap):
                 with open(out, "a", encoding="utf-8") as f:
                     print(f"pending={n}", file=f)
         else:
-            print(docs.run())
+            print(docs.run_all())
     elif a.cmd == "claude-key":
         _claude_key(a.remove)
     elif a.cmd == "test":

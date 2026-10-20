@@ -76,6 +76,18 @@ def push_site(msg):
             _git("pull", "-q", "--rebase", "origin", "main")
 
 
+def run_all(rounds=5, log=print):
+    """Keep building until nothing is waiting (requests can arrive while a batch builds)."""
+    total = {"built": 0, "failed": 0}
+    for _ in range(rounds):
+        r = run(log=log)
+        total["built"] += r.get("built", 0)
+        total["failed"] += r.get("failed", 0)
+        if not r.get("built") and not r.get("failed"):
+            break
+    return total
+
+
 def run(limit=10, log=print):
     sb = progress.settings()
     if not sb:

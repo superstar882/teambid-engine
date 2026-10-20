@@ -221,7 +221,7 @@ function docCard(d) {
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
     <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
     <span class="muted" style="font-size:12px">asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}</span></div>`;
-  if (!x) return `<div class="doc">${head}<div class="muted">Usually ready in 15-20 minutes. This list refreshes by itself.</div></div>`;
+  if (!x) return `<div class="doc">${head}<div class="muted">Building in the cloud. This list refreshes by itself every minute.</div></div>`;
   if (x.error) return `<div class="doc">${head}<div class="bad">${esc(x.error)}</div></div>`;
   return `<div class="doc">${head}
     <div class="row" style="margin-top:6px">${DOC_FILES.filter(([k]) => x.files[k]).map(([k, l]) =>
@@ -240,7 +240,7 @@ async function docsView(m, body) {
   const p = DOC_PREFILL || {}; DOC_PREFILL = null;
   body.innerHTML = `<div class="card"><h2>Tailored resume + cover letter for ${esc(m.name)}</h2>
     <div class="muted">Paste the job post (copying the whole page from the browser is fine), or give a link the tool can read.
-      It's built in the cloud from ${esc(m.name.split(" ")[0])}'s real resume, fact-checked, in about 15-20 minutes.</div>
+      It's built in the cloud from ${esc(m.name.split(" ")[0])}'s real resume, fact-checked, usually in about 5 minutes.</div>
     <div class="row" style="margin-top:8px"><input id="d_url" placeholder="Job link" value="${esc(p.url || "")}" style="flex:2;min-width:220px">
       <input id="d_co" placeholder="Company" value="${esc(p.company || "")}" style="flex:1;min-width:140px">
       <input id="d_ti" placeholder="Job title" value="${esc(p.title || "")}" style="flex:1;min-width:160px"></div>
@@ -280,7 +280,10 @@ async function docsView(m, body) {
       for (let n = 0; n < parts.length; n++) await pgPut("docpart", `${rid}|${n}`, { kind: "docpart", rid, n, text: parts[n] });
       await pgPut("docreq", rid, { kind: "docreq", rid, member: m.slug, url, company, title, parts: parts.length,
                                    by: localStorage.getItem("tb_name") || "", at: new Date().toISOString() });
-      msg.textContent = "Sent. Ready in about 15-20 minutes.";
+      // start the cloud build now (Supabase function -> GitHub); if it isn't set up, the 15-minute check still picks it up
+      let quick = false;
+      try { quick = (await fetch(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" })).ok; } catch (_) {}
+      msg.textContent = quick ? "Sent. Usually ready in about 5 minutes." : "Sent. Ready in about 15-30 minutes.";
       document.getElementById("d_text").value = "";
       list();
     } catch (err) { msg.textContent = err.message; }
