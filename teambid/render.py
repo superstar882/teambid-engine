@@ -84,7 +84,9 @@ def resume_html(spec):
             out.append(f"<p><b>{e(ed.get('school', ''))}</b>{', ' + e(deg) if deg else ''}{e(gpa)} &nbsp; <span class='dates'>{e(yrs)}</span></p>")
     extra = [*spec.get("certifications", []), *spec.get("awards", [])]
     if extra:
-        out += ["<h2>Certifications and awards</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in extra) + "</ul>"]
+        title = "Certifications and awards" if spec.get("awards") and spec.get("certifications") else \
+            ("Awards" if spec.get("awards") else "Certifications")
+        out += [f"<h2>{title}</h2>", "<p>" + " &nbsp;·&nbsp; ".join(e(x) for x in extra) + "</p>"]
     return "<body>" + "\n".join(out) + "</body>"
 
 
@@ -186,9 +188,9 @@ def resume_docx(spec, path, paper="letter"):
                       ("    " + " - ".join(x for x in [ed.get("start"), ed.get("end")] if x)))
     extra = [*spec.get("certifications", []), *spec.get("awards", [])]
     if extra:
-        heading("Certifications and awards")
-        for x in extra:
-            d.add_paragraph(x, style="List Bullet").paragraph_format.space_after = Pt(0)
+        heading("Certifications and awards" if spec.get("awards") and spec.get("certifications") else
+                ("Awards" if spec.get("awards") else "Certifications"))
+        d.add_paragraph("  ·  ".join(extra)).paragraph_format.space_after = Pt(0)
     d.save(path)
 
 
@@ -216,13 +218,45 @@ def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=
     return html_to_pdf(resume_html(spec), tmp, paper=paper)
 
 
+def _last_page_fill(pdf_path):
+    """How much of the last page is used (0-1): a 2-line spill onto page 2 looks like a mistake."""
+    import fitz
+    with fitz.open(pdf_path) as doc:
+        pg = doc[-1]
+        ys = [b[3] for b in pg.get_text("blocks") if b[4].strip()]
+        return (max(ys) - pg.rect.y0) / pg.rect.height if ys else 0.0
+
+
+def fit_pages(spec, years, pdf_path, paper, budget):
+    """fit_one_page, then: if the last page is under a quarter full, drop up to 3 of the least relevant old bullets to
+    save that page. Keeps the longer version when 3 bullets aren't enough."""
+    import copy
+    pages = fit_one_page(spec, years, pdf_path, paper=paper, budget=budget)
+    if pages < 2 or _last_page_fill(pdf_path) > 0.25:
+        return pages
+    trial = copy.deepcopy(spec)
+    for _ in range(3):
+        cands = [(len(r["bullets"]), i) for i, r in enumerate(trial["roles"]) if len(r["bullets"]) > 1]
+        if trial["projects"]:
+            trial["projects"].pop()
+        elif cands:
+            trial["roles"][max(cands, key=lambda x: (x[0], x[1]))[1]]["bullets"].pop()
+        else:
+            break
+        if html_to_pdf(resume_html(trial), pdf_path, paper=paper) < pages:
+            spec.clear()
+            spec.update(trial)
+            return pages - 1
+    return html_to_pdf(resume_html(spec), pdf_path, paper=paper)
+
+
 def write_resume(spec, folder, base, years=0, region="US"):
     from . import region as RG
     folder = Path(folder)
     folder.mkdir(parents=True, exist_ok=True)
     pdf = folder / f"{base}.pdf"
     paper = RG.paper(region)
-    pages = fit_one_page(spec, years, pdf, paper=paper, budget=RG.page_budget(region, years))
+    pages = fit_pages(spec, years, pdf, paper, RG.page_budget(region, years))
     resume_docx(spec, folder / f"{base}.docx", paper)
     return {"pdf": str(pdf), "docx": str(folder / f"{base}.docx"), "pages": pages, "paper": paper.upper() if paper == "a4" else "Letter"}
 

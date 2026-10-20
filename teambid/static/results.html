@@ -198,7 +198,15 @@ function docsFor(slug) {
     if (e.kind === "docreq") reqs[e.rid] = e;
     if (e.kind === "docdone") done[e.rid] = e;
   }
-  return Object.values(reqs).map(r => ({ req: r, done: done[r.rid] })).sort((a, b) => (b.req.at || "").localeCompare(a.req.at || ""));
+  const all = Object.values(reqs).map(r => ({ req: r, done: done[r.rid] })).sort((a, b) => (b.req.at || "").localeCompare(a.req.at || ""));
+  // the same job asked for again (e.g. rebuilt after a fix): show the newest, count the older ones
+  const seen = {}, out = [];
+  for (const d of all) {
+    const k = ((d.req.company || "") + "|" + (d.req.title || "") + "|" + (d.req.url || "")).toLowerCase();
+    if (seen[k]) { seen[k].older = (seen[k].older || 0) + 1; continue; }
+    seen[k] = d; out.push(d);
+  }
+  return out;
 }
 async function docDownload(rid, key, meta) {
   const r = await fetch(`docs/${rid}/${key}.enc`, { cache: "no-store" });
@@ -220,7 +228,7 @@ function docCard(d) {
   const r = d.req, x = d.done, when = (r.at || "").replace("T", " ").slice(0, 16);
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
     <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
-    <span class="muted" style="font-size:12px">asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}</span></div>`;
+    <span class="muted" style="font-size:12px">asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
   if (!x) return `<div class="doc">${head}<div class="muted">Building in the cloud. This list refreshes by itself every minute.</div></div>`;
   if (x.error) return `<div class="doc">${head}<div class="bad">${esc(x.error)}</div></div>`;
   return `<div class="doc">${head}

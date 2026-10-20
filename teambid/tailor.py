@@ -104,6 +104,18 @@ def _bullet_score(text, weights, sem=None):
     return s
 
 
+def _signature(profile, skill):
+    """How central a skill is to this person: named in their own CV headline (top lines) counts most, then how many
+    bullets use it, recent jobs weighted higher."""
+    head = "\n".join(profile.get("raw_text", "").splitlines()[:6])
+    score = 10.0 if SK.find(head, trusted=True) and skill in SK.find(head, trusted=True) else 0.0
+    for i, r in enumerate(profile.get("roles", [])):
+        w = max(0.3, 1.0 - 0.15 * i)
+        score += w * sum(1 for b in r.get("bullets", []) if skill in SK.find(b["text"], trusted=True))
+        score += 0.5 * w * (skill in r.get("stack", []))
+    return score
+
+
 def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
     """-> resume spec dict (render.py turns it into DOCX/PDF)."""
     weights = Counter()
@@ -144,14 +156,14 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
     groups = []
     if core:
         groups.append(("Core for this role", core[:12]))
-    for cat, items in SK.group(sorted(rest, key=lambda s: -weights.get(s, 0))).items():
+    for cat, items in SK.group(sorted(rest, key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))).items():
         groups.append((SK.CATEGORY_LABEL.get(cat, cat.title()), items[:10]))
     groups = groups[:6]
     # headline + summary from the member's own facts
     lane = (profile.get("lanes") or ["backend"])[0]
     headline = jd.get("title") if _title_fits(profile, jd.get("title", "")) else (profile.get("headline") or SK.LANES[lane][1][0])
     tech = ("language", "frontend", "backend", "data", "ai", "ml", "cloud", "database", "mobile", "devops")
-    proven = [x for x in profile["skills"].get("proven", []) if SK.category(x) in tech]
+    proven = sorted([x for x in profile["skills"].get("proven", []) if SK.category(x) in tech], key=lambda x: -_signature(profile, x))
     top = list(dict.fromkeys([x for x in core if x in proven] + proven))[:3]
     yrs = profile.get("years_experience", 0)
     lead = {"ai": "AI engineer", "ml": "Machine learning engineer", "data": "Data engineer", "backend": "Backend engineer",
@@ -186,7 +198,7 @@ def validate(spec, profile):
     problems = []
     allowed_numbers = set(profile.get("metrics", []))
     text_numbers = re.findall(r"\$?\d[\d,.]*\s?[%kKmMbB+x]?", spec["summary"])
-    raw = profile.get("raw_text", "")
+    raw = re.sub(r"\s+", " ", profile.get("raw_text", ""))
     for n in text_numbers:
         core = n.strip().rstrip("+.,")
         if core and core not in raw and not any(core in a for a in allowed_numbers):

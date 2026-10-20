@@ -14,6 +14,10 @@ from . import skills as SK
 from . import writing
 
 
+VERB = re.compile(r"(?i)^(co-)?([a-z]+ed|built|led|ran|wrote|made|cut|grew|won|took|drove|set|kept|sped|shipped|bought|sold|"
+                  r"taught|held|brought|spent|found|gave|got|began|became|left|met|paid|put|read|rode|saw|sent|shot|spoke|"
+                  r"stood|told|thought|understood|went|rebuilt|rewrote|overhauled|own|owned|lead|build|design|develop|"
+                  r"maintain|manage|create|implement|ship|run|write|migrate|automate|improve|reduce|deliver)$")
 NOT_VERBS = {"i", "we", "the", "a", "an", "our", "my", "this", "it", "they", "he", "she", "team", "as", "at", "in", "on", "for"}
 
 
@@ -25,7 +29,12 @@ def _first_person(bullet):
         if not s:
             continue
         first = s.split()[0].lower()
-        out.append((s if first in NOT_VERBS or s[:2].isupper() else "I " + s[0].lower() + s[1:]) + ".")
+        if first in NOT_VERBS or s[:2].isupper():
+            out.append(s + ".")
+        elif VERB.match(first):
+            out.append("I " + s[0].lower() + s[1:] + ".")
+        else:                                   # "Backend and data engineering for ..." is a noun phrase, not a verb
+            out.append("I worked on " + s[0].lower() + s[1:] + ".")
     return " ".join(out)
 
 
@@ -35,7 +44,9 @@ def _a(word):
 
 def _best_bullets(profile, wanted, n=2, focus=""):
     """The member's strongest proof for this job: skill overlap, a number, and (with local embeddings) meaning."""
-    allb = [(r, b) for r in profile.get("roles", []) for b in r["bullets"]]
+    roles = profile.get("roles", [])
+    allb = [(r, b) for r in roles for b in r["bullets"]]
+    rank = {id(r): i for i, r in enumerate(roles)}          # 0 = most recent job
     sims = local_ai.similarities(focus, [b["text"] for _, b in allb]) if focus and allb else None
     mean = sum(sims) / len(sims) if sims else 0
     scored = []
@@ -43,8 +54,9 @@ def _best_bullets(profile, wanted, n=2, focus=""):
         sk = set(b.get("skills") or SK.find(b["text"]))
         hit = len(sk & set(wanted))
         sem = 15 * (sims[i] - mean) if sims else 0
+        recent = 2.0 * (1 - rank[id(r)] / max(1, len(roles)))   # recent work is better proof when skills tie
         if hit or b.get("metrics") or sem > 0:
-            scored.append((hit * 3 + (1 if b.get("metrics") else 0) + sem, r, b))
+            scored.append((hit * 3 + (1 if b.get("metrics") else 0) + sem + recent, r, b))
     scored.sort(key=lambda x: -x[0])
     out, used = [], set()
     for sc, r, b in scored:
@@ -68,8 +80,13 @@ def draft_letter(profile, jd, fit_res):
     paras = [f"Hi {company} team,", p1]
     for r, b in picks:
         solo = re.fullmatch(r"(?i)(independent|self[- ]employed|freelance|freelancer|consultant|contractor|contract)", r.get("company") or "")
-        lead = "Working independently," if solo else (f"At {r['company']}" if r.get("company") else "In a recent role")
-        paras.append(f"{lead} I work{'ed' if r.get('end') != 'Present' else ''} as {_a(r['title'] or 'engineer')} {r['title'] or 'engineer'}. {_first_person(b['text'])}")
+        role = r['title'] or 'engineer'
+        past = 'ed' if r.get('end') != 'Present' else ''
+        if solo:
+            paras.append(f"I work{past} independently as {_a(role)} {role}. {_first_person(b['text'])}")
+        else:
+            lead = f"At {r['company']}" if r.get("company") else "In a recent role"
+            paras.append(f"{lead} I work{past} as {_a(role)} {role}. {_first_person(b['text'])}")
     proj = next((p for p in profile.get("projects", []) if set(p.get("stack", [])) & set(jd["required"])), None)
     if proj and proj["bullets"]:
         paras.append(f"On my own time I built {proj['name']}. {_first_person(proj['bullets'][0]['text'])}")
