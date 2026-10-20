@@ -1,0 +1,128 @@
+# Seed target companies by career lane (from public knowledge up to mid-2026; check each careers page for current
+# remote policy). TeamBid ranks these per member by lane overlap and adds companies that keep showing up in their
+# matches. remote: first = remote-first, roles = posts some remote roles, office = mostly on-site/hybrid.
+ai:
+  - {name: Anthropic, remote: office}
+  - {name: OpenAI, remote: office}
+  - {name: Perplexity, remote: office}
+  - {name: Cohere, remote: roles}
+  - {name: Hugging Face, remote: first}
+  - {name: Replit, remote: roles}
+  - {name: Hebbia, remote: office}
+  - {name: Harvey, remote: office}
+  - {name: Glean, remote: roles}
+  - {name: Writer, remote: roles}
+  - {name: Jasper, remote: first}
+  - {name: Runway, remote: roles}
+  - {name: ElevenLabs, remote: first}
+  - {name: Sierra, remote: office}
+  - {name: Decagon, remote: office}
+  - {name: Cresta, remote: roles}
+  - {name: Together AI, remote: roles}
+  - {name: Modal, remote: roles}
+  - {name: Pinecone, remote: roles}
+  - {name: Weaviate, remote: first}
+  - {name: LangChain, remote: roles}
+  - {name: Scale AI, remote: office}
+  - {name: Mercor, remote: roles}
+  - {name: Addepar, remote: roles}
+ml:
+  - {name: Databricks, remote: roles}
+  - {name: Weights & Biases, remote: roles}
+  - {name: Pinterest, remote: roles}
+  - {name: Reddit, remote: first}
+  - {name: Quora, remote: first}
+  - {name: Spotify, remote: roles}
+  - {name: Instacart, remote: first}
+  - {name: DoorDash, remote: roles}
+  - {name: Lyft, remote: roles}
+  - {name: Affirm, remote: first}
+  - {name: Thumbtack, remote: first}
+  - {name: Nextdoor, remote: roles}
+data:
+  - {name: Snowflake, remote: roles}
+  - {name: Confluent, remote: first}
+  - {name: dbt Labs, remote: first}
+  - {name: Fivetran, remote: roles}
+  - {name: Airbyte, remote: first}
+  - {name: Astronomer, remote: first}
+  - {name: ClickHouse, remote: first}
+  - {name: MotherDuck, remote: roles}
+  - {name: Starburst, remote: first}
+  - {name: Hex, remote: roles}
+  - {name: Monte Carlo, remote: roles}
+  - {name: Census, remote: roles}
+  - {name: Samsara, remote: roles}
+  - {name: Motive, remote: roles}
+backend:
+  - {name: Stripe, remote: roles}
+  - {name: Plaid, remote: roles}
+  - {name: Twilio, remote: first}
+  - {name: Cloudflare, remote: roles}
+  - {name: Temporal, remote: first}
+  - {name: Supabase, remote: first}
+  - {name: PlanetScale, remote: first}
+  - {name: Neon, remote: first}
+  - {name: Render, remote: roles}
+  - {name: Fly.io, remote: first}
+  - {name: Zapier, remote: first}
+  - {name: Calendly, remote: roles}
+  - {name: Dropbox, remote: first}
+  - {name: Coinbase, remote: first}
+  - {name: Brex, remote: roles}
+  - {name: Ramp, remote: office}
+  - {name: Mercury, remote: roles}
+  - {name: Gusto, remote: roles}
+  - {name: Rippling, remote: office}
+  - {name: Shopify, remote: first}
+frontend:
+  - {name: Vercel, remote: first}
+  - {name: Netlify, remote: first}
+  - {name: Figma, remote: roles}
+  - {name: Canva, remote: roles}
+  - {name: Webflow, remote: first}
+  - {name: Framer, remote: roles}
+  - {name: Linear, remote: first}
+  - {name: Notion, remote: office}
+  - {name: Airtable, remote: roles}
+  - {name: Miro, remote: roles}
+  - {name: Squarespace, remote: roles}
+fullstack:
+  - {name: GitLab, remote: first}
+  - {name: Automattic, remote: first}
+  - {name: Doist, remote: first}
+  - {name: Buffer, remote: first}
+  - {name: Close, remote: first}
+  - {name: Help Scout, remote: first}
+  - {name: Toptal, remote: first}
+  - {name: Remote, remote: first}
+  - {name: Deel, remote: first}
+  - {name: Oyster, remote: first}
+  - {name: Fleetio, remote: roles}
+mobile:
+  - {name: Duolingo, remote: office}
+  - {name: Strava, remote: roles}
+  - {name: Calm, remote: first}
+  - {name: Headspace, remote: roles}
+  - {name: Robinhood, remote: roles}
+  - {name: Chime, remote: roles}
+devops:
+  - {name: HashiCorp, remote: first}
+  - {name: Datadog, remote: roles}
+  - {name: Grafana Labs, remote: first}
+  - {name: PagerDuty, remote: roles}
+  - {name: Honeycomb, remote: first}
+  - {name: CircleCI, remote: first}
+  - {name: Chainguard, remote: first}
+  - {name: Tailscale, remote: first}
+security:
+  - {name: 1Password, remote: first}
+  - {name: Snyk, remote: roles}
+  - {name: Wiz, remote: roles}
+  - {name: Vanta, remote: roles}
+  - {name: Drata, remote: first}
+  - {name: Okta, remote: roles}
+qa:
+  - {name: BrowserStack, remote: roles}
+  - {name: Sauce Labs, remote: roles}
+  - {name: QA Wolf, remote: first}

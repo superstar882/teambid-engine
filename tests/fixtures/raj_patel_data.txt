@@ -1,0 +1,28 @@
+RAJ PATEL
+Senior Data Engineer
+Bengaluru, India  |  raj.patel@example.org  |  +91 98450 12345  |  linkedin.com/in/raj-patel-example
+
+PROFESSIONAL SUMMARY
+Data engineer with 8 years building batch and streaming pipelines on AWS.
+
+WORK EXPERIENCE
+Senior Data Engineer, Northwind Retail Data        Jan 2021 - Present
+- Designed Airflow and Spark pipelines on AWS (S3, EMR, Glue) that process 3 TB a day for 200 analysts.
+- Moved the warehouse from Redshift to Snowflake with dbt models, cutting monthly cost by 35%.
+- Built Kafka streaming ingestion for 50,000 events per second with exactly-once delivery.
+- Mentored 4 engineers and set code review standards for the data platform team.
+
+Data Engineer, Contoso Fintech        Jul 2017 - Dec 2020
+- Built PySpark ETL jobs for fraud features used by 12 ML models.
+- Created data quality checks with Great Expectations that caught 1,200 bad records a month.
+
+Software Engineer, Fabrikam Systems        Aug 2015 - Jun 2017
+- Wrote Java and SQL services for billing reports used by 30 enterprise customers.
+
+EDUCATION
+Indian Institute of Technology Bombay, B.Tech in Computer Science, 2011 - 2015
+
+TECHNICAL SKILLS
+Python, SQL, Scala, Java, Apache Spark, PySpark, Airflow, dbt, Kafka, Snowflake, Redshift, AWS, Terraform, Docker
+CERTIFICATIONS
+AWS Certified Data Engineer - Associate

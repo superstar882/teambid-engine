@@ -1,0 +1,10 @@
+# member data never goes into git (the cloud copy is the encrypted release asset)
+workspace/
+workspace_*/
+site/
+# machine-local scheduler files written by "tb.py schedule"
+run_scan.cmd
+run_scan_hidden.vbs
+__pycache__/
+*.pyc
+.env

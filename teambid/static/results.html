@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Team results</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --muted:#5d6672; --line:#e3e6ea; --acc:#2557d6; --acc2:#e8eefc;
+        --go:#13804a; --go2:#e5f5ec; --warn:#a15c00; --warn2:#fff3e0; --bad:#b42318; --bad2:#fdecea; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1115; --card:#171a20; --ink:#e7eaee; --muted:#9aa3ad;
+  --line:#2a2f37; --acc:#7aa2ff; --acc2:#1d2740; --go:#4cc38a; --go2:#13261c; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614; } }
+* { box-sizing:border-box; }
+body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+header { padding:12px 16px; background:var(--card); border-bottom:1px solid var(--line); display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+header h1 { font-size:17px; margin:0; }
+main { max-width:1200px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+.card h2 { font-size:15px; margin:0 0 10px; }
+.tabs, .sub { display:flex; gap:6px; flex-wrap:wrap; }
+.tabs button, .sub button { border:1px solid var(--line); background:var(--card); color:var(--ink); padding:6px 12px; border-radius:20px; cursor:pointer; font:inherit; }
+.tabs button.on, .sub button.on { background:var(--acc2); color:var(--acc); border-color:var(--acc); font-weight:600; }
+.sub { margin:0 0 12px; }
+.row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+input, select, button.b { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:7px 9px; }
+button.b { background:var(--acc); border-color:var(--acc); color:#fff; cursor:pointer; }
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-size:12px; color:var(--muted); }
+.pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:12px; font-weight:600; }
+.best { background:var(--go2); color:var(--go); } .consider { background:var(--warn2); color:var(--warn); }
+.muted { color:var(--muted); } .bad { color:var(--bad); } a { color:var(--acc); }
+.big { font-size:26px; font-weight:700; }
+.lock { max-width:420px; margin:12vh auto; }
+.hide { display:none; }
+@media (max-width:700px) { main { padding:10px; } .m-hide { display:none; } }
+</style>
+</head>
+<body>
+<div id="lock" class="lock card">
+  <h2>Team results</h2>
+  <p class="muted">This page is encrypted. Enter the team password.</p>
+  <form id="f" class="row"><input id="pw" type="password" autocomplete="current-password" placeholder="Team password" style="flex:1" autofocus>
+    <button class="b">Open</button></form>
+  <label class="muted" style="display:block;margin-top:8px"><input type="checkbox" id="remember"> Remember on this device</label>
+  <p id="err" class="bad"></p>
+</div>
+<div id="app" class="hide">
+  <header><h1>Team results</h1><span class="muted" id="meta"></span><span style="flex:1"></span><button class="b" id="logout">Lock</button></header>
+  <main><div class="tabs" id="tabs" style="margin-bottom:12px"></div><div id="view"></div></main>
+</div>
+<script>
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+let DATA, cur, sub = "Matches";
+// ---- team progress (Supabase, encrypted, append-only) ----
+let PG = null;                        // { cfg, aes, mac, latest: {item: entry} }
+const ITEM = {};                      // "slug|url_key" -> item id
+const STATUSES = [["", "-"], ["saved", "Saved"], ["applied", "Applied"], ["interview", "Interview"], ["offer", "Offer"], ["rejected", "Rejected"], ["skipped", "Skip"]];
+const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, "0")).join("");
+async function progressInit(pw) {
+  const cfg = DATA.progress; if (!cfg) return;
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+  const bits = new Uint8Array(await crypto.subtle.deriveBits({ name: "PBKDF2", salt: b64(cfg.salt), iterations: cfg.iterations, hash: "SHA-256" }, base, 512));
+  const aes = await crypto.subtle.importKey("raw", bits.slice(0, 32), "AES-GCM", false, ["encrypt", "decrypt"]);
+  const mac = await crypto.subtle.importKey("raw", bits.slice(32), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  PG = { cfg, aes, mac, latest: {}, ok: true };
+  await progressLoad();
+}
+function sbHeaders(extra) { return { apikey: PG.cfg.key, Authorization: "Bearer " + PG.cfg.key, "Content-Type": "application/json", ...(extra || {}) }; }
+async function progressLoad() {
+  try {
+    for (let off = 0; ; off += 1000) {
+      const r = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}?team=eq.${encodeURIComponent(PG.cfg.team)}&select=item,payload,created_at&order=id.asc`,
+                            { headers: sbHeaders({ Range: `${off}-${off + 999}` }) });
+      if (!r.ok) throw new Error("progress server answered " + r.status);
+      const rows = await r.json();
+      for (const row of rows) {
+        try {
+          const raw = b64(row.payload);
+          const e = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, PG.aes, raw.slice(12))));
+          e.saved_at = row.created_at; PG.latest[row.item] = e;
+        } catch (_) { /* junk or old-password rows are ignored */ }
+      }
+      if (rows.length < 1000) break;
+    }
+  } catch (e) { PG.ok = false; PG.err = e.message; }
+}
+async function itemFor(slug, key) {
+  const k = slug + "|" + key;
+  if (!ITEM[k]) ITEM[k] = hex(await crypto.subtle.sign("HMAC", PG.mac, new TextEncoder().encode(k))).slice(0, 40);
+  return ITEM[k];
+}
+async function progressSave(slug, r, status, note) {
+  const item = await itemFor(slug, r.url_key);
+  const entry = { member: slug, job: r.url_key, status, note, by: localStorage.getItem("tb_name") || "", at: new Date().toISOString(),
+                  company: r.company, title: r.title };
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, PG.aes, new TextEncoder().encode(JSON.stringify(entry))));
+  const payload = btoa(String.fromCharCode(...iv, ...ct));
+  const res = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
+                                                                     body: JSON.stringify({ team: PG.cfg.team, item, payload }) });
+  if (!res.ok) throw new Error("Save failed (" + res.status + ")");
+  PG.latest[item] = { ...entry, saved_at: entry.at };
+}
+async function current(slug, r) {          // newest saved progress, else what TeamBid exported
+  if (PG && PG.ok) { const e = PG.latest[await itemFor(slug, r.url_key)]; if (e) return e; }
+  return { status: r.progress || "", note: r.note || "" };
+}
+async function decrypt(blob, password) {
+  const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveKey"]);
+  const key = await crypto.subtle.deriveKey({ name: "PBKDF2", salt: b64(blob.salt), iterations: blob.iterations, hash: "SHA-256" },
+                                            base, { name: "AES-GCM", length: 256 }, false, ["decrypt"]);
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(blob.iv) }, key, b64(blob.data));
+  return JSON.parse(new TextDecoder().decode(plain));
+}
+async function unlock(pw, remember) {
+  const blob = await (await fetch("data.enc.json", { cache: "no-store" })).json();
+  try { DATA = await decrypt(blob, pw); } catch (e) { throw new Error("Wrong password."); }
+  (remember ? localStorage : sessionStorage).setItem("tb_pw", pw);
+  await progressInit(pw);
+  document.getElementById("lock").classList.add("hide"); document.getElementById("app").classList.remove("hide");
+  document.getElementById("meta").textContent = `last scan ${DATA.last_scan || "-"} · updated ${DATA.generated}` +
+    (PG ? (PG.ok ? " · team progress on" : ` · progress unavailable (${PG.err})`) : "");
+  document.getElementById("tabs").innerHTML = DATA.members.map(m => `<button data-id="${m.id}">${esc(m.name)} (${m.matches.length})</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => pick(b.dataset.id));
+  pick(location.hash.slice(1).split("/")[0]);
+}
+document.getElementById("f").onsubmit = async e => {
+  e.preventDefault(); document.getElementById("err").textContent = "Opening...";
+  try { await unlock(document.getElementById("pw").value, document.getElementById("remember").checked); }
+  catch (err) { document.getElementById("err").textContent = err.message; }
+};
+document.getElementById("logout").onclick = () => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); location.reload(); };
+const saved = localStorage.getItem("tb_pw") || sessionStorage.getItem("tb_pw");
+if (saved) unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); });
+
+function pick(id) {
+  cur = DATA.members.find(m => m.id === id) || DATA.members[0];
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.id === cur.id));
+  location.hash = cur.id; draw();
+}
+// Applications = what TeamBid exported + live team progress (Saved/Applied/Interview/Offer/Rejected), newest first
+const APP_LABEL = { drafting: "Prepared", saved: "Saved", applied: "Applied", interview: "Interview", offer: "Offer",
+                    rejected: "Rejected", withdrawn: "Withdrawn", closed: "Closed" };
+async function appsView(m, body) {
+  const rows = {}, byKey = Object.fromEntries(m.matches.map(r => [r.url_key, r]));
+  for (const a of m.applications)
+    rows[a.url_key || "app" + a.id] = { company: a.company, title: a.title, url: a.url, status: a.status, fit: a.fit,
+                                        note: a.notes || "", by: "", when: (a.updated || "").slice(0, 10) };
+  if (PG && PG.ok) {
+    for (const e of Object.values(PG.latest)) {
+      if (e.member !== m.slug) continue;
+      const r = byKey[e.job] || {}, old = rows[e.job];
+      if (!e.status || e.status === "skipped") { if (old && old.live) delete rows[e.job]; continue; }
+      rows[e.job] = { company: e.company || r.company || old?.company, title: e.title || r.title || old?.title, url: r.url || old?.url,
+                      status: e.status, fit: old?.fit, note: e.note || "", by: e.by || "", when: (e.saved_at || e.at || "").slice(0, 10), live: true };
+    }
+  }
+  const order = ["offer", "interview", "applied", "saved", "drafting", "rejected", "withdrawn", "closed"];
+  const list = Object.values(rows).sort((a, b) => (order.indexOf(a.status) - order.indexOf(b.status)) || (b.when || "").localeCompare(a.when || ""));
+  const counts = order.map(s => [s, list.filter(x => x.status === s).length]).filter(([, n]) => n);
+  body.innerHTML = `<div class="card">${counts.map(([s, n]) => `<span class="pill">${APP_LABEL[s] || s}: ${n}</span>`).join(" ") || ""}
+    ${PG ? "" : '<div class="muted">Team progress is off, showing what TeamBid exported.</div>'}</div>
+    <div class="card"><table><tr><th>Company</th><th>Role</th><th>Status</th><th class="m-hide">Fit</th><th>Note</th><th>Updated</th></tr>${list.map(a =>
+      `<tr><td>${esc(a.company || "")}</td><td>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title || "")}</a>` : esc(a.title || "")}</td>
+       <td>${esc(APP_LABEL[a.status] || a.status)}</td><td class="m-hide">${a.fit != null ? a.fit + "%" : ""}</td><td class="muted">${esc(a.note)}</td>
+       <td>${esc(a.when || "")}${a.by ? `<div class="muted" style="font-size:11px">${esc(a.by)}</div>` : ""}</td></tr>`).join("")
+      || '<tr><td colspan=6 class="muted">No applications yet. Set a job to Saved or Applied in the Matches tab and it shows up here.</td></tr>'}</table></div>`;
+}
+function draw() {
+  const m = cur, v = document.getElementById("view");
+  const subs = ["Matches", "Overview", "Applications", "Experience"];
+  v.innerHTML = `<div class="sub">${subs.map(s => `<button class="${s===sub?"on":""}" data-s="${s}">${s}</button>`).join("")}</div><div id="body"></div>`;
+  v.querySelectorAll(".sub button").forEach(b => b.onclick = () => { sub = b.dataset.s; draw(); });
+  const body = document.getElementById("body");
+  if (sub === "Overview") {
+    const c = m.contact || {};
+    body.innerHTML = `<div class="grid">
+      <div class="card"><h2>${esc(m.name)}</h2><div>${esc(m.headline)}</div><div class="muted">${esc(m.level)} · ${esc((m.lanes||[]).join(", "))} · ${m.years ?? "-"} years</div>
+        <div class="muted">Remote from: ${esc((m.countries||[]).join(", "))} (${esc(m.region)})</div></div>
+      <div class="card"><h2>Contact</h2>${Object.entries(c).map(([k,x]) => `<div><span class="muted">${esc(k)}:</span> ${esc(x)}</div>`).join("") || "-"}</div>
+      <div class="card"><h2>Resume score</h2><div class="big">${m.audit.score}<span class="muted" style="font-size:14px">/100 · ${esc(m.audit.grade)}</span></div>
+        <div class="muted">${m.matches.length} matches, ${m.best} best fits, ${m.applications.length} applications tracked in TeamBid</div></div></div>
+      <div class="card"><h2>Resume fixes</h2><table><tr><th>Priority</th><th>Area</th><th>What to change</th></tr>${m.audit.findings.map(f =>
+        `<tr><td>${["","Low","Medium","High"][f.severity]}</td><td>${esc(f.area)}</td><td>${esc(f.message)}</td></tr>`).join("") || "<tr><td colspan=3>Nothing major.</td></tr>"}</table></div>
+      <div class="card"><h2>Target titles</h2>${esc((m.target_titles||[]).join(", "))}</div>`;
+  } else if (sub === "Applications") {
+    appsView(m, body);
+  } else if (sub === "Experience") {
+    const sk = m.skills || {};
+    body.innerHTML = `<div class="card"><h2>Skills</h2><div><b>Proven:</b> ${esc((sk.proven||[]).join(", "))}</div><div class="muted"><b>Listed:</b> ${esc((sk.listed_only||[]).join(", "))}</div></div>` +
+      m.roles.map(r => `<div class="card"><h2>${esc(r.title)}, ${esc(r.company)} <span class="muted" style="font-weight:400">${esc(r.start)} - ${esc(r.end)}${r.kind==="intern"?" · internship":""}</span></h2>
+        <div class="muted">${esc((r.stack||[]).join(" | "))}</div><ul>${r.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("") +
+      `<div class="card"><h2>Education</h2>${(m.education||[]).map(e => `<div>${esc(e.school)}: ${esc(e.degree)} ${esc(e.field)} ${esc(e.end)}</div>`).join("") || "-"}</div>`;
+  } else {
+    body.innerHTML = `<div class="card"><div class="row"><input id="q" placeholder="Search company or title" style="flex:1;min-width:200px">
+      <select id="tier"><option value="">All tiers</option><option value="best">Best fits</option><option value="consider">Worth a look</option></select>
+      <select id="st"><option value="">Any progress</option><option value="none">Not started</option>${STATUSES.slice(1).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
+      ${PG ? `<input id="me" placeholder="Your name (shown on updates)" value="${esc(localStorage.getItem("tb_name") || "")}" style="width:190px">` : ""}
+      <span class="muted" id="count"></span></div>
+      ${PG ? '<div class="muted" style="margin-top:6px">Set a status or note on any job: it is saved for the whole team (encrypted) and synced into TeamBid daily.</div>' : ""}</div>
+      <div class="card"><table><thead><tr><th>Score</th><th>Company</th><th>Title</th><th class="m-hide">Location</th><th>Posted</th><th>Progress</th><th class="m-hide">Why</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+    if (PG) document.getElementById("me").oninput = e => localStorage.setItem("tb_name", e.target.value.trim());
+    const go = async () => {
+      const q = document.getElementById("q").value.toLowerCase(), t = document.getElementById("tier").value, s = document.getElementById("st").value;
+      const states = await Promise.all(m.matches.map(r => current(m.slug, r)));
+      const rows = m.matches.map((r, i) => [r, states[i]]).filter(([r, e]) => (!t || r.tier === t) &&
+        (!s || (s === "none" ? !e.status : e.status === s)) && (!q || (r.company + " " + r.title).toLowerCase().includes(q)));
+      document.getElementById("count").textContent = `${rows.length} shown`;
+      document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td>
+        <td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td class="m-hide">${esc((r.location||"").slice(0,50))}</td>
+        <td>${esc(r.posted || "?")}</td>
+        <td>${PG && PG.ok ? `<select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
+             <input data-k="${esc(r.url_key)}" class="pnote" placeholder="note" value="${esc(e.note || "")}" style="width:120px">
+             ${e.by || e.saved_at ? `<div class="muted" style="font-size:11px">${esc(e.by || "")} ${esc((e.saved_at || e.at || "").slice(0, 10))}</div>` : ""}`
+           : esc(STATUSES.find(([v]) => v === (e.status || ""))?.[1] || "-")}</td>
+        <td class="muted m-hide">${esc((r.reasons||[]).join("; "))}</td></tr>`).join("") || '<tr><td colspan=7 class="muted">No matches.</td></tr>';
+      const byKey = Object.fromEntries(m.matches.map(r => [r.url_key, r]));
+      const save = async el => {
+        const k = el.dataset.k, row = el.closest("tr");
+        const status = row.querySelector(".pst").value, note = row.querySelector(".pnote").value.trim();
+        el.disabled = true;
+        try { await progressSave(m.slug, byKey[k], status, note); el.style.outline = "2px solid var(--go)"; }
+        catch (err) { alert(err.message); }
+        el.disabled = false;
+      };
+      document.querySelectorAll(".pst").forEach(el => el.onchange = () => save(el));
+      document.querySelectorAll(".pnote").forEach(el => el.onchange = () => save(el));
+    };
+    ["q", "tier", "st"].forEach(id => document.getElementById(id).addEventListener(id === "q" ? "input" : "change", go));
+    go();
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,257 @@
+"""Render a resume spec / cover letter to DOCX (python-docx) and PDF (PyMuPDF Story: HTML+CSS layout, no Word needed).
+
+Layout follows ATS research: one column, standard section names, real text (no tables, images or text boxes),
+dates on the role line, 10-11 pt body. fit_one_page() drops the least relevant bullets of the oldest roles until the
+PDF is one page (two for 8+ years of experience).
+"""
+import html
+from pathlib import Path
+
+import docx
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt, Inches, RGBColor
+
+CSS = """
+* { font-family: sans-serif; }
+body { font-size: 9.6pt; line-height: 1.22; color: #111; }
+h1 { font-size: 18pt; margin: 0 0 1pt 0; }
+.head { font-size: 10pt; color: #333; margin: 0 0 1pt 0; }
+.contact { font-size: 8.8pt; color: #333; margin: 0 0 4pt 0; }
+h2 { font-size: 10pt; text-transform: uppercase; letter-spacing: 0.5pt; border-bottom: 0.6pt solid #888; margin: 6pt 0 2pt 0; color: #222; }
+.role { margin: 3pt 0 0 0; }
+.rt { font-weight: bold; }
+.dates { color: #333; }
+.stack { font-size: 8.5pt; color: #444; margin: 0; }
+ul { margin: 1pt 0 0 12pt; padding: 0; }
+li { margin: 0 0 1pt 0; }
+p { margin: 0 0 2pt 0; }
+.sk { margin: 0 0 1pt 0; }
+"""
+
+
+def _date(s):
+    if not s:
+        return ""
+    if s == "Present":
+        return "Present"
+    import calendar
+    try:
+        y, m = s.split("-")
+        return f"{calendar.month_abbr[int(m)]} {y}"
+    except ValueError:
+        return s
+
+
+def _contact_line(c):
+    return "  |  ".join(x for x in [c.get("location"), c.get("email"), c.get("phone"), c.get("linkedin"), c.get("github"), c.get("website")] if x)
+
+
+def resume_html(spec):
+    e = html.escape
+    out = [f"<h1>{e(spec['name'])}</h1>"]
+    if spec.get("headline"):
+        out.append(f"<p class='head'>{e(spec['headline'])}</p>")
+    out.append(f"<p class='contact'>{e(_contact_line(spec.get('contact', {})))}</p>")
+    if spec.get("summary"):
+        out += ["<h2>Summary</h2>", f"<p>{e(spec['summary'])}</p>"]
+    if spec.get("skills"):
+        out.append("<h2>Skills</h2>")
+        out += [f"<p class='sk'><b>{e(g)}:</b> {e(', '.join(items))}</p>" for g, items in spec["skills"] if items]
+    if spec.get("roles"):
+        out.append("<h2>Experience</h2>")
+        for r in spec["roles"]:
+            dates = f"{_date(r['start'])} - {_date(r['end'])}" if r.get("start") else ""
+            loc = f" | {e(r['location'])}" if r.get("location") else ""
+            out.append(f"<p class='role'><span class='rt'>{e(r['title'])}</span>, {e(r['company'])}{loc} &nbsp; <span class='dates'>{e(dates)}</span></p>")
+            if r.get("stack"):
+                out.append(f"<p class='stack'>{e(' | '.join(r['stack']))}</p>")
+            if r["bullets"]:
+                out.append("<ul>" + "".join(f"<li>{e(b)}</li>" for b in r["bullets"]) + "</ul>")
+    if spec.get("projects"):
+        out.append("<h2>Projects</h2>")
+        for p in spec["projects"]:
+            link = f" ({e(p['link'])})" if p.get("link") else ""
+            out.append(f"<p class='role'><span class='rt'>{e(p['name'])}</span>{link}</p>")
+            if p.get("stack"):
+                out.append(f"<p class='stack'>{e(' | '.join(p['stack']))}</p>")
+            out.append("<ul>" + "".join(f"<li>{e(b)}</li>" for b in p["bullets"]) + "</ul>")
+    if spec.get("education"):
+        out.append("<h2>Education</h2>")
+        for ed in spec["education"]:
+            deg = ", ".join(x for x in [ed.get("degree"), ed.get("field")] if x)
+            gpa = f" | GPA {ed['gpa']}" if ed.get("gpa") else ""
+            yrs = " - ".join(x for x in [ed.get("start"), ed.get("end")] if x)
+            out.append(f"<p><b>{e(ed.get('school', ''))}</b>{', ' + e(deg) if deg else ''}{e(gpa)} &nbsp; <span class='dates'>{e(yrs)}</span></p>")
+    extra = [*spec.get("certifications", []), *spec.get("awards", [])]
+    if extra:
+        out += ["<h2>Certifications and awards</h2>", "<ul>" + "".join(f"<li>{e(x)}</li>" for x in extra) + "</ul>"]
+    return "<body>" + "\n".join(out) + "</body>"
+
+
+def html_to_pdf(body_html, path, css=CSS, paper="letter"):
+    import fitz
+    story = fitz.Story(html=body_html, user_css=css)
+    writer = fitz.DocumentWriter(str(path))
+    mediabox = fitz.paper_rect(paper)
+    where = mediabox + (40, 34, -40, -34)
+    pages, more = 0, 1
+    while more:
+        dev = writer.begin_page(mediabox)
+        more, _ = story.place(where)
+        story.draw(dev)
+        writer.end_page()
+        pages += 1
+        if pages > 6:
+            break
+    writer.close()
+    return pages
+
+
+def _paper_docx(d, paper):
+    from docx.shared import Mm
+    for s in d.sections:
+        if paper == "a4":
+            s.page_width, s.page_height = Mm(210), Mm(297)
+        else:
+            s.page_width, s.page_height = Inches(8.5), Inches(11)
+
+
+def resume_docx(spec, path, paper="letter"):
+    d = docx.Document()
+    _paper_docx(d, paper)
+    for s in d.sections:
+        s.top_margin = s.bottom_margin = Inches(0.5)
+        s.left_margin = s.right_margin = Inches(0.6)
+    st = d.styles["Normal"]
+    st.font.name, st.font.size = "Calibri", Pt(10)
+    st.paragraph_format.space_after = Pt(1)
+
+    def para(text="", bold=False, size=None, color=None, after=1):
+        p = d.add_paragraph()
+        r = p.add_run(text)
+        r.bold = bold
+        if size:
+            r.font.size = Pt(size)
+        if color:
+            r.font.color.rgb = RGBColor.from_string(color)
+        p.paragraph_format.space_after = Pt(after)
+        return p
+
+    def heading(t):
+        p = para(t.upper(), bold=True, size=10.5, color="222222", after=1)
+        p.paragraph_format.space_before = Pt(6)
+
+    para(spec["name"], bold=True, size=18, after=0)
+    if spec.get("headline"):
+        para(spec["headline"], size=10.5, color="333333", after=0)
+    para(_contact_line(spec.get("contact", {})), size=9, color="333333", after=4)
+    if spec.get("summary"):
+        heading("Summary")
+        para(spec["summary"])
+    if spec.get("skills"):
+        heading("Skills")
+        for g, items in spec["skills"]:
+            p = d.add_paragraph()
+            p.add_run(f"{g}: ").bold = True
+            p.add_run(", ".join(items))
+            p.paragraph_format.space_after = Pt(0)
+    if spec.get("roles"):
+        heading("Experience")
+        for r in spec["roles"]:
+            p = d.add_paragraph()
+            p.add_run(r["title"]).bold = True
+            p.add_run(f", {r['company']}" + (f" | {r['location']}" if r.get("location") else ""))
+            if r.get("start"):
+                p.add_run(f"    {_date(r['start'])} - {_date(r['end'])}")
+            p.paragraph_format.space_before = Pt(3)
+            p.paragraph_format.space_after = Pt(0)
+            if r.get("stack"):
+                para(" | ".join(r["stack"]), size=8.5, color="444444", after=0)
+            for b in r["bullets"]:
+                bp = d.add_paragraph(b, style="List Bullet")
+                bp.paragraph_format.space_after = Pt(0)
+    if spec.get("projects"):
+        heading("Projects")
+        for pj in spec["projects"]:
+            para(pj["name"] + (f" ({pj['link']})" if pj.get("link") else ""), bold=True, after=0)
+            for b in pj["bullets"]:
+                d.add_paragraph(b, style="List Bullet").paragraph_format.space_after = Pt(0)
+    if spec.get("education"):
+        heading("Education")
+        for ed in spec["education"]:
+            deg = ", ".join(x for x in [ed.get("degree"), ed.get("field")] if x)
+            p = d.add_paragraph()
+            p.add_run(ed.get("school", "")).bold = True
+            p.add_run((", " + deg if deg else "") + (f" | GPA {ed['gpa']}" if ed.get("gpa") else "") +
+                      ("    " + " - ".join(x for x in [ed.get("start"), ed.get("end")] if x)))
+    extra = [*spec.get("certifications", []), *spec.get("awards", [])]
+    if extra:
+        heading("Certifications and awards")
+        for x in extra:
+            d.add_paragraph(x, style="List Bullet").paragraph_format.space_after = Pt(0)
+    d.save(path)
+
+
+def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=None):
+    """Trim bullets (oldest roles first, then projects) until the PDF fits the page budget. Returns pages."""
+    import tempfile
+    budget = budget or (2 if years >= 8 else 1)
+    tmp = Path(pdf_path) if pdf_path else Path(tempfile.mkstemp(suffix=".pdf")[1])
+    for _ in range(40):
+        pages = html_to_pdf(resume_html(spec), tmp, paper=paper)
+        if pages <= budget:
+            return pages
+        # drop one bullet: from the role (or project) with the most bullets, oldest first on ties
+        cands = [(len(r["bullets"]), i) for i, r in enumerate(spec["roles"]) if len(r["bullets"]) > 1]
+        if spec["projects"]:
+            spec["projects"].pop()
+            continue
+        if not cands:
+            if len(spec["skills"]) > 3:
+                spec["skills"].pop()
+                continue
+            return pages
+        _, i = max(cands, key=lambda x: (x[0], x[1]))
+        spec["roles"][i]["bullets"].pop()
+    return html_to_pdf(resume_html(spec), tmp, paper=paper)
+
+
+def write_resume(spec, folder, base, years=0, region="US"):
+    from . import region as RG
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    pdf = folder / f"{base}.pdf"
+    paper = RG.paper(region)
+    pages = fit_one_page(spec, years, pdf, paper=paper, budget=RG.page_budget(region, years))
+    resume_docx(spec, folder / f"{base}.docx", paper)
+    return {"pdf": str(pdf), "docx": str(folder / f"{base}.docx"), "pages": pages, "paper": paper.upper() if paper == "a4" else "Letter"}
+
+
+def letter_html(name, contact, body, date_str):
+    e = html.escape
+    paras = "".join(f"<p>{e(p)}</p>" for p in body.strip().split("\n\n"))
+    return (f"<body><h1>{e(name)}</h1><p class='contact'>{e(_contact_line(contact))}</p><p>{e(date_str)}</p>{paras}</body>")
+
+
+LETTER_CSS = CSS.replace("font-size: 9.6pt", "font-size: 11pt").replace("line-height: 1.22", "line-height: 1.4") + " p { margin: 0 0 9pt 0; }"
+
+
+def write_letter(name, contact, body, folder, base, date_str, paper="letter"):
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    pdf = folder / f"{base}.pdf"
+    html_to_pdf(letter_html(name, contact, body, date_str), pdf, LETTER_CSS, paper=paper)
+    d = docx.Document()
+    _paper_docx(d, paper)
+    for s in d.sections:
+        s.left_margin = s.right_margin = Inches(0.9)
+    d.styles["Normal"].font.name, d.styles["Normal"].font.size = "Calibri", Pt(11)
+    p = d.add_paragraph()
+    r = p.add_run(name)
+    r.bold, r.font.size = True, Pt(16)
+    d.add_paragraph(_contact_line(contact))
+    d.add_paragraph(date_str)
+    for chunk in body.strip().split("\n\n"):
+        d.add_paragraph(chunk)
+    d.save(folder / f"{base}.docx")
+    return {"pdf": str(pdf), "docx": str(folder / f"{base}.docx")}

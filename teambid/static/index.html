@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TeamBid</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --muted:#5d6672; --line:#e3e6ea; --acc:#2557d6; --acc2:#e8eefc;
+        --go:#13804a; --go2:#e5f5ec; --warn:#a15c00; --warn2:#fff3e0; --bad:#b42318; --bad2:#fdecea; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#0f1115; --card:#171a20; --ink:#e7eaee; --muted:#9aa3ad;
+        --line:#2a2f37; --acc:#7aa2ff; --acc2:#1d2740; --go:#4cc38a; --go2:#13261c; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614; } }
+:root[data-theme="dark"] { --bg:#0f1115; --card:#171a20; --ink:#e7eaee; --muted:#9aa3ad; --line:#2a2f37; --acc:#7aa2ff; --acc2:#1d2740;
+        --go:#4cc38a; --go2:#13261c; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614; }
+* { box-sizing: border-box; }
+body { margin:0; font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif; background:var(--bg); color:var(--ink); }
+header { display:flex; gap:12px; align-items:center; padding:10px 16px; background:var(--card); border-bottom:1px solid var(--line); position:sticky; top:0; z-index:5; flex-wrap:wrap; }
+header h1 { font-size:17px; margin:0 8px 0 0; }
+nav { display:flex; gap:4px; flex-wrap:wrap; }
+nav button { background:none; border:0; padding:6px 10px; border-radius:6px; color:var(--muted); cursor:pointer; font:inherit; }
+nav button.on { background:var(--acc2); color:var(--acc); font-weight:600; }
+select, input, textarea, button.b { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 8px; }
+textarea { width:100%; }
+button.b { cursor:pointer; background:var(--acc); color:#fff; border-color:var(--acc); }
+button.b.ghost { background:var(--card); color:var(--ink); border-color:var(--line); }
+main { max-width:1200px; margin:0 auto; padding:16px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+.card h2 { font-size:15px; margin:0 0 10px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+.muted { color:var(--muted); }
+table { border-collapse:collapse; width:100%; }
+th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+th { font-size:12px; color:var(--muted); font-weight:600; }
+.pill { display:inline-block; padding:1px 8px; border-radius:20px; font-size:12px; font-weight:600; }
+.GO, .best { background:var(--go2); color:var(--go); } .CAUTION, .consider { background:var(--warn2); color:var(--warn); } .SKIP { background:var(--bad2); color:var(--bad); }
+.kv { display:grid; grid-template-columns:170px 1fr; gap:6px 12px; align-items:center; }
+.kv label { color:var(--muted); }
+.row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+pre { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:10px; margin:0; font:12.5px/1.45 ui-monospace,Consolas,monospace; }
+.md h1 { font-size:18px; } .md h2 { font-size:15px; margin-top:16px; } .md table { margin:8px 0; } .md td, .md th { font-size:13px; }
+.score { font-size:28px; font-weight:700; }
+.warn { color:var(--warn); } .bad { color:var(--bad); } .good { color:var(--go); }
+a { color:var(--acc); }
+.hide { display:none; }
+.toast { position:fixed; bottom:16px; right:16px; background:var(--ink); color:var(--bg); padding:10px 14px; border-radius:8px; max-width:420px; z-index:9; }
+@media (max-width:640px) { .kv { grid-template-columns:1fr; } main { padding:10px; } th:nth-child(n+6), td:nth-child(n+6) { display:none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>TeamBid</h1>
+  <select id="member" title="Team member"></select>
+  <nav id="tabs"></nav>
+</header>
+<main id="view"></main>
+<div id="toast" class="toast hide"></div>
+<script>
+const TABS = ["Team","Add member","Profile","Matches","Apply","Tracker","Vault","Writing","Scans","Knowledge"];
+let state = { tab: localStorage.getItem("tb_tab") || "Team", member: localStorage.getItem("tb_member") || "", applyJob: null };
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+function toast(msg, ms=3500) { const t=$("#toast"); t.textContent=msg; t.classList.remove("hide"); clearTimeout(t._h); t._h=setTimeout(()=>t.classList.add("hide"), ms); }
+async function api(path, body) {
+  const opt = { headers: { "Content-Type": "application/json", "X-Token": localStorage.getItem("tb_token") || "" } };
+  if (body !== undefined) { opt.method = "POST"; opt.body = JSON.stringify(body); }
+  const r = await fetch(path, opt);
+  if (r.status === 401) { const t = prompt("Access token for this TeamBid server:"); if (t) { localStorage.setItem("tb_token", t); return api(path, body); } }
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+function fileLink(p, label) { return p ? `<a href="/files?path=${encodeURIComponent(p)}&token=${encodeURIComponent(localStorage.getItem("tb_token")||"")}">${esc(label)}</a>` : ""; }
+function md(src) {   // tiny markdown renderer: headers, lists, tables, bold, italics, links
+  const out = []; let table = null, list = false;
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g,"<b>$1</b>").replace(/_(.+?)_/g,"<i>$1</i>").replace(/`(.+?)`/g,"<code>$1</code>")
+      .replace(/\[(.+?)\]\((https?:\/\/[^)]+)\)/g,'<a href="$2" target="_blank">$1</a>').replace(/(^|\s)(https?:\/\/\S+)/g,'$1<a href="$2" target="_blank">$2</a>');
+  for (const line of src.split("\n")) {
+    if (/^\|/.test(line)) { const cells=line.split("|").slice(1,-1).map(c=>c.trim()); if (cells.every(c=>/^-+$/.test(c))) continue;
+      if (!table) { table=[]; out.push("__T"+out.length); } table.push(cells); continue; }
+    if (table) { const i=out.findIndex(x=>x.startsWith("__T")); out[i]="<table>"+table.map((r,k)=>"<tr>"+r.map(c=>k?`<td>${inline(c)}</td>`:`<th>${inline(c)}</th>`).join("")+"</tr>").join("")+"</table>"; table=null; }
+    if (/^\s*[-*] /.test(line)) { if (!list) { out.push("<ul>"); list=true; } out.push("<li>"+inline(line.replace(/^\s*[-*] /,""))+"</li>"); continue; }
+    if (list) { out.push("</ul>"); list=false; }
+    const h=line.match(/^(#{1,3}) (.*)/); if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+    out.push(line.trim() ? "<p>"+inline(line)+"</p>" : "");
+  }
+  if (table) { const i=out.findIndex(x=>x.startsWith("__T")); out[i]="<table>"+table.map((r,k)=>"<tr>"+r.map(c=>k?`<td>${inline(c)}</td>`:`<th>${inline(c)}</th>`).join("")+"</tr>").join("")+"</table>"; }
+  if (list) out.push("</ul>");
+  return '<div class="md">'+out.join("\n")+"</div>";
+}
+function setTab(t) { state.tab=t; localStorage.setItem("tb_tab", t); render(); }
+async function loadMembers() {
+  const o = await api("/api/overview"); state.overview = o;
+  const sel = $("#member");
+  sel.innerHTML = o.members.length ? o.members.map(m=>`<option value="${m.slug}">${esc(m.name)}</option>`).join("") : `<option value="">No members yet</option>`;
+  if (!o.members.find(m=>m.slug===state.member)) state.member = o.members[0]?.slug || "";
+  sel.value = state.member;
+}
+$("#member").onchange = e => { state.member=e.target.value; localStorage.setItem("tb_member", state.member); render(); };
+function needMember() { if (!state.member) { $("#view").innerHTML = `<div class="card">Add a team member first.</div>`; return true; } return false; }
+
+async function render() {
+  $("#tabs").innerHTML = TABS.map(t=>`<button class="${t===state.tab?"on":""}" onclick="setTab('${t}')">${t}</button>`).join("");
+  const v = $("#view"); v.innerHTML = `<div class="card muted">Loading...</div>`;
+  try { await VIEWS[state.tab](v); } catch(e) { v.innerHTML = `<div class="card bad">${esc(e.message)}</div>`; }
+}
+
+const VIEWS = {
+async "Team"(v) {
+  await loadMembers(); const o = state.overview;
+  const rows = o.members.map(m=>`<tr><td><a href="#" onclick="state.member='${m.slug}';localStorage.setItem('tb_member','${m.slug}');setTab('Matches');return false">${esc(m.name)}</a></td>
+     <td>${esc(m.level)} · ${esc(m.region||"US")}</td><td>${esc((m.lanes||[]).join(", "))}</td><td>${m.years ?? ""}</td><td>${m.audit}</td><td>${m.new_matches}</td>
+     <td>${Object.entries(m.applications).map(([k,n])=>`${k} ${n}`).join(", ")||"-"}</td></tr>`).join("");
+  v.innerHTML = `<div class="grid">
+     <div class="card"><h2>Team</h2><div class="score">${o.members.length}</div><div class="muted">members</div></div>
+     <div class="card"><h2>Jobs in the shared scan</h2><div class="score">${(o.jobs||0).toLocaleString()}</div><div class="muted">last scan day: ${o.last_scan_day||"never"} ${o.scan_running?"· scan running now":""}</div></div>
+     <div class="card"><h2>AI help</h2><div class="score">${o.llm?"Claude API":(o.local_ai?.running?"Local (Ollama)":"Rules only")}</div>
+       <div class="muted">${o.local_ai?.embed?`Meaning match on (${esc(o.local_ai.embed_model)})`:"Meaning match off (start Ollama with nomic-embed-text)"} ·
+       ${o.llm?"letter polish: Claude API":o.local_ai?.chat?`letter polish: ${esc(o.local_ai.chat_model)} (fact-checked)`:"letter polish off"}</div></div></div>
+   <div class="card"><h2>Members</h2><table><tr><th>Name</th><th>Level</th><th>Lanes</th><th>Years</th><th>Resume score</th><th>New matches</th><th>Applications</th></tr>${rows||'<tr><td colspan=7 class="muted">No members yet. Use "Add member".</td></tr>'}</table></div>`;
+},
+async "Add member"(v) {
+  v.innerHTML = `<div class="card"><h2>Add a team member</h2><p class="muted">Upload a resume (PDF, DOCX or TXT). TeamBid reads it into facts, scores it, and builds a personal vault. Review the result on the Profile tab: parsing is automatic, so check jobs, dates and skills.</p>
+   <div class="kv"><label>Full name</label><input id="n_name" placeholder="Jane Doe">
+   <label>Email (optional)</label><input id="n_email">
+   <label>Resume file</label><input id="n_file" type="file" accept=".pdf,.docx,.txt,.md">
+   <label>Countries you can legally work from</label><input id="n_countries" placeholder="Leave empty to take it from the CV. Any names work: Denmark, US, UK, Germany, Canada...">
+   <label>Use Claude API to clean the parse</label><label><input id="n_llm" type="checkbox"> only if ANTHROPIC_API_KEY is set</label></div>
+   <p><button class="b" id="n_go">Add member</button> <span id="n_msg" class="muted"></span></p></div>`;
+  $("#n_go").onclick = async () => {
+    const f = $("#n_file").files[0], name = $("#n_name").value.trim();
+    if (!name || !f) return toast("Name and resume file are required");
+    $("#n_msg").textContent = "Reading the resume...";
+    const b64 = await new Promise(res => { const r = new FileReader(); r.onload = () => res(r.result); r.readAsDataURL(f); });
+    const countries = $("#n_countries").value.trim();
+    try {
+      const r = await api("/api/members", { name, email: $("#n_email").value.trim(), filename: f.name, file_b64: b64, use_llm: $("#n_llm").checked,
+                                            prefs: countries ? { countries: countries.split(",").map(s=>s.trim()).filter(Boolean) } : undefined });
+      state.member = r.slug; localStorage.setItem("tb_member", r.slug); await loadMembers();
+      toast(`Added. Resume score ${r.audit.score}/100.` + (r.matched ? ` ${r.matched.matches} matches from the last scan.` : " Matches appear after the next scan.") + " Review the profile next.", 7000); setTab("Profile");
+    } catch(e) { $("#n_msg").textContent = ""; toast(e.message, 6000); }
+  };
+},
+async "Profile"(v) {
+  if (needMember()) return;
+  const m = await api(`/api/member/${state.member}`), p = m.profile, pr = m.prefs, a = m.audit;
+  const lanes = ["ai","ml","data","backend","frontend","fullstack","mobile","devops","security","qa"];
+  const roles = (p.roles||[]).map(r=>`<tr><td><b>${esc(r.title)}</b><br>${esc(r.company)}${r.kind==="intern"?' <span class="pill consider">intern/research</span>':""}</td><td>${esc(r.start)} - ${esc(r.end)}</td>
+      <td>${(r.bullets||[]).map(b=>"• "+esc(b.text)).join("<br>")}</td><td class="muted">${esc((r.stack||[]).join(", "))}</td></tr>`).join("");
+  v.innerHTML = `<div class="grid">
+    <div class="card"><h2>Resume score</h2><div class="score">${a.score}<span class="muted" style="font-size:14px">/100 · ${a.grade}</span></div>
+      <div class="muted">${p.years_experience} years professional · level ${esc(p.level)} · ${esc((p.lanes||[]).join(", "))}</div></div>
+    <div class="card"><h2>Contact found</h2>${Object.entries(p.contact||{}).map(([k,x])=>`<div><span class="muted">${k}:</span> ${esc(x)}</div>`).join("")||"none"}</div>
+    <div class="card"><h2>Skills</h2><div><b>Proven:</b> ${esc((p.skills?.proven||[]).join(", "))}</div><div class="muted"><b>Listed only:</b> ${esc((p.skills?.listed_only||[]).join(", "))}</div></div></div>
+   <div class="card"><h2>Fix list</h2><table><tr><th>Priority</th><th>Area</th><th>What to change</th></tr>${a.findings.map(f=>`<tr><td>${["","Low","Medium","High"][f.severity]}</td><td>${esc(f.area)}</td><td>${esc(f.message)}</td></tr>`).join("")||"<tr><td colspan=3>Nothing major.</td></tr>"}</table></div>
+   <div class="card"><h2>Job search preferences</h2><div class="kv">
+     <label>Target titles</label><input id="p_titles" value="${esc((pr.target_titles||[]).join(", "))}">
+     <label>Lanes (order = priority)</label><div class="row">${lanes.map(l=>`<label><input type="checkbox" class="p_lane" value="${l}" ${(pr.lanes||[]).includes(l)?"checked":""}> ${l}</label>`).join(" ")}</div>
+     <label>Region</label><select id="p_region">${["US","EU","UK","other"].map(x=>`<option ${pr.region===x?"selected":""}>${x}</option>`).join("")}</select>
+     <label>Time zone</label><input id="p_tz" value="${esc(pr.timezone||"")}" placeholder="Europe/Berlin, America/New_York...">
+     <label>Level</label><select id="p_level">${["entry","junior","mid","senior","staff"].map(x=>`<option ${pr.level===x?"selected":""}>${x}</option>`).join("")}</select>
+     <label>Countries you can legally work from</label><input id="p_countries" value="${esc((pr.countries||[]).join(", "))}" placeholder="Europe / US / UK / Germany / Canada / India...">
+     <label>Remote OK</label><input id="p_remote" type="checkbox" ${pr.remote_ok?"checked":""}>
+     <label>On-site/hybrid OK near</label><div class="row"><input id="p_onsite" type="checkbox" ${pr.onsite_ok?"checked":""}><input id="p_cities" value="${esc((pr.home_cities||[]).join(", "))}" placeholder="San Francisco, Oakland"></div>
+     <label>Target companies</label><input id="p_targets" value="${esc((pr.target_companies||[]).join(", "))}">
+     <label>Avoid companies</label><input id="p_avoid" value="${esc((pr.avoid_companies||[]).join(", "))}">
+     <label>Exclude title words</label><input id="p_excl" value="${esc((pr.exclude_words||[]).join(", "))}" placeholder="e.g. Java, Salesforce">
+     <label>Posted within (days)</label><input id="p_days" type="number" min="1" max="30" value="${pr.days||2}">
+     <label>Minimum score</label><input id="p_min" type="number" min="0" max="100" value="${pr.min_score||40}">
+     <label>Work authorization</label><input id="p_auth" value="${esc(pr.work_auth||"")}" placeholder="Yes, U.S. citizen / permanent resident / need sponsorship">
+     <label>Salary floor</label><input id="p_sal" value="${esc(pr.salary_min||"")}" placeholder="$120,000">
+   </div><p><button class="b" id="p_save">Save and re-match</button></p></div>
+   <div class="card"><h2>Experience (parsed)</h2><p class="muted">Check companies, titles, dates and bullets. To fix them, edit the JSON below and save. Bullets are the only text tailoring will use.</p>
+     <table><tr><th>Role</th><th>Dates</th><th>Bullets</th><th>Stack</th></tr>${roles}</table>
+     <details><summary>Edit roles as JSON</summary><textarea id="p_roles" rows="16">${esc(JSON.stringify((p.roles||[]).map(r=>({company:r.company,title:r.title,location:r.location,start:r.start,end:r.end,kind:r.kind,stack:r.stack,bullets:(r.bullets||[]).map(b=>b.text)})),null,1))}</textarea>
+     <button class="b" id="p_roles_save">Save roles</button></details></div>`;
+  const list = id => $(id).value.split(",").map(s=>s.trim()).filter(Boolean);
+  $("#p_save").onclick = async () => {
+    const prefs = { target_titles: list("#p_titles"), lanes: [...document.querySelectorAll(".p_lane:checked")].map(x=>x.value), level: $("#p_level").value,
+      countries: list("#p_countries"), remote_ok: $("#p_remote").checked, onsite_ok: $("#p_onsite").checked, home_cities: list("#p_cities"),
+      target_companies: list("#p_targets"), avoid_companies: list("#p_avoid"), exclude_words: list("#p_excl"), days: +$("#p_days").value,
+      min_score: +$("#p_min").value, work_auth: $("#p_auth").value, salary_min: $("#p_sal").value, region: $("#p_region").value, timezone: $("#p_tz").value.trim() };
+    await api(`/api/member/${state.member}`, { prefs });
+    try { const r = await api(`/api/member/${state.member}/rematch`, {}); toast(`Saved. ${r.matches} matches with the new settings.`); } catch(e) { toast("Saved. Run a scan to get matches."); }
+  };
+  $("#p_roles_save").onclick = async () => {
+    let roles; try { roles = JSON.parse($("#p_roles").value); } catch(e) { return toast("JSON error: "+e.message); }
+    const prof = Object.assign({}, p, { roles });
+    await api(`/api/member/${state.member}`, { profile: prof }); toast("Roles saved, vault rebuilt."); render();
+  };
+},
+async "Matches"(v) {
+  if (needMember()) return;
+  const f = state.mfilter || { tier:"", status:"new", newOnly:false };
+  const qs = new URLSearchParams({ tier:f.tier, status:f.status, new: f.newOnly?"1":"0" });
+  const rows = await api(`/api/member/${state.member}/matches?${qs}`);
+  v.innerHTML = `<div class="card"><div class="row">
+     <select id="f_tier"><option value="">All tiers</option><option value="best" ${f.tier==="best"?"selected":""}>Best fits</option><option value="consider" ${f.tier==="consider"?"selected":""}>Worth a look</option></select>
+     <select id="f_status">${["","new","shortlisted","applying","skipped"].map(s=>`<option value="${s}" ${f.status===s?"selected":""}>${s||"Any status"}</option>`).join("")}</select>
+     <label><input type="checkbox" id="f_new" ${f.newOnly?"checked":""}> latest scan only</label>
+     <span class="muted">${rows.length} jobs</span>
+     <button class="b ghost" id="f_rematch" title="Match this member against the jobs from the last scan (no new scan needed)">Match me now</button></div>
+     <div class="muted" style="margin-top:6px">One scan serves the whole team: every member is matched when a scan finishes. Added after the last scan, or changed your preferences? Click "Match me now".</div></div>
+   <div class="card"><table><tr><th>Score</th><th>Company</th><th>Title</th><th>Location</th><th>Posted</th><th>Why</th><th></th></tr>
+   ${rows.map(r=>`<tr><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td><td><a href="${esc(r.url)}" target="_blank">${esc(r.title)}</a></td>
+     <td>${esc((r.location||"").slice(0,40))}</td><td>${esc(r.posted||"?")}</td><td class="muted">${esc(r.reasons.join("; "))}</td>
+     <td class="row"><button class="b" onclick="state.applyJob=${r.job_id};state.applyMeta={company:${JSON.stringify(r.company).replace(/"/g,'&quot;')},title:${JSON.stringify(r.title).replace(/"/g,'&quot;')},url:${JSON.stringify(r.url).replace(/"/g,'&quot;')}};setTab('Apply')">Apply</button>
+       <button class="b ghost" onclick="mstatus(${r.job_id},'shortlisted')">Save</button><button class="b ghost" onclick="mstatus(${r.job_id},'skipped')">Skip</button></td></tr>`).join("")
+     || '<tr><td colspan=7 class="muted">No matches with these filters. Run a scan (Scans tab) or widen your preferences.</td></tr>'}</table></div>`;
+  const upd = () => { state.mfilter = { tier:$("#f_tier").value, status:$("#f_status").value, newOnly:$("#f_new").checked }; render(); };
+  $("#f_tier").onchange = upd; $("#f_status").onchange = upd; $("#f_new").onchange = upd;
+  $("#f_rematch").onclick = async () => {
+    $("#f_rematch").disabled = true; $("#f_rematch").textContent = "Matching...";
+    try { const r = await api(`/api/member/${state.member}/rematch`, {}); toast(`${r.matches} matches (${r.new} new, ${r.best} best fits)`); state.mfilter = { tier:"", status:"", newOnly:false }; render(); }
+    catch(e) { toast(e.message, 6000); $("#f_rematch").disabled = false; $("#f_rematch").textContent = "Match me now"; }
+  };
+},
+async "Apply"(v) {
+  if (needMember()) return;
+  const meta = state.applyMeta || {};
+  v.innerHTML = `<div class="card"><h2>Quick Bid: tailor an application</h2><p class="muted">Pick a job from Matches, or paste a link (Greenhouse, Lever, Ashby, Workday and most career pages can be read) or the job text.</p>
+    <div class="kv"><label>Company</label><input id="a_company" value="${esc(meta.company||"")}"><label>Job title</label><input id="a_title" value="${esc(meta.title||"")}">
+    <label>Job link</label><input id="a_url" value="${esc(meta.url||"")}"><label>Or paste the job text</label><textarea id="a_jd" rows="7"></textarea>
+    <label>Polish the letter with AI</label><label><input type="checkbox" id="a_polish"> Claude API if a key is set, else local Ollama (slower). Rejected unless it passes the fact and writing checks</label></div>
+    <p><button class="b" id="a_go">Analyze and build</button> <span id="a_msg" class="muted"></span></p></div><div id="a_out"></div>`;
+  $("#a_go").onclick = async () => {
+    $("#a_msg").textContent = "Reading the job and building documents...";
+    try {
+      const r = await api("/api/apply", { slug: state.member, job_id: state.applyJob, url: $("#a_url").value.trim(), jd_text: $("#a_jd").value.trim(),
+                                          company: $("#a_company").value.trim(), title: $("#a_title").value.trim(), polish: $("#a_polish").checked });
+      state.applyJob = null; state.applyMeta = null; $("#a_msg").textContent = "";
+      const f = r.fit, k = r.keywords;
+      $("#a_out").innerHTML = `<div class="grid">
+        <div class="card"><h2>Verdict</h2><span class="pill ${f.verdict}" style="font-size:16px">${f.verdict}</span><div class="muted">covers ${f.coverage}% of the must-have skills</div>${f.notes.map(n=>`<p class="warn">${esc(n)}</p>`).join("")}</div>
+        <div class="card"><h2>Resume</h2><div>${fileLink(r.files.pdf,"Resume PDF")} · ${fileLink(r.files.docx,"DOCX")}</div><div class="muted">${r.files.pages} page(s), ${esc(r.files.paper||"Letter")} (${esc(r.doc_region||"")} format) · keyword coverage ${k.pct}%</div>
+          <div class="${r.problems.length?"bad":"good"}">${r.problems.length?"Fact check: "+esc(r.problems.join("; ")):"Fact check passed: nothing invented"}</div>
+          <div class="muted">Missing keywords (don't fake them): ${esc(k.missing.join(", ")||"none")}</div><div class="muted">Bullet ranking: ${esc(r.ranking||"keywords")}</div></div>
+        <div class="card"><h2>Must-haves</h2><div class="good">You have: ${esc(f.have.join(", ")||"-")}</div><div class="bad">Missing: ${esc(f.missing.join(", ")||"-")}</div>
+          <div class="muted">Nice-to-have you have: ${esc(f.nice_have.join(", ")||"-")}</div></div></div>
+        <div class="card"><h2>Cover letter</h2><div>${fileLink(r.files.letter_pdf,"Letter PDF")} · ${fileLink(r.files.letter_docx,"DOCX")} ${r.polish?`<span class="muted">· ${esc(r.polish)}</span>`:""}</div>
+          <textarea id="a_letter" rows="12">${esc(r.letter)}</textarea><pre id="a_lcheck">${esc(fmtCheck(r.letter_check))}</pre>
+          <button class="b ghost" id="a_recheck">Re-check my edits</button></div>
+        <div class="card"><h2>Application answers</h2>${Object.entries(r.answers).map(([q,a])=>`<p><b>${esc(q)}</b></p><pre>${esc(a.answer)}</pre>`).join("")}</div>
+        <div class="card muted">Saved to ${esc(r.folder)} · tracked as application #${r.application_id} (Tracker tab).</div>`;
+      $("#a_recheck").onclick = async () => { const c = await api("/api/check", { text: $("#a_letter").value }); $("#a_lcheck").textContent = c.report; };
+    } catch(e) { $("#a_msg").textContent = ""; toast(e.message, 7000); }
+  };
+},
+async "Tracker"(v) {
+  if (needMember()) return;
+  const rows = await api(`/api/member/${state.member}/applications`);
+  const st = ["drafting","applied","interview","offer","rejected","withdrawn","closed"];
+  const counts = st.map(s=>`${s} ${rows.filter(r=>r.status===s).length}`).join(" · ");
+  v.innerHTML = `<div class="card"><h2>Pipeline</h2><div class="muted">${counts}</div></div><div class="card"><table><tr><th>#</th><th>Company</th><th>Role</th><th>Fit</th><th>Status</th><th>Updated</th><th>Folder</th></tr>
+    ${rows.map(r=>`<tr><td>${r.id}</td><td>${esc(r.company)}</td><td>${r.url?`<a href="${esc(r.url)}" target="_blank">${esc(r.title)}</a>`:esc(r.title)}</td><td>${r.fit??""}%</td>
+      <td><select onchange="astatus(${r.id},this.value)">${st.map(s=>`<option ${s===r.status?"selected":""}>${s}</option>`).join("")}</select></td><td>${esc(r.updated)}</td><td class="muted">${esc((r.folder||"").split(/[\\/]/).pop())}</td></tr>`).join("")
+    || '<tr><td colspan=7 class="muted">No applications yet. Use Apply.</td></tr>'}</table></div>`;
+},
+async "Vault"(v) {
+  if (needMember()) return;
+  const files = await api(`/api/member/${state.member}/vault`);
+  const cur = state.vfile && files.includes(state.vfile) ? state.vfile : files[0];
+  const f = cur ? await api(`/api/member/${state.member}/vault/${encodeURIComponent(cur)}`) : { text: "" };
+  v.innerHTML = `<div class="card"><div class="row">${files.map(x=>`<button class="b ${x===cur?"":"ghost"}" onclick="state.vfile='${x}';render()">${esc(x.replace(/\.md$/,""))}</button>`).join("")}</div>
+    <p class="muted">Folder: ${esc((f.path||"").replace(/[^\\/]+$/,""))}</p></div><div class="card">${cur?.startsWith("prompts/")?`<pre>${esc(f.text)}</pre>`:md(f.text)}</div>`;
+},
+async "Writing"(v) {
+  v.innerHTML = `<div class="card"><h2>Writing checker</h2><p class="muted">Flags AI-style words, stock phrases, long sentences, even rhythm and hard reading. Paste an answer, letter or bullet.</p>
+    <textarea id="w_text" rows="10"></textarea><div class="row"><label>Limit <input id="w_limit" type="number" style="width:90px"></label>
+    <select id="w_kind"><option value="prose">Answer / letter</option><option value="bullet">Resume bullet</option></select><button class="b" id="w_go">Check</button></div>
+    <pre id="w_out" style="margin-top:10px"></pre></div>`;
+  $("#w_go").onclick = async () => { const r = await api("/api/check", { text: $("#w_text").value, limit: +$("#w_limit").value || null, kind: $("#w_kind").value }); $("#w_out").textContent = r.report; };
+},
+async "Scans"(v) {
+  const o = await api("/api/overview"), log = await api("/api/scan/log");
+  v.innerHTML = `<div class="card"><h2>Shared job scan</h2><p class="muted">One scan reads ~27,000 company job boards (Greenhouse, Ashby, Lever, Workday, SmartRecruiters, Workable, Recruitee, Breezy, BambooHR, iCIMS) plus remote-job feeds, then matches every member. A full scan takes about an hour and survives restarts and internet drops (it resumes).</p>
+    <div class="row"><label>Posted within <input id="s_days" type="number" value="2" style="width:60px"> days</label><label>Test with first <input id="s_limit" type="number" placeholder="all" style="width:80px"> boards</label>
+    <button class="b" id="s_go" ${log.running?"disabled":""}>${log.running?"Scan running...":"Start scan"}</button>
+    ${log.running?'<button class="b ghost" id="s_stop">Stop scan</button>':""}</div>
+    <div class="muted" style="margin-top:6px">Stopping keeps every finished board: starting again the same day resumes where it stopped. Members are matched when a scan finishes.</div>
+    <pre style="margin-top:10px;max-height:260px;overflow:auto" id="s_log">${esc(log.lines.join("\n")||"No scan yet.")}</pre></div>
+    <div class="card"><h2>History</h2><table><tr><th>Started</th><th>Minutes</th><th>Boards</th><th>Jobs</th><th>Problems</th></tr>
+    ${o.runs.map(r=>`<tr><td>${esc(r.started)}</td><td>${r.secs?(r.secs/60).toFixed(1):"running"}</td><td>${(r.stats.boards||0).toLocaleString()}</td><td>${(r.stats.jobs||0).toLocaleString()}</td><td class="muted">${esc((r.stats.problems||[]).join("; ")||"-")}</td></tr>`).join("")||'<tr><td colspan=5 class="muted">No scans yet.</td></tr>'}</table></div>
+    <div class="card muted">Daily schedule: run <code>python tb.py schedule</code> once (Windows). It checks hourly and scans once a day after the configured hour.</div>`;
+  if (log.running) $("#s_stop").onclick = async () => {
+    if (!confirm("Stop the running scan? Finished boards are kept; the next scan today resumes from there.")) return;
+    const r = await api("/api/scan/stop", {}); toast(r.stopped ? "Scan stopped. Progress kept." : r.reason); setTimeout(render, 800);
+  };
+  $("#s_go").onclick = async () => { const r = await api("/api/scan", { days: +$("#s_days").value || 2, limit: +$("#s_limit").value || null }); toast(r.message || (r.started ? "Scan started in the background." : r.reason)); setTimeout(render, 1500); };
+  if (log.running) { clearTimeout(state.poll); state.poll = setTimeout(() => state.tab==="Scans" && render(), 8000); }
+},
+async "Knowledge"(v) {
+  const files = await api("/api/knowledge");
+  const cur = state.kfile && files.includes(state.kfile) ? state.kfile : "README.md";
+  const f = await api(`/api/knowledge/${cur}`);
+  v.innerHTML = `<div class="card"><div class="row">${files.map(x=>`<button class="b ${x===cur?"":"ghost"}" onclick="state.kfile='${x}';render()">${esc(x.replace(/\.md$/,""))}</button>`).join("")}</div></div><div class="card">${md(f.text)}</div>`;
+},
+};
+function fmtCheck(c) { const s=c.stats; const flags=[...c.fails.map(x=>"FAIL: "+x), ...c.warnings.map(x=>"WARNING: "+x)];
+  return `${s.chars} chars, ${s.words} words, reading ease ${s.reading_ease}, grade ${s.grade}\n` + (flags.join("\n") || "OK: no flags"); }
+async function mstatus(job, status) { await api(`/api/member/${state.member}/match/${job}`, { status }); toast(`Marked ${status}`); render(); }
+async function astatus(id, status) { await api(`/api/application/${id}`, { status }); toast(`Application #${id}: ${status}`); }
+loadMembers().then(render).catch(e => { $("#view").innerHTML = `<div class="card bad">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

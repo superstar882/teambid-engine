@@ -1,0 +1,84 @@
+# Daily TeamBid scan on GitHub's servers, so no PC has to stay on.
+# Pulls the encrypted workspace (release "workspace"), scans every board, re-matches the team, publishes the
+# encrypted results site, and uploads the workspace again. Secrets needed:
+#   TEAMBID_SITE_PASSWORD   team password (decrypts the workspace, encrypts the site)
+#   TEAMBID_PUBLISH_JSON    contents of workspace/.publish.json (site folder, Supabase progress settings)
+#   SITE_DEPLOY_KEY         SSH key with write access to <owner>/teambid (the results site repo)
+name: Daily scan
+
+on:
+  schedule:
+    - cron: "0 8 * * *"          # 08:00 UTC = 17:00 Japan time = 01:00 California (GitHub may start it a little late)
+  workflow_dispatch:
+
+permissions:
+  contents: write                # upload the workspace release asset, keep-alive commit
+
+concurrency:
+  group: teambid-scan
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    services:
+      ollama:                    # local embeddings for the "meaning match" (CPU is plenty for ~15 posts per member)
+        image: ollama/ollama
+        ports: ["11434:11434"]
+    env:
+      TEAMBID_CLOUD: "1"
+      GH_TOKEN: ${{ github.token }}
+      TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Settings
+        env:
+          PUBLISH_JSON: ${{ secrets.TEAMBID_PUBLISH_JSON }}
+        run: |
+          mkdir -p workspace
+          printf '%s' "$PUBLISH_JSON" > workspace/.publish.json
+
+      - name: Results site repo
+        env:
+          KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/site_key && chmod 600 ~/.ssh/site_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+          GIT_SSH_COMMAND="ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" \
+            git clone -q --depth 1 "git@github.com:${{ github.repository_owner }}/teambid.git" site
+
+      - name: Embedding model
+        run: curl -sf http://localhost:11434/api/pull -d '{"model":"nomic-embed-text"}' > /dev/null || echo "embeddings off for this run"
+
+      - name: Pull workspace
+        id: pull
+        run: python tb.py cloud pull --force
+
+      - name: Scan, match, publish
+        run: python tb.py scan
+
+      - name: Push workspace
+        if: always() && steps.pull.outcome == 'success'
+        run: python tb.py cloud push
+
+      - name: Keep the schedule alive
+        # GitHub turns off scheduled workflows after 60 days without commits
+        run: |
+          if [ $(( $(date +%s) - $(git log -1 --format=%ct) )) -gt $((45*86400)) ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            date -u +%F > .github/keepalive
+            git add .github/keepalive && git commit -qm "keep scheduled scan alive" && git push -q
+          fi

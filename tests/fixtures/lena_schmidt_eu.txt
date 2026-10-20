@@ -1,0 +1,29 @@
+LENA SCHMIDT
+Backend Engineer
+Berlin, Germany  |  lena.schmidt@example.de  |  +49 30 1234 5678  |  linkedin.com/in/lena-schmidt-example
+
+PROFILE
+Backend engineer building payment and logistics APIs in Python and Go.
+
+WORK EXPERIENCE
+Backend Engineer, Parcelway GmbH        03.2022 – present
+- Built Go and Python microservices for parcel tracking that handle 2,000 requests per second.
+- Moved order events from cron jobs to Kafka, cutting delivery-status delay from 15 minutes to 20 seconds.
+- Wrote PostgreSQL migrations and Redis caching that reduced API latency by 45%.
+
+Software Developer, Finora Payments        01.2019 – 02.2022
+- Developed REST APIs in Django for SEPA payments used by 300 merchants.
+- Added pytest and GitHub Actions pipelines, raising test coverage from 40% to 85%.
+
+Working Student, Software Development, Datenwerk        15.09.2016 – 31.12.2018
+- Built internal Flask tools for report exports used by 40 colleagues.
+
+EDUCATION
+Technical University of Munich, M.Sc. in Informatics, 10.2016 – 09.2018
+Karlsruhe Institute of Technology, B.Sc. in Computer Science, 10.2013 – 09.2016
+
+SKILLS
+Python, Go, SQL, Django, Flask, FastAPI, PostgreSQL, Redis, Kafka, Docker, Kubernetes, AWS, GitHub Actions
+
+LANGUAGES
+English (C1), German (native)
