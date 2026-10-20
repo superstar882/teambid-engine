@@ -82,7 +82,25 @@ the encrypted file; search engines are told not to index it. Commits use the nam
 - **Automatic:** `python tb.py schedule` registers a hidden hourly task that scans once a day after 17:00 Japan time
   (3 h after Quick Bid's scan) and then publishes. Every finished `tb.py scan` also publishes.
 - Change the password: `python tb.py site-password`, then `python tb.py publish`.
-- The password (`workspace/.site-password`) and publish settings (`workspace/.publish.json`) stay on this PC only.
+- The password (`workspace/.site-password`) and publish settings (`workspace/.publish.json`) stay on this PC only
+  (and in the engine repo's encrypted Actions secrets, for the cloud scan).
+- Team progress (status + note per job, set on the page) is stored encrypted in Supabase (`tb.py progress-setup`).
+  The page reads it live; `tb.py sync` (and every publish) copies it into TeamBid.
+
+## Daily scan in the cloud (GitHub Actions, PC can be off)
+
+`.github/workflows/scan.yml` runs every day at 08:00 UTC (17:00 Japan time): it downloads the encrypted workspace,
+scans, re-matches the team, publishes the site and uploads the workspace again. Free in a public repo.
+
+- The workspace (database, member folders, reports) is one encrypted file (`workspace.enc`, AES-256-GCM with the team
+  password), kept in the release `workspace` of the engine repo. Nothing readable is uploaded.
+- One-time setup: `python tb.py cloud setup <owner>/<engine-repo>`, `python tb.py cloud push`, and three repo secrets:
+  `TEAMBID_SITE_PASSWORD`, `TEAMBID_PUBLISH_JSON` (contents of `.publish.json`), `SITE_DEPLOY_KEY` (SSH key with write
+  access to the `teambid` site repo).
+- On the PC everything syncs by itself: commands and the web app pull the newest workspace first and push after a
+  change. While the cloud scan runs, changes are refused so neither side overwrites the other.
+- By hand: `tb.py cloud pull|push|status`, `tb.py cloud scan` (start it now; the web app's scan button does the same).
+- The old database is kept in `workspace/backups/` (last 3) every time a newer one is pulled.
 
 ## Command line
 
