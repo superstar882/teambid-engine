@@ -14,11 +14,23 @@ from . import skills as SK
 from . import writing
 
 
+NOT_VERBS = {"i", "we", "the", "a", "an", "our", "my", "this", "it", "they", "he", "she", "team", "as", "at", "in", "on", "for"}
+
+
 def _first_person(bullet):
-    b = bullet.strip().rstrip(".")
-    if not b:
-        return ""
-    return "I " + b[0].lower() + b[1:] + "."
+    """'Processed 150K files. Co-built an app.' -> 'I processed 150K files. I co-built an app.'"""
+    out = []
+    for sent in re.split(r"(?<=\.)\s+(?=[A-Z])", bullet.strip()):
+        s = sent.strip().rstrip(".")
+        if not s:
+            continue
+        first = s.split()[0].lower()
+        out.append((s if first in NOT_VERBS or s[:2].isupper() else "I " + s[0].lower() + s[1:]) + ".")
+    return " ".join(out)
+
+
+def _a(word):
+    return "an" if re.match(r"(?i)[aeiou]", word or "") else "a"
 
 
 def _best_bullets(profile, wanted, n=2, focus=""):
@@ -56,7 +68,7 @@ def draft_letter(profile, jd, fit_res):
     paras = [f"Hi {company} team,", p1]
     for r, b in picks:
         lead = f"At {r['company']}" if r.get("company") else "In a recent role"
-        paras.append(f"{lead} I work{'ed' if r.get('end') != 'Present' else ''} as a {r['title'] or 'engineer'}. {_first_person(b['text'])}")
+        paras.append(f"{lead} I work{'ed' if r.get('end') != 'Present' else ''} as {_a(r['title'] or 'engineer')} {r['title'] or 'engineer'}. {_first_person(b['text'])}")
     proj = next((p for p in profile.get("projects", []) if set(p.get("stack", [])) & set(jd["required"])), None)
     if proj and proj["bullets"]:
         paras.append(f"On my own time I built {proj['name']}. {_first_person(proj['bullets'][0]['text'])}")

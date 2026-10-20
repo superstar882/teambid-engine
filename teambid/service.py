@@ -126,6 +126,11 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     if not jd_text:
         raise ValueError("Need a job link that can be read, or the pasted job text.")
     company, title = (company or "Company").strip(), (title or "Role").strip()
+    # names guessed from a link come out as "Launchdarkly" or "Addepar1": use the spelling the post itself uses
+    company = re.sub(r"(?<=[A-Za-z])\d+$", "", company)
+    hit = re.search(r"\b" + re.escape(company) + r"\b", jd_text, re.I)
+    if hit and hit.group(0).lower() == company.lower() and hit.group(0) != company and not hit.group(0).isupper():
+        company = hit.group(0)
     p = m["profile"]
     jd = tailor.analyze_jd(jd_text, title, company)
     fit = tailor.fit(p, jd)
