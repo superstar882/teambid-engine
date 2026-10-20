@@ -102,6 +102,21 @@ scans, re-matches the team, publishes the site and uploads the workspace again. 
 - By hand: `tb.py cloud pull|push|status`, `tb.py cloud scan` (start it now; the web app's scan button does the same).
 - The old database is kept in `workspace/backups/` (last 3) every time a newer one is pulled.
 
+## Tailored resume + cover letter from the results page
+
+Members click **Tailor** on a match (or open the **Documents** tab and paste the job post, messy browser copy is
+fine). The request is saved encrypted in Supabase; `.github/workflows/docs.yml` checks every 15 minutes, builds the
+resume and cover letter (PDF + DOCX) from the member's real resume with the usual fact checks, encrypts the files and
+puts them on the site. The Documents tab decrypts them in the browser: four download buttons plus **Copy cover letter**
+(plain text). Usually ready 15-20 minutes after the click.
+
+- **Free (default):** fact-only letter, optionally polished by a small local model (rejected if it invents anything).
+- **Claude:** run `python tb.py claude-key` in a terminal and paste the key (hidden). It is saved on this PC and as
+  the engine repo's `ANTHROPIC_API_KEY` secret. From then on Claude writes the letters and rewords the chosen resume
+  bullets toward the post. Every rewording must keep its numbers and add no tool or result, or the original stays.
+  `python tb.py claude-key --remove` switches back to free. Max plans include monthly API credits; when they run out,
+  calls stop (no charge) unless you buy credits or turn on auto-reload.
+
 ## Command line
 
 ```
