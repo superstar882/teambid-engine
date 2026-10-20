@@ -46,13 +46,12 @@ jobs:
         id: q
         run: python tb.py docs --check
 
-      - name: Local model (only without a Claude key)
-        if: steps.q.outputs.pending != '0' && env.ANTHROPIC_API_KEY == ''
+      - name: Embedding model (ranks resume bullets by meaning)
+        if: steps.q.outputs.pending != '0'
         run: |
           docker run -d --name ollama -p 11434:11434 ollama/ollama
           for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version >/dev/null && break; sleep 2; done
-          curl -sf http://localhost:11434/api/pull -d '{"model":"nomic-embed-text"}' >/dev/null || true
-          curl -sf http://localhost:11434/api/pull -d '{"model":"qwen3:4b-instruct"}' >/dev/null || echo "local polish off for this run"
+          curl -sf http://localhost:11434/api/pull -d '{"model":"nomic-embed-text"}' >/dev/null || echo "meaning ranking off for this run"
 
       - name: Results site repo
         if: steps.q.outputs.pending != '0'

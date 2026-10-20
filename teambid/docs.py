@@ -105,7 +105,8 @@ def run(limit=10, log=print):
         log(f"building documents for {slug}: {req.get('company') or '?'} / {req.get('title') or '?'}")
         try:
             r = service.apply(slug, url=req.get("url") or None, jd_text=req.get("text") or None,
-                              company=req.get("company") or None, title=req.get("title") or None, polish=True)
+                              company=req.get("company") or None, title=req.get("title") or None,
+                              polish=False)   # Claude writes when a key is set; the small CPU model took ~5 min and was always rejected
             out_dir = export.SITE / page / "docs" / rid
             out_dir.mkdir(parents=True, exist_ok=True)
             files = {}
