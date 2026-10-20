@@ -41,6 +41,7 @@ SECTIONS = {
                 "other experience", "additional experience", "earlier positions", "other roles"],
 }
 HEADER_LOOKUP = {a: k for k, al in SECTIONS.items() for a in al}
+HEADER_NOSPACE = {a.replace(" ", ""): k for a, k in HEADER_LOOKUP.items()}   # "TECHNICALSKILLS" from spaced-out designs
 
 TITLE_WORDS = re.compile(r"(?i)\b(engineer|developer|programmer|architect|manager|lead|intern|analyst|scientist|designer|consultant|"
                          r"specialist|administrator|director|founder|co-founder|cto|ceo|researcher|assistant|apprentice|contractor|"
@@ -188,7 +189,8 @@ def _tidy(text):
 def _norm_header(line):
     t = re.sub(r"[^a-z& ]", "", line.lower()).strip()
     t = re.sub(r"\s+", " ", t)
-    return HEADER_LOOKUP.get(t) or HEADER_LOOKUP.get(t.replace("&", "and"))
+    return (HEADER_LOOKUP.get(t) or HEADER_LOOKUP.get(t.replace("&", "and")) or HEADER_NOSPACE.get(t.replace(" ", ""))
+            or HEADER_NOSPACE.get(t.replace("&", "and").replace(" ", "")))
 
 
 def _is_header(line):
