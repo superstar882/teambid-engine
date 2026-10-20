@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>Team results</title>
+<title>TeamBid</title>
 <style>
 :root { --bg:#f6f7f9; --card:#fff; --ink:#15181d; --muted:#5d6672; --line:#e3e6ea; --acc:#2557d6; --acc2:#e8eefc;
         --go:#13804a; --go2:#e5f5ec; --warn:#a15c00; --warn2:#fff3e0; --bad:#b42318; --bad2:#fdecea; }
@@ -27,6 +27,11 @@ input, select, textarea, button.b, button.b2 { font:inherit; color:inherit; back
 button.b { background:var(--acc); border-color:var(--acc); color:#fff; cursor:pointer; }
 button.b2 { cursor:pointer; padding:4px 9px; }
 button:disabled { opacity:.6; cursor:wait; }
+.prog { display:grid; grid-template-columns:1fr auto; gap:6px; width:200px; }
+.prog select, .prog input, .prog button { height:32px; padding:4px 8px; margin:0; width:100%; }
+.prog .pnote, .prog .who { grid-column:1 / -1; }
+.prog .who { font-size:11px; margin-top:-2px; }
+td.nw { white-space:nowrap; }
 .doc { border-top:1px solid var(--line); padding:10px 0; }
 .doc:first-child { border-top:0; }
 .ready { background:var(--go2); color:var(--go); } .wait { background:var(--warn2); color:var(--warn); } .fail { background:var(--bad2); color:var(--bad); }
@@ -44,7 +49,7 @@ th { font-size:12px; color:var(--muted); }
 </head>
 <body>
 <div id="lock" class="lock card">
-  <h2>Team results</h2>
+  <h2>TeamBid</h2>
   <p class="muted">This page is encrypted. Enter the team password.</p>
   <form id="f" class="row"><input id="pw" type="password" autocomplete="current-password" placeholder="Team password" style="flex:1" autofocus>
     <button class="b">Open</button></form>
@@ -52,7 +57,7 @@ th { font-size:12px; color:var(--muted); }
   <p id="err" class="bad"></p>
 </div>
 <div id="app" class="hide">
-  <header><h1>Team results</h1><span class="muted" id="meta"></span><span style="flex:1"></span><button class="b" id="logout">Lock</button></header>
+  <header><h1>TeamBid</h1><span class="muted" id="meta"></span><span style="flex:1"></span><button class="b" id="logout">Lock</button></header>
   <main><div class="tabs" id="tabs" style="margin-bottom:12px"></div><div id="view"></div></main>
 </div>
 <script>
@@ -314,7 +319,7 @@ function draw() {
     body.innerHTML = `<div class="card"><div class="row"><input id="q" placeholder="Search company or title" style="flex:1;min-width:200px">
       <select id="tier"><option value="">All tiers</option><option value="best">Best fits</option><option value="consider">Worth a look</option></select>
       <select id="st"><option value="">Any progress</option><option value="none">Not started</option>${STATUSES.slice(1).map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select>
-      ${PG ? `<input id="me" placeholder="Your name (shown on updates)" value="${esc(localStorage.getItem("tb_name") || "")}" style="width:190px">` : ""}
+      ${PG ? `<input id="me" placeholder="Your name" title="Shown next to the statuses you set" value="${esc(localStorage.getItem("tb_name") || "")}" style="width:190px">` : ""}
       <span class="muted" id="count"></span></div>
       ${PG ? '<div class="muted" style="margin-top:6px">Set a status or note on any job: it is saved for the whole team (encrypted) and synced into TeamBid daily.</div>' : ""}</div>
       <div class="card"><table><thead><tr><th>Score</th><th>Company</th><th>Title</th><th class="m-hide">Location</th><th>Posted</th><th>Progress</th><th class="m-hide">Why</th></tr></thead><tbody id="rows"></tbody></table></div>`;
@@ -327,11 +332,11 @@ function draw() {
       document.getElementById("count").textContent = `${rows.length} shown`;
       document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td>
         <td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td class="m-hide">${esc((r.location||"").slice(0,50))}</td>
-        <td>${esc(r.posted || "?")}</td>
-        <td>${PG && PG.ok ? `<select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
-             <input data-k="${esc(r.url_key)}" class="pnote" placeholder="note" value="${esc(e.note || "")}" style="width:120px">
+        <td class="nw">${esc(r.posted || "?")}</td>
+        <td>${PG && PG.ok ? `<div class="prog"><select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
              <button class="b2 tl" data-k="${esc(r.url_key)}" title="Make a tailored resume + cover letter for this job">Tailor</button>
-             ${e.by || e.saved_at ? `<div class="muted" style="font-size:11px">${esc(e.by || "")} ${esc((e.saved_at || e.at || "").slice(0, 10))}</div>` : ""}`
+             <input data-k="${esc(r.url_key)}" class="pnote" placeholder="Note" value="${esc(e.note || "")}">
+             ${e.by || e.saved_at ? `<div class="muted who">${esc(e.by || "")} ${esc((e.saved_at || e.at || "").slice(0, 10))}</div>` : ""}</div>`
            : esc(STATUSES.find(([v]) => v === (e.status || ""))?.[1] || "-")}</td>
         <td class="muted m-hide">${esc((r.reasons||[]).join("; "))}</td></tr>`).join("") || '<tr><td colspan=7 class="muted">No matches.</td></tr>';
       const byKey = Object.fromEntries(m.matches.map(r => [r.url_key, r]));
