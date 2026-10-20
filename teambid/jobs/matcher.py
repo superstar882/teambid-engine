@@ -56,6 +56,15 @@ COUNTRY = {
 CLEARANCE = re.compile(r"(?i)\b(TS/SCI|top secret|secret clearance|security clearance|clearance required|active clearance|"
                        r"polygraph|public trust|DoD clearance)\b")
 REMOTE = re.compile(r"(?i)remote|anywhere|distributed|work from home|wfh|worldwide|global")
+NOT_REMOTE_TAG = re.compile(r"\[(Hybrid|On-site)\]")
+# the job post itself says the work is in an office (checked for the top matches, whose posts are read anyway)
+IN_OFFICE = re.compile(r"(?i)\b(location type:?\s*(hybrid|on-?site)|hybrid (role|position|schedule|work|model|environment|setup)|"
+                       r"this (role|position|job) is (a )?(hybrid|on-?site|in[- ]office|in[- ]person)|we work in[- ]person|"
+                       r"\d\s*(days?|x) (a|per) week (in|at) (the|our) (office|hq)|in[- ]office \d|"
+                       r"(must|required to|expected to) (be )?(work )?(in|from) (the|our) office|on-?site (role|position|only)|"
+                       r"in[- ]person (role|position|team|company|culture))\b")
+FULL_REMOTE = re.compile(r"(?i)\b(fully remote|100% remote|remote[- ]first|remote[- ]friendly|work from anywhere|remote (or|/) hybrid|"
+                         r"hybrid (or|/) remote|open to remote|can be (done|performed|worked) remotely)\b")
 WORLDWIDE = re.compile(r"(?i)\b(anywhere|worldwide|global|any location|work from anywhere|fully distributed)\b")
 # job-post sentences that limit a remote job to people already allowed to work in one country
 RESTRICT = {
@@ -128,7 +137,7 @@ def place_ok(loc, title, prefs):
     mentions = {c for c, p in COUNTRY.items() if p.search(text)}
     bad = mentions - set(allowed)
     good = mentions & set(allowed)
-    remote = bool(REMOTE.search(text))
+    remote = bool(REMOTE.search(text)) and not NOT_REMOTE_TAG.search(loc or "")
     homes = [h for h in prefs.get("home_cities", []) if h]
     if prefs.get("onsite_ok") and homes and re.search("|".join(re.escape(h) for h in homes), text, re.I):
         return True, "home"
@@ -266,6 +275,11 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
             except Exception:
                 text = ""
             storage.save_jd(con, job["id"], text or "")
+        if text and place_ok(job.get("location") or "", job["title"], prefs)[1] == "remote" \
+                and IN_OFFICE.search(text) and not FULL_REMOTE.search(text):
+            item[0] = 0                       # listed as remote, but the post says hybrid / in office: drop it
+            why.append("job post says hybrid / in office, not remote")
+            continue
         if text:
             allowed = set(norm_countries(prefs.get("countries")) or ["US"])
             blocked = [c for c, pat in RESTRICT.items() if c not in allowed and pat.search(text)]

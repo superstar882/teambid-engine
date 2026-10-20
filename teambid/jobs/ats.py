@@ -58,6 +58,10 @@ def iso(ts):
         return m[1] if m else None
 
 
+# job systems that say Hybrid / On-site outright: the tag makes the matcher treat the job as not remote
+WORKPLACE_TAG = {"Hybrid": "[Hybrid]", "OnSite": "[On-site]", "hybrid": "[Hybrid]", "onsite": "[On-site]", "on-site": "[On-site]"}
+
+
 def fetch(slug, ats, queries=("software engineer", "data engineer", "machine learning", "developer")):
     """All open jobs on one company board -> list of dicts (title, location, url, posted, company, ats)."""
     s, jobs = slug, []
@@ -68,20 +72,25 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
                          "url": j.get("absolute_url"), "posted": iso(j.get("first_published") or j.get("updated_at"))})
     elif ats == "ashby":
         for j in (get(f"https://api.ashbyhq.com/posting-api/job-board/{s}") or {}).get("jobs", []):
+            # Ashby sets isRemote=true on Hybrid jobs too; workplaceType is the real answer when present
+            wt = j.get("workplaceType")
+            remote = wt == "Remote" if wt else bool(j.get("isRemote"))
             loc = " / ".join(filter(None, [j.get("location", ""), *[x.get("location", "") for x in j.get("secondaryLocations") or []],
-                                           "Remote" if j.get("isRemote") or j.get("workplaceType") == "Remote" else ""]))
+                                           "Remote" if remote else "", WORKPLACE_TAG.get(wt or "", "")]))
             jobs.append({"title": j.get("title", ""), "location": loc, "url": j.get("jobUrl"), "posted": iso(j.get("publishedAt"))})
     elif ats == "lever":
         for j in get(f"https://api.lever.co/v0/postings/{s}?mode=json") or []:
             c = j.get("categories") or {}
+            wt = (j.get("workplaceType") or "").lower()
             loc = " / ".join(filter(None, [c.get("location", ""), *(c.get("allLocations") or []),
-                                           "Remote" if j.get("workplaceType") == "remote" else ""]))
+                                           "Remote" if wt == "remote" else "", WORKPLACE_TAG.get(wt, "")]))
             jobs.append({"title": j.get("text", ""), "location": loc, "url": j.get("hostedUrl"), "posted": iso(j.get("createdAt"))})
     elif ats == "smartrecruiters":
         for j in (get(f"https://api.smartrecruiters.com/v1/companies/{s}/postings", params={"limit": 100}) or {}).get("content", []):
             loc = j.get("location") or {}
             where = ", ".join(filter(None, [loc.get("city"), loc.get("region"), (loc.get("country") or "").upper()]))
-            jobs.append({"title": j.get("name", ""), "location": ("Remote " if loc.get("remote") else "") + where,
+            tag = " [Hybrid]" if loc.get("hybrid") else ""
+            jobs.append({"title": j.get("name", ""), "location": ("Remote " if loc.get("remote") and not tag else "") + where + tag,
                          "url": f"https://jobs.smartrecruiters.com/{s}/{j.get('id')}", "posted": iso(j.get("releasedDate"))})
     elif ats == "workable":
         for j in (get(f"https://apply.workable.com/api/v1/widget/accounts/{s}") or {}).get("jobs", []):

@@ -88,7 +88,7 @@ def build_data(include_skipped=True):
             rows = [dict(r) for r in con.execute(
                 "SELECT m.job_id, m.score, m.tier, m.status, m.reasons, m.first_matched, j.company, j.title, j.location, j.url, "
                 "j.url_key, j.posted, j.source, a.status AS app_status, a.notes AS app_notes FROM matches m JOIN jobs j ON j.id=m.job_id "
-                "LEFT JOIN applications a ON a.member_id=m.member_id AND a.job_id=m.job_id WHERE m.member_id=? AND j.last_seen=?"
+                "LEFT JOIN applications a ON a.member_id=m.member_id AND a.job_id=m.job_id WHERE m.member_id=? AND j.last_seen=? AND m.last_matched>=j.last_seen"
                 + ("" if include_skipped else " AND m.status != 'skipped'") + " ORDER BY m.score DESC", (m["id"], last_scan))]
             for r in rows:
                 r["reasons"] = json.loads(r["reasons"] or "[]")
