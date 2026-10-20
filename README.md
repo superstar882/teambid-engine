@@ -79,8 +79,8 @@ public repo `teambid`. The page lives in a random-words folder: `https://<you>.g
 repo root only says "Nothing here". The page asks for the password and decrypts in the browser. The repo only ever holds
 the encrypted file; search engines are told not to index it. Commits use the name/email in `workspace/.publish.json`.
 
-- **Automatic:** `python tb.py schedule` registers a hidden hourly task that scans once a day after 17:00 Japan time
-  (3 h after Quick Bid's scan) and then publishes. Every finished `tb.py scan` also publishes.
+- **Automatic:** the cloud scan (below) publishes every day. Without the cloud, `python tb.py schedule` registers a
+  hidden hourly task that scans once a day after 17:00 Japan time and then publishes. Every finished `tb.py scan` also publishes.
 - Change the password: `python tb.py site-password`, then `python tb.py publish`.
 - The password (`workspace/.site-password`) and publish settings (`workspace/.publish.json`) stay on this PC only
   (and in the engine repo's encrypted Actions secrets, for the cloud scan).
@@ -89,7 +89,7 @@ the encrypted file; search engines are told not to index it. Commits use the nam
 
 ## Daily scan in the cloud (GitHub Actions, PC can be off)
 
-`.github/workflows/scan.yml` runs every day at 08:00 UTC (17:00 Japan time): it downloads the encrypted workspace,
+`.github/workflows/scan.yml` runs every day at 05:00 UTC (14:00 Japan time): it downloads the encrypted workspace,
 scans, re-matches the team, publishes the site and uploads the workspace again. Free in a public repo.
 
 - The workspace (database, member folders, reports) is one encrypted file (`workspace.enc`, AES-256-GCM with the team
