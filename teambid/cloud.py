@@ -156,6 +156,35 @@ def remote_version(rp=None):
     return (r.stdout.strip().splitlines() or [None])[0]
 
 
+def download(rp, tries=6, log=print):
+    """The encrypted asset, resuming after dropped connections (slow VPNs cut long downloads)."""
+    import requests
+    url = _gh("api", f"repos/{rp}/releases", "--jq",
+              f'.[] | select(.tag_name=="{TAG}") | .assets[] | select(.name=="{ASSET}") | .url').stdout.strip().splitlines()[0]
+    tok = _gh("auth", "token", check=False).stdout.strip() or os.environ.get("GH_TOKEN", "")
+    head = {"Accept": "application/octet-stream", **({"Authorization": f"Bearer {tok}"} if tok else {})}
+    buf, size = bytearray(), None
+    for i in range(tries):
+        try:
+            with requests.get(url, headers={**head, **({"Range": f"bytes={len(buf)}-"} if buf else {})},
+                              stream=True, timeout=(15, 60)) as r:
+                if r.status_code not in (200, 206):
+                    raise RuntimeError(f"HTTP {r.status_code}")
+                if r.status_code == 200:
+                    buf.clear()
+                    size = int(r.headers.get("Content-Length") or 0) or None
+                elif size is None and "/" in r.headers.get("Content-Range", ""):
+                    size = int(r.headers["Content-Range"].rsplit("/", 1)[1])
+                for chunk in r.iter_content(1 << 20):
+                    buf.extend(chunk)
+            if size is None or len(buf) >= size:
+                return bytes(buf)
+        except (requests.RequestException, RuntimeError) as e:
+            log(f"download interrupted at {len(buf) / 1e6:.1f} MB ({type(e).__name__}), retrying")
+            time.sleep(3 * (i + 1))
+    raise RuntimeError(f"download kept failing after {tries} tries ({len(buf) / 1e6:.1f} MB received)")
+
+
 def busy(rp=None, _cache={}):
     """True while the cloud scan workflow is running (cached for a minute)."""
     rp = rp or repo()
@@ -183,9 +212,7 @@ def pull(password=None, force=False, log=print):
         raise RuntimeError(f"no cloud workspace in {rp} yet (run 'python tb.py cloud push' once)")
     if not force and ver == state().get("version"):
         return {"pulled": False, "version": ver}
-    with tempfile.TemporaryDirectory() as td:
-        _gh("release", "download", TAG, "-R", rp, "-p", ASSET, "-D", td, "--clobber")
-        blob = (Path(td) / ASSET).read_bytes()
+    blob = download(rp)
     unpack(decrypt_bytes(blob, password or _password()))
     if not in_runner():
         _save_state(version=ver, pending=False, pulled_at=config.now().isoformat(timespec="seconds"))
