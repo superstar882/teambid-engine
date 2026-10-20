@@ -148,9 +148,12 @@ def unpack(raw, workspace=None, keep_backups=3):
 def remote_version(rp=None):
     rp = rp or repo()
     # the releases list (not /tags/) also shows a draft release, which is what an empty repo gets
+    # a network failure must not look like "no cloud copy": push would then skip its newer-data check and overwrite it
     r = _gh("api", f"repos/{rp}/releases", "--jq",
             f'.[] | select(.tag_name=="{TAG}") | .assets[] | select(.name=="{ASSET}") | "\\(.id)-\\(.updated_at)"', check=False)
-    return (r.stdout.strip().splitlines() or [None])[0] if r.returncode == 0 else None
+    if r.returncode != 0:
+        raise RuntimeError(f"couldn't reach GitHub to check the cloud copy (network/VPN?): {(r.stderr or r.stdout).strip()[:200]}")
+    return (r.stdout.strip().splitlines() or [None])[0]
 
 
 def busy(rp=None, _cache={}):
