@@ -26,16 +26,19 @@ SECTIONS = {
     "experience": ["experience", "work experience", "professional experience", "employment", "employment history", "work history",
                    "relevant experience", "industry experience", "career history", "experience and projects"],
     "projects": ["projects", "personal projects", "selected projects", "side projects", "academic projects", "key projects", "portfolio"],
-    "education": ["education", "academic background", "education and training", "academics"],
+    "education": ["education", "academic background", "qualifications", "education and certifications", "education and training", "academics"],
     "skills": ["skills", "technical skills", "core skills", "key skills", "skills and tools", "technologies", "tech stack",
                "tools", "competencies", "core competencies", "skills & tools", "technical proficiencies"],
-    "certifications": ["certifications", "certificates", "licenses and certifications", "licenses & certifications", "courses",
+    "certifications": ["certifications", "certification", "certificates", "certificate", "certifications and training", "licenses and certifications", "licenses & certifications", "courses",
                        "online courses", "training", "certifications and courses"],
     "awards": ["awards", "honors", "honors and awards", "achievements", "awards and honors", "accomplishments"],
     "languages": ["languages", "spoken languages"],
     "publications": ["publications", "papers", "research"],
-    "volunteer": ["volunteer", "volunteering", "volunteer experience", "leadership", "activities", "leadership and activities", "extracurricular"],
+    "volunteer": ["volunteer", "volunteering", "beyond work", "outside work", "community", "community involvement", "volunteer experience", "leadership", "activities", "leadership and activities", "extracurricular"],
     "interests": ["interests", "hobbies"],
+    # short one-line notes about old jobs: kept as a list, never merged into the last job's bullets
+    "earlier": ["earlier roles", "earlier experience", "earlier career", "previous roles", "prior roles", "prior experience",
+                "other experience", "additional experience", "earlier positions", "other roles"],
 }
 HEADER_LOOKUP = {a: k for k, al in SECTIONS.items() for a in al}
 
@@ -89,18 +92,22 @@ def extract_text(path):
         import fitz
         doc = fitz.open(p)
         meta["pages"] = len(doc)
-        parts = []
-        for page in doc:
-            blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
-            w = page.rect.width
-            right = [b for b in blocks if b[0] > w * 0.45 and len(b[4]) > 40]
-            left = [b for b in blocks if b[2] < w * 0.55 and len(b[4]) > 40]
-            if len(right) >= 3 and len(left) >= 3:
-                meta["columns"] = True
+        head, mains, sides = [], [], []
+        for i, page in enumerate(doc):
             if page.get_images():
                 meta["images"] = True
-            parts.append(page.get_text("text", sort=True))
-        return "\n".join(parts), meta
+            cols = _columns(page)
+            if cols:
+                meta["columns"] = True
+                h, main, side = cols
+                head += h if i == 0 else []
+                mains += main if i == 0 else h + main
+                sides += side
+            else:
+                mains.append(page.get_text("text", sort=True))
+        # two-column designs: header, then the main column of every page, then the sidebar (skills, education, ...),
+        # so sidebar lines never land inside job bullets
+        return _tidy("\n".join(head + mains + sides)), meta
     if ext == ".docx":
         import docx
         d = docx.Document(p)
@@ -125,6 +132,56 @@ def extract_text(path):
                     lines.insert(0, para.text)
         return "\n".join(lines), meta
     return p.read_text(encoding="utf-8", errors="replace"), meta
+
+
+def _columns(page):
+    """Split a two-column page -> (header blocks, main column, sidebar) as text lists, or None for one column.
+    The gutter is the x position that the most text sits on both sides of without crossing; blocks crossing it near
+    the top are the header (name, contact line, stats bar)."""
+    w, h = page.rect.width, page.rect.height
+    blocks = [b for b in page.get_text("blocks") if b[6] == 0 and b[4].strip()]
+    if len(blocks) < 6:
+        return None
+    best = None
+    for x in range(int(w * 0.25), int(w * 0.66), 3):
+        left = sum(len(b[4]) for b in blocks if b[2] <= x)
+        right = sum(len(b[4]) for b in blocks if b[0] >= x)
+        cross = [b for b in blocks if b[0] < x < b[2]]
+        if any(b[1] > h * 0.35 for b in cross) or min(left, right) < 300:
+            continue                                    # text below the header runs across: not a gutter
+        if not best or min(left, right) > best[0]:
+            best = (min(left, right), x, cross)
+    if not best:
+        return None
+    _, x, cross = best
+    top = max((b[3] for b in cross), default=0) + 2
+    head = sorted([b for b in blocks if b[1] < top], key=lambda b: (round(b[1]), b[0]))
+    rest = [b for b in blocks if b[1] >= top]
+    left = sorted([b for b in rest if b[2] <= x], key=lambda b: (b[1], b[0]))
+    right = sorted([b for b in rest if b[0] >= x], key=lambda b: (b[1], b[0]))
+    size = lambda bs: sum(len(b[4]) for b in bs)
+    main, side = (right, left) if size(right) >= size(left) else (left, right)
+    txt = lambda bs: [b[4].rstrip() for b in bs]
+    return txt(head), txt(main), txt(side)
+
+
+SPACED = re.compile(r"(?:[A-Z&/]\s)+[A-Z&/]")
+
+
+def _tidy(text):
+    """Design-template fixes: 'E D U C A T I O N' -> 'EDUCATION', icon-font bullets/separators (shown as the
+    replacement character or private-use glyphs) -> '•' at line start, ' | ' inside a line."""
+    out = []
+    for line in text.split("\n"):
+        st = line.strip()
+        parts = re.split(r"\s{2,}", st)
+        spaced = [len(x) >= 3 and all(len(t) == 1 for t in x.split(" ")) for x in parts]
+        if any(spaced) and sum(len(x) for x, sp in zip(parts, spaced) if sp) >= len(st) / 2:
+            line = " ".join(x.replace(" ", "") if sp else x for x, sp in zip(parts, spaced))
+        line = re.sub(r"^\s*[\ufffd\ue000-\uf8ff]\s*", "• ", line)
+        line = re.sub(r"\s*[\ufffd\ue000-\uf8ff]\s*", " | ", line)
+        out.append(line)
+    return "\n".join(out)
 
 
 # ---------------------------------------------------------------- helpers
@@ -303,7 +360,8 @@ def parse(text, meta=None):
     }
 
     # 8) certifications, awards, languages
-    profile["certifications"] = [l.lstrip("•-* ").strip() for l in sections.get("certifications", []) if len(l) > 3][:20]
+    profile["earlier_roles"] = _join_wrapped(sections.get("earlier", []))[:10]
+    profile["certifications"] = _pair_issuers([l.lstrip("•-* ").strip() for l in sections.get("certifications", []) if len(l) > 3])[:20]
     profile["awards"] = [l.lstrip("•-* ").strip() for l in sections.get("awards", []) if len(l) > 3][:20]
     langs = " ".join(sections.get("languages", []))
     profile["languages"] = [x.strip() for x in re.split(r"[,|;•]", langs) if x.strip()][:10]
@@ -312,6 +370,35 @@ def parse(text, meta=None):
     profile["metrics"] = sorted(set(metrics(bullet_text + "\n" + profile["summary"])))
     derive(profile)
     return profile
+
+
+ISSUER = re.compile(r"(?i)\b(university|college|institute|school|academy|google|microsoft|amazon|aws|coursera|udemy|edx|"
+                    r"linkedin learning|infosec|comptia|linux foundation|oracle|cisco|ibm|scrum alliance|pmi|meta|"
+                    r"deeplearning\.ai|stanford|harvard|mit|inc\.?|ltd\.?|llc|gmbh)\b")
+
+
+def _join_wrapped(lines):
+    """Bulleted notes whose text wraps onto following lines -> one string per note."""
+    out = []
+    for l in lines:
+        t = l.strip()
+        if not t:
+            continue
+        if BULLET.match(t) or not out:
+            out.append(BULLET.sub("", t).strip())
+        else:
+            out[-1] += " " + t
+    return out
+
+
+def _pair_issuers(items):
+    """Sidebar certificates often put the issuer on its own line ('Certified ScrumMaster' / 'Scrum Alliance').
+    When most second lines look like issuers, join them: 'Certified ScrumMaster (Scrum Alliance)'."""
+    if len(items) >= 4 and len(items) % 2 == 0:
+        seconds = items[1::2]
+        if sum(bool(ISSUER.search(x)) for x in seconds) >= len(seconds) / 2 and not any(ISSUER.search(x) and len(x) > 60 for x in seconds):
+            return [f"{a} ({b})" for a, b in zip(items[::2], items[1::2])]
+    return items
 
 
 def parse_entries(lines):
@@ -492,7 +579,7 @@ def parse_education(lines):
                 dm = DEGREE.search(degree)
                 cur["degree"] = dm.group(0).strip()
                 rest = degree[dm.end():]
-                f = re.search(r"(?:\b(?:in|of)\s+|^[^,]*?,\s*|^\s+)([A-Z][A-Za-z &/]+?)\s*(?:,|\(|$|\d)", rest)
+                f = re.search(r"(?:\b(?:in|of)\s+|^[^,]*?,\s*|^\.?\s+)([A-Z][A-Za-z &/]+?)\s*(?:,|\(|$|\d)", rest)
                 if f and not re.fullmatch(r"(?i)degree|program|programme", f.group(1).strip()):
                     cur["field"] = f.group(1).strip()
         if cur is None:

@@ -5,6 +5,7 @@
   python tb.py members                              list members with level, lanes, audit score, new matches
   python tb.py audit <member>                       resume audit with the fix list
   python tb.py vault <member>                       rebuild the member's vault
+  python tb.py reparse <member|all>                 read the resume file again (after reader fixes), keep preferences
   python tb.py scan [--days 2] [--per-ats N] [--only greenhouse,ashby]   shared scan of all boards + match everyone
   python tb.py scan-if-due                          for the scheduler: scan once a day after TEAMBID_SCAN_HOUR
   python tb.py stop                                 stop the running scan (progress is kept; the next scan today resumes)
@@ -91,6 +92,7 @@ def main(argv=None):
     sub.add_parser("members")
     s = sub.add_parser("audit"); s.add_argument("member")
     s = sub.add_parser("vault"); s.add_argument("member")
+    s = sub.add_parser("reparse"); s.add_argument("member")
     s = sub.add_parser("scan"); s.add_argument("--days", type=int, default=2); s.add_argument("--limit", type=int); s.add_argument("--only")
     s.add_argument("--per-ats", type=int, help="test scan: first N boards of each job system")
     sub.add_parser("scan-if-due")
@@ -129,7 +131,7 @@ def main(argv=None):
 
 
 READS = {"members", "audit", "matches", "export"}
-CHANGES = {"add", "vault", "match", "apply", "status", "import-qb", "sync", "publish", "scan"}
+CHANGES = {"add", "vault", "reparse", "match", "apply", "status", "import-qb", "sync", "publish", "scan"}
 
 
 def _run(a, ap):
@@ -152,6 +154,11 @@ def _run(a, ap):
         with storage.connect() as con:
             m = storage.member(con, a.member)
         print(analyze.to_markdown(m["name"], analyze.audit(m["profile"], m["prefs"].get("region", "US"))))
+    elif a.cmd == "reparse":
+        with storage.connect() as con:
+            slugs = [m["slug"] for m in storage.members(con)] if a.member == "all" else [a.member]
+        for sl in slugs:
+            print(service.reparse(sl))
     elif a.cmd == "vault":
         with storage.connect() as con:
             print(vault.build(con, storage.member(con, a.member))["folder"])

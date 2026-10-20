@@ -289,3 +289,27 @@ def import_quickbid(member_key, db_path):
                 storage.set_application_status(con, app, status)
             added += 1
     return {"member": m["slug"], "added": added, "updated": updated, "seen": len(rows)}
+
+
+def reparse(slug):
+    """Read the member's resume file again (after reader fixes). Keeps their preferences; rebuilds the profile,
+    resume audit, vault and matches."""
+    with storage.connect() as con:
+        m = storage.member(con, slug)
+    if not m:
+        raise KeyError(slug)
+    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder
+    files = sorted(f for f in (config.member_dir(slug) / "resume").iterdir() if f.suffix.lower() in (".pdf", ".docx", ".txt", ".md"))
+    if not files:
+        raise ValueError(f"no resume file for {slug}")
+    profile = resume_parse.parse_file(files[0])
+    if not profile.get("name"):
+        profile["name"] = m["name"]
+    with storage.connect() as con:
+        storage.save_member(con, m["name"], profile, m["prefs"], str(files[0]), m["email"], slug)
+        m = storage.member(con, slug)
+        matched = matcher.match_member(con, m, log=lambda *_: None)
+        v = vault.build(con, m)
+    return {"slug": slug, "roles": len(profile["roles"]), "bullets": sum(len(r["bullets"]) for r in profile["roles"]),
+            "education": len(profile.get("education", [])), "certifications": len(profile.get("certifications", [])),
+            "audit": v["audit"]["score"], "matches": matched["matches"] if matched else 0}

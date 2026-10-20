@@ -1,0 +1,75 @@
+# One-off maintenance on the cloud workspace (Actions tab > Maintenance > Run workflow), e.g. after a resume-reader fix:
+# re-read every member's resume (preferences kept), rebuild vaults and matches, republish the site.
+name: Maintenance
+
+on:
+  workflow_dispatch:
+    inputs:
+      task:
+        description: "What to run"
+        type: choice
+        options: [reparse-all, rematch-all, publish]
+        default: reparse-all
+
+permissions:
+  contents: write
+
+concurrency:
+  group: teambid-scan            # never at the same time as the daily scan (both change the workspace)
+  cancel-in-progress: false
+
+jobs:
+  maintain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TEAMBID_CLOUD: "1"
+      GH_TOKEN: ${{ github.token }}
+      TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Settings
+        env:
+          PUBLISH_JSON: ${{ secrets.TEAMBID_PUBLISH_JSON }}
+        run: |
+          mkdir -p workspace
+          printf '%s' "$PUBLISH_JSON" > workspace/.publish.json
+
+      - name: Results site repo
+        env:
+          KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/site_key && chmod 600 ~/.ssh/site_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+          GIT_SSH_COMMAND="ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" \
+            git clone -q --depth 1 "git@github.com:${{ github.repository_owner }}/teambid.git" site
+
+      - name: Pull workspace
+        id: pull
+        run: python tb.py cloud pull --force
+
+      - name: Run task
+        run: |
+          case "${{ inputs.task }}" in
+            reparse-all) python tb.py reparse all ;;
+            rematch-all) for m in $(python tb.py members | awk '{print $1}'); do python tb.py match "$m"; done ;;
+            publish) true ;;
+          esac
+
+      - name: Publish site
+        run: python tb.py publish
+
+      - name: Push workspace
+        if: always() && steps.pull.outcome == 'success'
+        run: python tb.py cloud push

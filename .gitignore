@@ -8,3 +8,4 @@ run_scan_hidden.vbs
 __pycache__/
 *.pyc
 .env
+.tmp*/

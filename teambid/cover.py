@@ -67,13 +67,18 @@ def draft_letter(profile, jd, fit_res):
         p1 += f" Your post asks for {', '.join(have[:-1]) + ' and ' + have[-1] if len(have) > 1 else have[0]}, which is the work I do."
     paras = [f"Hi {company} team,", p1]
     for r, b in picks:
-        lead = f"At {r['company']}" if r.get("company") else "In a recent role"
+        solo = re.fullmatch(r"(?i)(independent|self[- ]employed|freelance|freelancer|consultant|contractor|contract)", r.get("company") or "")
+        lead = "Working independently," if solo else (f"At {r['company']}" if r.get("company") else "In a recent role")
         paras.append(f"{lead} I work{'ed' if r.get('end') != 'Present' else ''} as {_a(r['title'] or 'engineer')} {r['title'] or 'engineer'}. {_first_person(b['text'])}")
     proj = next((p for p in profile.get("projects", []) if set(p.get("stack", [])) & set(jd["required"])), None)
     if proj and proj["bullets"]:
         paras.append(f"On my own time I built {proj['name']}. {_first_person(proj['bullets'][0]['text'])}")
     topic = picks[0][0]["company"] if picks else "my recent work"
-    paras.append(f"Happy to walk you through the work at {topic} anytime." if picks else "Happy to talk anytime.")
+    if re.fullmatch(r"(?i)(independent|self[- ]employed|freelance|freelancer|consultant|contractor|contract)", topic):
+        topic = "my recent client projects"
+    else:
+        topic = f"the work at {topic}"
+    paras.append(f"Happy to walk you through {topic} anytime." if picks else "Happy to talk anytime.")
     paras.append(profile.get("name", ""))
     text = "\n\n".join(p for p in paras if p)
     return text, writing.check(text)
