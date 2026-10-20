@@ -14,7 +14,6 @@ Settings: workspace/.cloud.json {"repo": "owner/name"}; TEAMBID_CLOUD=1 marks th
 import io
 import json
 import os
-import shutil
 import sqlite3
 import subprocess
 import tarfile
@@ -30,7 +29,7 @@ TAG, ASSET, MAGIC = "workspace", "workspace.enc", b"TBW1"
 ITERATIONS = 600_000
 WORKFLOW = "scan.yml"
 # never packed: secrets, machine-local settings, logs, the scan lock/checkpoint, feed downloads, backups
-SKIP_NAMES = {".site-password", ".publish.json", ".cloud.json", "scan-running.txt", "scan.log"}
+SKIP_NAMES = {".site-password", ".publish.json", ".cloud.json", ".anthropic-key", "scan-running.txt", "scan.log"}
 SKIP_DIRS = {"backups"}
 
 
@@ -92,7 +91,7 @@ def decrypt_bytes(blob, password):
 def _skip(rel):
     parts = rel.parts
     name = parts[-1]
-    return (parts[0] in SKIP_DIRS or name in SKIP_NAMES or name.startswith("teambid.db")
+    return (parts[0] in SKIP_DIRS or parts[0].startswith(".incoming-") or name in SKIP_NAMES or name.startswith("teambid.db")
             or (parts[0] == "cache" and (name.startswith("scan-") or name.endswith(".json"))))
 
 
@@ -119,7 +118,8 @@ def pack(workspace=None):
 def unpack(raw, workspace=None, keep_backups=3):
     ws = Path(workspace or config.WORKSPACE)
     ws.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as td:
+    # unpack next to the workspace: os.replace can't move files between drives (temp on C:, workspace on F:)
+    with tempfile.TemporaryDirectory(dir=ws, prefix=".incoming-") as td:
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
             tar.extractall(td, filter="data")                    # "data" filter: no absolute paths, no "..", no links out
         new_db = Path(td) / "teambid.db"
@@ -128,12 +128,15 @@ def unpack(raw, workspace=None, keep_backups=3):
             if db.exists():
                 bk = ws / "backups"
                 bk.mkdir(exist_ok=True)
-                shutil.copy2(db, bk / f"teambid-{time.strftime('%Y%m%d-%H%M%S')}.db")
+                # SQLite's backup API also copies changes still in the -wal file, which a plain file copy would miss
+                src, dst = sqlite3.connect(db, timeout=60), sqlite3.connect(bk / f"teambid-{time.strftime('%Y%m%d-%H%M%S')}.db")
+                src.backup(dst)
+                src.close(), dst.close()
                 for old in sorted(bk.glob("teambid-*.db"))[:-keep_backups]:
                     old.unlink()
-            for side in ("-wal", "-shm"):
-                (ws / f"teambid.db{side}").unlink(missing_ok=True)
             os.replace(new_db, db)
+            for side in ("-wal", "-shm"):                         # the old journal belongs to the replaced file
+                (ws / f"teambid.db{side}").unlink(missing_ok=True)
         for f in Path(td).rglob("*"):
             if f.is_file():
                 dest = ws / f.relative_to(td)

@@ -130,11 +130,17 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     jd = tailor.analyze_jd(jd_text, title, company)
     fit = tailor.fit(p, jd)
     spec = tailor.build_resume(p, jd)
+    resume_note = ""
+    if llm.available():               # with a Claude key: reword the chosen bullets toward the post (facts kept)
+        spec, resume_note = llm.rewrite_resume(spec, p, jd_text)
     problems = tailor.validate(spec, p)
     kw = tailor.keyword_report(spec, jd)
     letter, letter_check = cover.draft_letter(p, jd, fit)
     polish_note = ""
-    if polish:
+    if llm.available():               # with a Claude key: Claude writes the letter; the fact-only draft is the fallback
+        letter, polish_note = llm.write_letter(p, jd_text, company, title, letter)
+        letter_check = writing.check(letter)
+    elif polish:
         letter, polish_note = llm.polish_letter(letter, p, jd_text, company, prefer=polish if isinstance(polish, str) else "auto")
         letter_check = writing.check(letter)
     answers = cover.answers(p, m["prefs"], jd)
@@ -170,7 +176,7 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
         app_id = storage.create_application(con, m["id"], company, title, url, job_id, str(folder), fit["coverage"])
     return {"application_id": app_id, "folder": str(folder), "jd": jd, "fit": fit, "ranking": spec.get("ranking"), "doc_region": reg, "spec": spec, "problems": problems, "keywords": kw,
             "letter": letter, "letter_check": letter_check, "answers": answers, "files": {**files, "letter_pdf": lfiles["pdf"], "letter_docx": lfiles["docx"]},
-            "polish": polish_note}
+            "polish": polish_note, "resume_ai": resume_note}
 
 
 def applications(slug):

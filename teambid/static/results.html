@@ -23,8 +23,13 @@ main { max-width:1200px; margin:0 auto; padding:16px; }
 .sub { margin:0 0 12px; }
 .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
-input, select, button.b { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:7px 9px; }
+input, select, textarea, button.b, button.b2 { font:inherit; color:inherit; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:7px 9px; }
 button.b { background:var(--acc); border-color:var(--acc); color:#fff; cursor:pointer; }
+button.b2 { cursor:pointer; padding:4px 9px; }
+button:disabled { opacity:.6; cursor:wait; }
+.doc { border-top:1px solid var(--line); padding:10px 0; }
+.doc:first-child { border-top:0; }
+.ready { background:var(--go2); color:var(--go); } .wait { background:var(--warn2); color:var(--warn); } .fail { background:var(--bad2); color:var(--bad); }
 table { border-collapse:collapse; width:100%; }
 th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
 th { font-size:12px; color:var(--muted); }
@@ -104,6 +109,15 @@ async function progressSave(slug, r, status, note) {
   if (!res.ok) throw new Error("Save failed (" + res.status + ")");
   PG.latest[item] = { ...entry, saved_at: entry.at };
 }
+async function pgPut(kind, key, entry) {
+  const item = await itemFor(kind, key);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, PG.aes, new TextEncoder().encode(JSON.stringify(entry))));
+  const res = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
+                          body: JSON.stringify({ team: PG.cfg.team, item, payload: btoa(String.fromCharCode(...iv, ...ct)) }) });
+  if (!res.ok) throw new Error("Save failed (" + res.status + ")");
+  PG.latest[item] = { ...entry, saved_at: entry.at };
+}
 async function current(slug, r) {          // newest saved progress, else what TeamBid exported
   if (PG && PG.ok) { const e = PG.latest[await itemFor(slug, r.url_key)]; if (e) return e; }
   return { status: r.progress || "", note: r.note || "" };
@@ -151,7 +165,7 @@ async function appsView(m, body) {
                                         note: a.notes || "", by: "", when: (a.updated || "").slice(0, 10) };
   if (PG && PG.ok) {
     for (const e of Object.values(PG.latest)) {
-      if (e.member !== m.slug) continue;
+      if (e.member !== m.slug || e.kind) continue;
       const r = byKey[e.job] || {}, old = rows[e.job];
       if (!e.status || e.status === "skipped") { if (old && old.live) delete rows[e.job]; continue; }
       rows[e.job] = { company: e.company || r.company || old?.company, title: e.title || r.title || old?.title, url: r.url || old?.url,
@@ -169,9 +183,109 @@ async function appsView(m, body) {
        <td>${esc(a.when || "")}${a.by ? `<div class="muted" style="font-size:11px">${esc(a.by)}</div>` : ""}</td></tr>`).join("")
       || '<tr><td colspan=6 class="muted">No applications yet. Set a job to Saved or Applied in the Matches tab and it shows up here.</td></tr>'}</table></div>`;
 }
+// ---- Documents: tailored resume + cover letter, built in the cloud, encrypted files decrypted here ----
+let DOC_PREFILL = null, DOC_TIMER = null;
+const DOC_FILES = [["resume_pdf", "Resume PDF"], ["resume_docx", "Resume DOCX"], ["letter_pdf", "Cover letter PDF"], ["letter_docx", "Cover letter DOCX"]];
+function docsFor(slug) {
+  const reqs = {}, done = {};
+  for (const e of Object.values(PG.latest)) {
+    if (e.member !== slug) continue;
+    if (e.kind === "docreq") reqs[e.rid] = e;
+    if (e.kind === "docdone") done[e.rid] = e;
+  }
+  return Object.values(reqs).map(r => ({ req: r, done: done[r.rid] })).sort((a, b) => (b.req.at || "").localeCompare(a.req.at || ""));
+}
+async function docDownload(rid, key, meta) {
+  const r = await fetch(`docs/${rid}/${key}.enc`, { cache: "no-store" });
+  if (!r.ok) throw new Error("The file isn't live yet. Try again in a minute.");
+  const raw = new Uint8Array(await r.arrayBuffer());
+  const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, PG.aes, raw.slice(12));
+  const url = URL.createObjectURL(new Blob([plain], { type: meta.type }));
+  const a = document.createElement("a"); a.href = url; a.download = meta.name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+async function copyText(t) {
+  try { await navigator.clipboard.writeText(t); return true; }
+  catch (_) {
+    const ta = document.createElement("textarea"); ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.select(); const ok = document.execCommand("copy"); ta.remove(); return ok;
+  }
+}
+function docCard(d) {
+  const r = d.req, x = d.done, when = (r.at || "").replace("T", " ").slice(0, 16);
+  const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
+    <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
+    <span class="muted" style="font-size:12px">asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}</span></div>`;
+  if (!x) return `<div class="doc">${head}<div class="muted">Usually ready in 15-20 minutes. This list refreshes by itself.</div></div>`;
+  if (x.error) return `<div class="doc">${head}<div class="bad">${esc(x.error)}</div></div>`;
+  return `<div class="doc">${head}
+    <div class="row" style="margin-top:6px">${DOC_FILES.filter(([k]) => x.files[k]).map(([k, l]) =>
+      `<button class="b2 dl" data-rid="${esc(x.rid)}" data-k="${k}">${l}</button>`).join("")}
+      <button class="b cp" data-rid="${esc(x.rid)}">Copy cover letter</button></div>
+    <div class="muted" style="margin-top:6px;font-size:12px">${esc(x.fit?.verdict || "")} · covers ${x.fit?.coverage ?? "?"}% of must-haves ·
+      resume keywords ${x.keywords ?? "?"}% · ${x.pages ?? "?"} page(s)${(x.notes || []).length ? " · " + esc(x.notes.join(" · ")) : ""}</div>
+    ${(x.checks || []).length ? `<div class="bad" style="font-size:12px">Check before sending: ${esc(x.checks.join("; "))}</div>` : ""}
+    <details style="margin-top:6px"><summary class="muted">Show cover letter</summary><pre style="white-space:pre-wrap;font:inherit">${esc(x.letter || "")}</pre></details></div>`;
+}
+async function docsView(m, body) {
+  if (!PG || !PG.ok) {
+    body.innerHTML = '<div class="card muted">Documents need team progress (Supabase), which is not available right now.</div>';
+    return;
+  }
+  const p = DOC_PREFILL || {}; DOC_PREFILL = null;
+  body.innerHTML = `<div class="card"><h2>Tailored resume + cover letter for ${esc(m.name)}</h2>
+    <div class="muted">Paste the job post (copying the whole page from the browser is fine), or give a link the tool can read.
+      It's built in the cloud from ${esc(m.name.split(" ")[0])}'s real resume, fact-checked, in about 15-20 minutes.</div>
+    <div class="row" style="margin-top:8px"><input id="d_url" placeholder="Job link" value="${esc(p.url || "")}" style="flex:2;min-width:220px">
+      <input id="d_co" placeholder="Company" value="${esc(p.company || "")}" style="flex:1;min-width:140px">
+      <input id="d_ti" placeholder="Job title" value="${esc(p.title || "")}" style="flex:1;min-width:160px"></div>
+    <textarea id="d_text" rows="7" placeholder="Paste the job description here (needed when the link is LinkedIn, Indeed or a login page)"
+      style="width:100%;margin-top:8px"></textarea>
+    <div class="row" style="margin-top:8px"><button class="b" id="d_go">Make resume + cover letter</button><span id="d_msg" class="muted"></span>
+      <span style="flex:1"></span><button class="b2" id="d_ref">Refresh</button></div></div>
+    <div class="card"><h2>Requests</h2><div id="d_list"></div></div>`;
+  const list = () => {
+    const items = docsFor(m.slug);
+    document.getElementById("d_list").innerHTML = items.map(docCard).join("") || '<div class="muted">Nothing yet.</div>';
+    const byRid = Object.fromEntries(items.filter(d => d.done).map(d => [d.done.rid, d.done]));
+    document.querySelectorAll(".dl").forEach(el => el.onclick = async () => {
+      el.disabled = true;
+      try { await docDownload(el.dataset.rid, el.dataset.k, byRid[el.dataset.rid].files[el.dataset.k]); } catch (e) { alert(e.message); }
+      el.disabled = false;
+    });
+    document.querySelectorAll(".cp").forEach(el => el.onclick = async () => {
+      const ok = await copyText(byRid[el.dataset.rid].letter || "");
+      el.textContent = ok ? "Copied" : "Copy failed"; setTimeout(() => el.textContent = "Copy cover letter", 1500);
+    });
+    clearInterval(DOC_TIMER);
+    if (items.some(d => !d.done)) DOC_TIMER = setInterval(async () => { await progressLoad(); if (sub === "Documents") list(); }, 60000);
+  };
+  list();
+  document.getElementById("d_ref").onclick = async e => { e.target.disabled = true; await progressLoad(); list(); e.target.disabled = false; };
+  document.getElementById("d_go").onclick = async e => {
+    const url = document.getElementById("d_url").value.trim(), company = document.getElementById("d_co").value.trim(),
+          title = document.getElementById("d_ti").value.trim(), text = document.getElementById("d_text").value.trim().slice(0, 40000),
+          msg = document.getElementById("d_msg");
+    if (!text && !url) { msg.textContent = "Paste the job text or a job link first."; return; }
+    e.target.disabled = true; msg.textContent = "Sending...";
+    try {
+      const rid = hex(crypto.getRandomValues(new Uint8Array(12)));
+      const parts = [];
+      for (let i = 0; i < text.length; i += 1500) parts.push(text.slice(i, i + 1500));   // one row holds 8,000 characters
+      for (let n = 0; n < parts.length; n++) await pgPut("docpart", `${rid}|${n}`, { kind: "docpart", rid, n, text: parts[n] });
+      await pgPut("docreq", rid, { kind: "docreq", rid, member: m.slug, url, company, title, parts: parts.length,
+                                   by: localStorage.getItem("tb_name") || "", at: new Date().toISOString() });
+      msg.textContent = "Sent. Ready in about 15-20 minutes.";
+      document.getElementById("d_text").value = "";
+      list();
+    } catch (err) { msg.textContent = err.message; }
+    e.target.disabled = false;
+  };
+}
 function draw() {
   const m = cur, v = document.getElementById("view");
-  const subs = ["Matches", "Overview", "Applications", "Experience"];
+  const subs = ["Matches", "Documents", "Applications", "Overview", "Experience"];
+  clearInterval(DOC_TIMER);
   v.innerHTML = `<div class="sub">${subs.map(s => `<button class="${s===sub?"on":""}" data-s="${s}">${s}</button>`).join("")}</div><div id="body"></div>`;
   v.querySelectorAll(".sub button").forEach(b => b.onclick = () => { sub = b.dataset.s; draw(); });
   const body = document.getElementById("body");
@@ -188,6 +302,8 @@ function draw() {
       <div class="card"><h2>Target titles</h2>${esc((m.target_titles||[]).join(", "))}</div>`;
   } else if (sub === "Applications") {
     appsView(m, body);
+  } else if (sub === "Documents") {
+    docsView(m, body);
   } else if (sub === "Experience") {
     const sk = m.skills || {};
     body.innerHTML = `<div class="card"><h2>Skills</h2><div><b>Proven:</b> ${esc((sk.proven||[]).join(", "))}</div><div class="muted"><b>Listed:</b> ${esc((sk.listed_only||[]).join(", "))}</div></div>` +
@@ -214,6 +330,7 @@ function draw() {
         <td>${esc(r.posted || "?")}</td>
         <td>${PG && PG.ok ? `<select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
              <input data-k="${esc(r.url_key)}" class="pnote" placeholder="note" value="${esc(e.note || "")}" style="width:120px">
+             <button class="b2 tl" data-k="${esc(r.url_key)}" title="Make a tailored resume + cover letter for this job">Tailor</button>
              ${e.by || e.saved_at ? `<div class="muted" style="font-size:11px">${esc(e.by || "")} ${esc((e.saved_at || e.at || "").slice(0, 10))}</div>` : ""}`
            : esc(STATUSES.find(([v]) => v === (e.status || ""))?.[1] || "-")}</td>
         <td class="muted m-hide">${esc((r.reasons||[]).join("; "))}</td></tr>`).join("") || '<tr><td colspan=7 class="muted">No matches.</td></tr>';
@@ -228,6 +345,7 @@ function draw() {
       };
       document.querySelectorAll(".pst").forEach(el => el.onchange = () => save(el));
       document.querySelectorAll(".pnote").forEach(el => el.onchange = () => save(el));
+      document.querySelectorAll(".tl").forEach(el => el.onclick = () => { DOC_PREFILL = byKey[el.dataset.k]; sub = "Documents"; draw(); });
     };
     ["q", "tier", "st"].forEach(id => document.getElementById(id).addEventListener(id === "q" ? "input" : "change", go));
     go();

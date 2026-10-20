@@ -167,3 +167,110 @@ def polish_letter(draft, profile, jd_text, company="", prefer="auto"):
     if novel:
         note += f". Verify the sentences with these words (not in your resume): {', '.join(novel[:12])}"
     return out, note
+
+
+# ---------------------------------------------------------------- Claude writes (used when an API key is set)
+def _facts(profile):
+    lines = [f"Name: {profile.get('name', '')}"]
+    for r in profile.get("roles", []):
+        lines.append(f"- {r['title']} at {r['company']} ({r.get('start', '')} to {r.get('end', '')}): " +
+                     " / ".join(b["text"] for b in r["bullets"]))
+    for p in profile.get("projects", []):
+        lines.append(f"- Project {p['name']}: " + " / ".join(b["text"] for b in p["bullets"]))
+    for e in profile.get("education", []):
+        lines.append(f"- Education: {e.get('degree', '')} {e.get('school', '')} {e.get('end', '')}".strip())
+    return "\n".join(lines)
+
+
+WRITE_RULES = (
+    "You write cover letters for real job applications. Use ONLY the facts given about the candidate: never add a number, "
+    "tool, title, company, result or claim that is not in the facts, and never move a result from one job to another. "
+    "Shape: 'Hi {company} team,' then 3-4 short paragraphs, 150-250 words, then the candidate's full name on its own line. "
+    "P1: the role and one specific thing about this company's product or problem, in the job post's own words (why them). "
+    "P2: one proof story from the facts that fits the post best: the hard part, a decision, how it turned out. "
+    "P3: one more relevant result with its number, tied to what the post cares about. "
+    "Close with one plain line (e.g. 'Happy to walk you through it.'). No 'thank you for considering', no 'excited to apply'. "
+    "Plain US English like a real engineer typing: contractions, mixed sentence lengths, nothing over 25 words. "
+    "No em dashes, semicolons, exclamation marks, bold or bullet lists. Never use these words: "
+    + ", ".join(sorted(writing.BANNED)) + ". Return only the letter.")
+
+
+def write_letter(profile, jd_text, company, title, draft):
+    """Claude writes the letter from the facts. -> (text, note). Falls back to the fact-only draft if the guard rejects it twice."""
+    if not available():
+        return draft, "no Claude API key"
+    user = (f"ROLE: {title} at {company}\n\nCANDIDATE FACTS (the only allowed facts):\n{_facts(profile)}\n\n"
+            f"JOB POST:\n{jd_text[:12000]}")
+    try:
+        out = _call(WRITE_RULES.replace("{company}", company), user, 2000).strip().strip("`").strip()
+        problems = guard(out, draft, profile, company, jd_text)
+        if problems:
+            out = _call(WRITE_RULES.replace("{company}", company), user + "\n\nYOUR LAST VERSION WAS REJECTED FOR: " +
+                        "; ".join(problems) + ". Fix exactly these problems.\n\nLAST VERSION:\n" + out, 2000).strip().strip("`").strip()
+            problems = guard(out, draft, profile, company, jd_text)
+    except Exception as e:
+        return draft, f"Claude error: {e}"
+    if problems:
+        return draft, f"Claude letter rejected twice ({'; '.join(problems)}); kept the fact-only draft"
+    novel = claims_to_check(out, draft, profile, jd_text)
+    note = "written by Claude, passed the fact and writing checks"
+    if novel:
+        note += f". Verify the sentences with these words (not in your resume): {', '.join(novel[:12])}"
+    return out, note
+
+
+RESUME_RULES = (
+    "You tailor resume wording to a job post. You get the summary and bullets already chosen from the candidate's real "
+    "resume. Reword them so the job post's own terms show up where the bullet truly supports them. Hard rules: keep every "
+    "number exactly as written, keep the same facts and scope, never add a tool, skill, company, result or claim, keep "
+    "each bullet about the same length (one line stays one line), start bullets with a strong past-tense verb, no em "
+    "dashes or semicolons. If a bullet can't be improved honestly, return it unchanged. Never use these words: "
+    + ", ".join(sorted(writing.BANNED)) + ". Return ONLY JSON: {\"summary\": \"...\", \"bullets\": {\"<id>\": \"...\"}}.")
+
+
+def _bullet_ok(new, old, have):
+    if not new or new == old:
+        return False
+    if _numbers(new) != _numbers(old):
+        return False
+    if [s for s in SK.find(new) if s not in have and s not in SK.find(old, trusted=True)]:
+        return False
+    if any(re.search(rf"\b{re.escape(w)}\b", new.lower()) for w in writing.BANNED) or re.search(r"[—;]", new):
+        return False
+    gained = [w for w in re.findall(r"[a-z]{5,}", new.lower()) if OUTCOME.match(w) and w not in old.lower()]
+    return not gained and 0.7 <= len(new) / max(1, len(old)) <= 1.3
+
+
+def rewrite_resume(spec, profile, jd_text):
+    """Claude rewords the chosen bullets + summary toward the job post. Each change must pass _bullet_ok; the rest stay
+    verbatim. Accepted rewordings are recorded in spec['rewritten'] (new -> original) for validate(). -> (spec, note)."""
+    if not available():
+        return spec, "no Claude API key"
+    ids = {f"r{i}b{j}": b for i, r in enumerate(spec["roles"]) for j, b in enumerate(r["bullets"])}
+    user = (f"JOB POST:\n{jd_text[:12000]}\n\nSUMMARY:\n{spec.get('summary', '')}\n\nBULLETS:\n" +
+            "\n".join(f"{k}: {v}" for k, v in ids.items()))
+    try:
+        out = _call(RESUME_RULES, user, 3000)
+        data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))
+    except Exception as e:
+        return spec, f"Claude resume step skipped: {e}"
+    have = set(profile.get("skills", {}).get("all", []))
+    spec = json.loads(json.dumps(spec))
+    spec.setdefault("rewritten", {})
+    took = 0
+    for i, r in enumerate(spec["roles"]):
+        for j, b in enumerate(r["bullets"]):
+            new = str(data.get("bullets", {}).get(f"r{i}b{j}", "")).strip()
+            if _bullet_ok(new, b, have):
+                r["bullets"][j] = new
+                spec["rewritten"][new] = b
+                took += 1
+    s_new, s_old = str(data.get("summary", "")).strip(), spec.get("summary", "")
+    raw = profile.get("raw_text", "") + " " + s_old
+    if (s_new and s_new != s_old and all(n in raw for n in _numbers(s_new))
+            and not [s for s in SK.find(s_new) if s not in have]
+            and not any(re.search(rf"\b{re.escape(w)}\b", s_new.lower()) for w in writing.BANNED)
+            and 0.6 <= len(s_new) / max(1, len(s_old)) <= 1.4):
+        spec["summary"] = s_new
+        took += 1
+    return spec, f"Claude reworded {took} of {len(ids) + 1} lines toward the job post (each kept its numbers and facts)"

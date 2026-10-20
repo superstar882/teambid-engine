@@ -29,7 +29,11 @@ class CloudBundleTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 cloud.decrypt_bytes(blob, "wrong")
 
-            (dst / "teambid.db").write_bytes(b"old")       # an older local copy gets backed up, not lost
+            old = sqlite3.connect(dst / "teambid.db")      # an older local copy gets backed up, not lost
+            old.execute("CREATE TABLE t (x TEXT)")
+            old.execute("INSERT INTO t VALUES ('old')")
+            old.commit()
+            old.close()
             cloud.unpack(cloud.decrypt_bytes(blob, "team pw"), dst)
             got = sqlite3.connect(dst / "teambid.db")
             self.assertEqual(got.execute("SELECT x FROM t").fetchone()[0], "hello")

@@ -1,0 +1,75 @@
+# Tailored resume + cover letter for requests made on the results page ("Tailor for me" / Documents tab).
+# Checks every 15 minutes; when nothing is waiting it stops after a few seconds. With the ANTHROPIC_API_KEY secret set,
+# Claude writes the letters and rewords the resumes (fact-checked); without it the free path runs with a local model.
+name: Tailor documents
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: teambid-docs
+  cancel-in-progress: false
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TEAMBID_CLOUD: "1"
+      GH_TOKEN: ${{ github.token }}
+      TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Settings
+        env:
+          PUBLISH_JSON: ${{ secrets.TEAMBID_PUBLISH_JSON }}
+        run: |
+          mkdir -p workspace
+          printf '%s' "$PUBLISH_JSON" > workspace/.publish.json
+
+      - name: Anything waiting?
+        id: q
+        run: python tb.py docs --check
+
+      - name: Local model (only without a Claude key)
+        if: steps.q.outputs.pending != '0' && env.ANTHROPIC_API_KEY == ''
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama
+          for i in $(seq 1 30); do curl -sf http://localhost:11434/api/version >/dev/null && break; sleep 2; done
+          curl -sf http://localhost:11434/api/pull -d '{"model":"nomic-embed-text"}' >/dev/null || true
+          curl -sf http://localhost:11434/api/pull -d '{"model":"qwen3:4b-instruct"}' >/dev/null || echo "local polish off for this run"
+
+      - name: Results site repo
+        if: steps.q.outputs.pending != '0'
+        env:
+          KEY: ${{ secrets.SITE_DEPLOY_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/site_key && chmod 600 ~/.ssh/site_key
+          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
+          echo "GIT_SSH_COMMAND=ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" >> "$GITHUB_ENV"
+          GIT_SSH_COMMAND="ssh -i $HOME/.ssh/site_key -o IdentitiesOnly=yes" \
+            git clone -q --depth 1 "git@github.com:${{ github.repository_owner }}/teambid.git" site
+
+      - name: Pull workspace (read only)
+        if: steps.q.outputs.pending != '0'
+        run: python tb.py cloud pull --force
+
+      - name: Build documents
+        if: steps.q.outputs.pending != '0'
+        run: python tb.py docs

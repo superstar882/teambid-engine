@@ -208,8 +208,17 @@ def publish(repo=None, password=None, include_skipped=True):
     if staged:
         _run(["git", "commit", "-q", "-m", f"Update results (scan {info['last_scan']})"], SITE)
     page_url = f"https://{owner}.github.io/{repo}/{cfg['page']}/"
-    if runner:
-        _run(["git", "push", "-q", "origin", "HEAD:main"], SITE)
+    if runner:                             # the documents workflow may have pushed meanwhile: rebase and retry
+        import time
+        for i in range(4):
+            try:
+                _run(["git", "push", "-q", "origin", "HEAD:main"], SITE)
+                break
+            except RuntimeError:
+                if i == 3:
+                    raise
+                time.sleep(5 * (i + 1))
+                _run(["git", "pull", "-q", "--rebase", "origin", "main"], SITE)
         return {**info, "repo": f"https://github.com/{owner}/{repo}", "url": page_url}
     exists = subprocess.run(["gh", "repo", "view", f"{owner}/{repo}"], cwd=SITE, capture_output=True).returncode == 0
     if not exists:

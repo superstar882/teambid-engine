@@ -201,7 +201,8 @@ def validate(spec, profile):
             problems.append(f"Summary uses AI-style word '{w}'")
     for r in spec["roles"]:
         for b in r["bullets"]:
-            if not any(b == x["text"] for pr in profile["roles"] for x in pr["bullets"]):
+            orig = spec.get("rewritten", {}).get(b, b)        # Claude rewordings map back to the resume's own bullet
+            if not any(orig == x["text"] for pr in profile["roles"] for x in pr["bullets"]):
                 problems.append(f"Bullet not from your resume: {b[:60]}")
     if re.search(r"(?i)\b(fine-?tun|trained (a|the|our) (model|llm))", spec["summary"]):
         problems.append("Summary claims model training/fine-tuning: only keep if your bullets prove it")

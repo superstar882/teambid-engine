@@ -5,7 +5,7 @@ Override with environment variables:
   TEAMBID_TZ          time zone for dates in files and reports (default America/Los_Angeles)
   TEAMBID_SCAN_TZ / TEAMBID_SCAN_HOUR   when the daily scan is due (default Asia/Tokyo 17:00)
   ANTHROPIC_API_KEY   optional: better resume parsing and writing through the Claude API
-  TEAMBID_MODEL       Claude model for the optional API features (default claude-sonnet-5)
+  TEAMBID_MODEL       Claude model for the optional API features (default claude-sonnet-5-5)
 """
 import datetime as dt
 import os
@@ -28,8 +28,9 @@ TZ = ZoneInfo(os.environ.get("TEAMBID_TZ", "America/Los_Angeles"))
 SCAN_TZ = ZoneInfo(os.environ.get("TEAMBID_SCAN_TZ", "Asia/Tokyo"))
 SCAN_HOUR = int(os.environ.get("TEAMBID_SCAN_HOUR", "17"))   # 3 h after Quick Bid's 14:00 scan, so they never overlap
 
-ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-MODEL = os.environ.get("TEAMBID_MODEL", "claude-sonnet-5")
+KEY_FILE = WORKSPACE / ".anthropic-key"      # set with "tb.py claude-key"; never uploaded
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "") or (KEY_FILE.read_text(encoding="utf-8").strip() if KEY_FILE.exists() else "")
+MODEL = os.environ.get("TEAMBID_MODEL", "claude-sonnet-5-5")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36"
 

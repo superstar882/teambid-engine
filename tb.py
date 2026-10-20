@@ -24,10 +24,13 @@
   python tb.py cloud setup <owner/repo>            keep the workspace (encrypted) in that repo; the scan then runs on GitHub
   python tb.py cloud pull|push [--force]           sync by hand (normally automatic: pull before, push after each change)
   python tb.py cloud status | scan                 show sync state / start the cloud scan now
+  python tb.py docs [--check]                      build documents requested on the results page (cloud workflow)
+  python tb.py claude-key [--remove]                save a Claude API key (here + GitHub secret): Claude then writes letters
   python tb.py test                                 run the test suite
 """
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -50,6 +53,34 @@ def _auto_publish():
     except Exception as e:
         print(f"publish failed (scan results are saved; run 'python tb.py publish' to retry): {e}", flush=True)
         return 0
+
+
+def _claude_key(remove=False):
+    """Save (or remove) the Claude API key on this PC and as the engine repo's ANTHROPIC_API_KEY secret.
+    The key is typed hidden and never printed."""
+    import getpass
+    import subprocess
+    from teambid import cloud
+    rp = cloud.repo()
+    if remove:
+        config.KEY_FILE.unlink(missing_ok=True)
+        if rp:
+            subprocess.run(["gh", "secret", "delete", "ANTHROPIC_API_KEY", "-R", rp], capture_output=True)
+        print("Claude key removed. Documents use the free path again.")
+        return
+    key = getpass.getpass("Paste your Claude API key (hidden), then Enter: ").strip()
+    if not key.startswith("sk-ant-"):
+        sys.exit("That doesn't look like a Claude API key (it starts with sk-ant-). Nothing saved.")
+    import requests
+    r = requests.get("https://api.anthropic.com/v1/models", headers={"x-api-key": key, "anthropic-version": "2023-06-01"}, timeout=30)
+    if r.status_code != 200:
+        sys.exit(f"The key didn't work (HTTP {r.status_code}). Nothing saved.")
+    config.ensure_dirs()
+    config.KEY_FILE.write_text(key, encoding="utf-8")
+    if rp:
+        s = subprocess.run(["gh", "secret", "set", "ANTHROPIC_API_KEY", "-R", rp], input=key, text=True, capture_output=True)
+        print("saved for the cloud too" if s.returncode == 0 else f"saved on this PC; GitHub secret failed: {s.stderr.strip()[:200]}")
+    print(f"Claude key works and is saved. From now on Claude ({config.MODEL}) writes the cover letters and rewords the resumes.")
 
 
 def main(argv=None):
@@ -79,6 +110,8 @@ def main(argv=None):
     s = sub.add_parser("publish"); s.add_argument("--repo", help="GitHub repo name (default: the one used before, else teambid)")
     s = sub.add_parser("cloud"); s.add_argument("action", choices=["setup", "pull", "push", "status", "scan"])
     s.add_argument("repo", nargs="?"); s.add_argument("--force", action="store_true")
+    s = sub.add_parser("docs"); s.add_argument("--check", action="store_true")
+    s = sub.add_parser("claude-key"); s.add_argument("--remove", action="store_true")
     sub.add_parser("test")
     a = ap.parse_args(argv)
     from teambid import cloud
@@ -213,6 +246,19 @@ def _run(a, ap):
             s = cloud.state()
             print(json.dumps({**s, "cloud_version": cloud.remote_version() if s.get("repo") else None,
                               "cloud_scan_running": cloud.busy() if s.get("repo") else None}, indent=1))
+    elif a.cmd == "docs":
+        from teambid import docs
+        if a.check:                            # the workflow skips the heavy steps when nothing is waiting
+            n = len(docs.pending())
+            print(f"pending={n}")
+            out = os.environ.get("GITHUB_OUTPUT")
+            if out:
+                with open(out, "a", encoding="utf-8") as f:
+                    print(f"pending={n}", file=f)
+        else:
+            print(docs.run())
+    elif a.cmd == "claude-key":
+        _claude_key(a.remove)
     elif a.cmd == "test":
         import unittest
         suite = unittest.defaultTestLoader.discover(str(config.PROJECT / "tests"))

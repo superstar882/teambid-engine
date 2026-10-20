@@ -102,6 +102,14 @@ def add(sb, password, member_slug, job_key, entry):
     r.raise_for_status()
 
 
+def put(sb, password, kind, key, entry):
+    """Append any record under item HMAC(kind|key), payload stored as given (document requests/results use this)."""
+    aes, mac = keys(password, sb)
+    body = {"team": sb["team"], "item": item_id(mac, kind, key), "payload": seal(aes, entry)}
+    r = requests.post(f"{sb['url']}/rest/v1/{TABLE}", headers={**_headers(sb), "Prefer": "return=minimal"}, json=body, timeout=30)
+    r.raise_for_status()
+
+
 def sync(password=None, log=print):
     """Pull progress from Supabase into TeamBid (statuses, applications, notes)."""
     from .export import get_password
@@ -114,6 +122,8 @@ def sync(password=None, log=print):
     with storage.connect() as con:
         slugs = {m["slug"]: m for m in storage.members(con)}
         for e in entries.values():
+            if e.get("kind"):                # document requests/results, not job progress
+                continue
             m = slugs.get(e.get("member"))
             if not m:
                 continue
