@@ -8,8 +8,8 @@ on:
       task:
         description: "What to run"
         type: choice
-        options: [reparse-all, rematch-all, publish]
-        default: reparse-all
+        options: [admin, reparse-all, rematch-all, publish]
+        default: admin
 
 permissions:
   contents: write
@@ -59,17 +59,26 @@ jobs:
         id: pull
         run: python tb.py cloud pull --force
 
+      - name: Team changes from the results page
+        continue-on-error: true          # never let a bad request block the scan
+        run: python tb.py admin apply
+
       - name: Run task
         run: |
           case "${{ inputs.task }}" in
             reparse-all) python tb.py reparse all ;;
             rematch-all) for m in $(python tb.py members | awk '{print $1}'); do python tb.py match "$m"; done ;;
-            publish) true ;;
+            publish|admin) true ;;
           esac
 
       - name: Publish site
         run: python tb.py publish
 
       - name: Push workspace
+        id: push
         if: always() && steps.pull.outcome == 'success'
         run: python tb.py cloud push
+
+      - name: Confirm team changes
+        if: always() && steps.push.outcome == 'success'
+        run: python tb.py admin confirm

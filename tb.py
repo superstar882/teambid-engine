@@ -26,6 +26,7 @@
   python tb.py cloud pull|push [--force]           sync by hand (normally automatic: pull before, push after each change)
   python tb.py cloud status | scan                 show sync state / start the cloud scan now
   python tb.py docs [--check]                      build documents requested on the results page (cloud workflow)
+  python tb.py admin apply|confirm|check           team changes from the results page (add member, edit profile)
   python tb.py claude-key [--remove]                save a Claude API key (here + GitHub secret): Claude then writes letters
   python tb.py test                                 run the test suite
 """
@@ -113,6 +114,7 @@ def main(argv=None):
     s = sub.add_parser("cloud"); s.add_argument("action", choices=["setup", "pull", "push", "status", "scan"])
     s.add_argument("repo", nargs="?"); s.add_argument("--force", action="store_true")
     s = sub.add_parser("docs"); s.add_argument("--check", action="store_true")
+    s = sub.add_parser("admin"); s.add_argument("action", choices=["apply", "confirm", "check"])
     s = sub.add_parser("claude-key"); s.add_argument("--remove", action="store_true")
     sub.add_parser("test")
     a = ap.parse_args(argv)
@@ -264,6 +266,16 @@ def _run(a, ap):
                     print(f"pending={n}", file=f)
         else:
             print(docs.run_all())
+    elif a.cmd == "admin":
+        from teambid import admin
+        if a.action == "check":
+            n = len(admin.pending())
+            print(f"admin={n}")
+            if os.environ.get("GITHUB_OUTPUT"):
+                with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+                    print(f"admin={n}", file=f)
+        else:
+            print(getattr(admin, a.action)())
     elif a.cmd == "claude-key":
         _claude_key(a.remove)
     elif a.cmd == "test":

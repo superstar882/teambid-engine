@@ -108,8 +108,13 @@ def build_data(include_skipped=True):
                 "years": p.get("years_experience"), "region": pr.get("region", "US"), "countries": pr.get("countries", []),
                 "target_titles": pr.get("target_titles") or p.get("target_titles", []),
                 "skills": p.get("skills", {}), "education": p.get("education", []), "certifications": p.get("certifications", []),
-                "roles": [{"title": r["title"], "company": r["company"], "start": r["start"], "end": r["end"], "kind": r.get("kind"),
-                           "stack": r.get("stack", []), "bullets": [b["text"] for b in r["bullets"]]} for r in p.get("roles", [])],
+                "roles": [{"title": r["title"], "company": r["company"], "location": r.get("location", ""), "start": r["start"],
+                           "end": r["end"], "kind": r.get("kind"), "stack": r.get("stack", []),
+                           "bullets": [b["text"] for b in r["bullets"]]} for r in p.get("roles", [])],
+                "earlier_roles": p.get("earlier_roles", []), "edited": p.get("edited", ""),
+                # what the results page lets the team edit (preferences)
+                "prefs": {k: pr.get(k) for k in ("countries", "target_titles", "onsite_ok", "home_cities", "min_score",
+                                                  "avoid_companies", "target_companies", "exclude_words", "work_auth", "salary_min")},
                 "audit": {"score": audit["score"], "grade": audit["grade"], "findings": audit["findings"]},
                 "matches": rows, "best": sum(1 for r in rows if r["tier"] == "best"), "applications": apps})
     return {"generated": config.now().strftime("%Y-%m-%d %H:%M %Z"), "last_scan": last_scan, "members": out}

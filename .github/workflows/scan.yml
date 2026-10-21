@@ -66,12 +66,21 @@ jobs:
         id: pull
         run: python tb.py cloud pull --force
 
+      - name: Team changes from the results page
+        continue-on-error: true          # never let a bad request block the scan
+        run: python tb.py admin apply
+
       - name: Scan, match, publish
         run: python tb.py scan
 
       - name: Push workspace
+        id: push
         if: always() && steps.pull.outcome == 'success'
         run: python tb.py cloud push
+
+      - name: Confirm team changes
+        if: always() && steps.push.outcome == 'success'
+        run: python tb.py admin confirm
 
       - name: Keep the schedule alive
         # GitHub turns off scheduled workflows after 60 days without commits

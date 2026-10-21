@@ -97,6 +97,37 @@ th { font-size:11px; font-weight:800; letter-spacing:.06em; text-transform:upper
 .ready { background:var(--go2); color:var(--go); } .wait { background:var(--warn2); color:var(--warn); } .fail { background:var(--bad2); color:var(--bad); }
 .big { font-size:30px; font-weight:800; }
 details summary { cursor:pointer; }
+select { appearance:none; -webkit-appearance:none; padding-right:34px; cursor:pointer; font-weight:600;
+         background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%2310014b' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+         background-repeat:no-repeat; background-position:right 12px center; }
+select:hover { border-color:var(--brand-line); background-color:var(--brand-soft); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23c8c0ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); } }
+:root[data-theme="dark"] select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%23c8c0ff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); }
+.chip { display:inline-flex; align-items:center; padding:3px 11px; border-radius:999px; background:var(--brand-tint); color:var(--brand-text);
+        font-weight:700; font-size:12px; margin:0 6px 6px 0; }
+.chip.soft { background:var(--brand-soft); color:var(--muted); border:1px solid var(--line); }
+.stat { display:flex; flex-direction:column; gap:2px; } .stat .big { line-height:1.1; } .stat small { color:var(--muted); font-weight:700; }
+.stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; margin-bottom:16px; }
+.stats .card { margin:0; }
+.kv2 { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; } .kv2 span:nth-child(odd) { color:var(--muted); font-weight:700; }
+.tl { position:relative; padding-left:22px; }
+.tl:before { content:""; position:absolute; left:6px; top:6px; bottom:6px; width:2px; background:var(--brand-line); border-radius:2px; }
+.tl .job { position:relative; margin-bottom:18px; } .tl .job:last-child { margin-bottom:0; }
+.tl .job:before { content:""; position:absolute; left:-21px; top:6px; width:12px; height:12px; border-radius:50%; background:var(--card); border:3px solid var(--brand); }
+.tl .job h3 { margin:0; font-size:15px; font-weight:800; } .tl ul { margin:6px 0 0; padding-left:18px; } .tl li { margin:3px 0; }
+.headrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; } .headrow h2 { margin:0; } .headrow .sp { flex:1; }
+.form { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.form label { display:flex; flex-direction:column; gap:5px; font-weight:700; font-size:12px; color:var(--muted); }
+.form label.wide { grid-column:1 / -1; }
+.form input, .form textarea, .form select { width:100%; font-size:14px; color:var(--ink); }
+.role { border:1px solid var(--line); border-radius:16px; padding:14px; margin-bottom:12px; background:var(--brand-soft); }
+.role .tools { display:flex; gap:6px; justify-content:flex-end; margin-bottom:8px; }
+.savebar { position:sticky; bottom:12px; z-index:5; display:flex; gap:10px; align-items:center; flex-wrap:wrap; padding:12px 16px;
+           background:var(--card); border:1px solid var(--brand-line); border-radius:999px; box-shadow:var(--shadow); }
+.banner { border-radius:16px; padding:12px 16px; margin-bottom:16px; font-weight:600; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+.banner.info { background:var(--brand-tint); color:var(--brand-text); } .banner.ok { background:var(--go2); color:var(--go); } .banner.err { background:var(--bad2); color:var(--bad); }
+.navitem.add { color:var(--brand-text); border:1.5px dashed var(--brand-line); margin-top:4px; justify-content:center; }
+.navitem.add:hover { background:var(--card); }
 
 @media (max-width:900px) {
   .shell { grid-template-columns:1fr; }
@@ -125,6 +156,7 @@ details summary { cursor:pointer; }
     <div class="brandrow"><img class="logo" src="data:image/png;base64,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" alt="Bid"><small>Team</small></div>
     <div class="side-label">Team members</div>
     <nav class="navlist" id="tabs"></nav>
+    <button class="navitem add" id="addmem">+ Add member</button>
     <div class="side-label">View</div>
     <nav class="navlist" id="subnav"></nav>
     <div class="side-foot"><div class="muted" id="meta"></div><button class="b2" id="logout">Lock</button></div>
@@ -224,7 +256,7 @@ async function unlock(pw, remember) {
   document.getElementById("tabs").innerHTML = DATA.members.map(m => `<button class="navitem" data-id="${m.id}">
       <span class="av">${esc(initials(m.name))}</span><span class="nm"><b>${esc(m.name)}</b><small>${esc(m.headline || m.level || "")}</small></span>
       <span class="count" title="matches">${m.matches.length}</span></button>`).join("");
-  document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); pick(b.dataset.id); });
+  document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); });
   pick(location.hash.slice(1).split("/")[0]);
 }
 document.getElementById("f").onsubmit = async e => {
@@ -450,38 +482,221 @@ async function docsView(m, body) {
     e.target.disabled = false;
   };
 }
+// ---- team changes (add member, edit profile): encrypted request in the progress table, applied by the cloud ----
+async function putBlob(kind, rid, meta, obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  let bin = ""; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  const b64s = btoa(bin), parts = [];
+  for (let i = 0; i < b64s.length; i += 5000) parts.push(b64s.slice(i, i + 5000));
+  for (let n = 0; n < parts.length; n++) await pgPut(kind + "part", `${rid}|${n}`, { kind: kind + "part", rid, n, text: parts[n] });
+  await pgPut(kind + "req", rid, { ...meta, kind: kind + "req", rid, parts: parts.length, by: localStorage.getItem("tb_name") || "",
+                                   at: new Date().toISOString() });
+  try { await fetch(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" }); } catch (_) {}
+}
+function adminState(match) {
+  const reqs = {}, done = {};
+  for (const e of Object.values(PG?.latest || {})) {
+    if (e.kind === "adminreq") reqs[e.rid] = e;
+    if (e.kind === "admindone") done[e.rid] = e;
+  }
+  const recent = Date.now() - 2 * 864e5;
+  return { waiting: Object.values(reqs).filter(r => !done[r.rid] && match(r)),
+           finished: Object.values(done).filter(d => reqs[d.rid] && match(reqs[d.rid]) && Date.parse(reqs[d.rid].at) > recent)
+                       .sort((a, b) => (b.at || "").localeCompare(a.at || "")).slice(0, 3) };
+}
+function adminBanner(match) {
+  if (!PG || !PG.ok) return "";
+  const st = adminState(match);
+  return st.waiting.map(r => `<div class="banner info">Saved ${esc(r.action === "add" ? "new member " + (r.name || "") : "changes")}${r.by ? " by " + esc(r.by) : ""}.
+           The cloud is updating matches and this page, usually 3-5 minutes.</div>`).join("") +
+    st.finished.map(d => `<div class="banner ${d.ok ? "ok" : "err"}">${esc(d.ok ? "Done: " : "Couldn't apply: ")}${esc(d.msg || "")}
+           ${d.ok ? '<button class="b2" onclick="location.reload()">Reload</button>' : ""}</div>`).join("");
+}
+const val = id => (document.getElementById(id)?.value || "").trim();
+
+function overviewView(m, body) {
+  const c = m.contact || {}, pr = m.prefs || {}, sk = m.skills || {};
+  const label = { email: "Email", phone: "Phone", location: "Location", linkedin: "LinkedIn", github: "GitHub", website: "Website" };
+  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+    <div class="stats">
+      <div class="card stat"><small>Matches</small><span class="big">${m.matches.length}</span><span class="muted">${m.best} best fits</span></div>
+      <div class="card stat"><small>Resume score</small><span class="big">${m.audit.score}<span class="muted" style="font-size:15px">/100</span></span><span class="muted">${esc(m.audit.grade)}</span></div>
+      <div class="card stat"><small>Experience</small><span class="big">${m.years ?? "-"}<span class="muted" style="font-size:15px"> yrs</span></span><span class="muted">${esc(m.level || "")}</span></div>
+      <div class="card stat"><small>Applications</small><span class="big">${m.applications.length}</span><span class="muted">tracked</span></div>
+    </div>
+    <div class="grid">
+      <div class="card"><div class="headrow"><h2>Profile</h2><span class="sp"></span><button class="b" id="edit1">Edit profile</button></div>
+        <div style="font-weight:700">${esc(m.headline || "")}</div><p class="muted" style="margin:6px 0 0">${esc(m.summary || "No summary yet.")}</p>
+        ${m.edited ? `<p class="muted" style="font-size:12px;margin:8px 0 0">Edited on the team page ${esc(m.edited.slice(0, 10))}</p>` : ""}</div>
+      <div class="card"><h2>Contact</h2><div class="kv2">${Object.entries(c).filter(([, x]) => x).map(([k, x]) => `<span>${esc(label[k] || k)}</span><span>${esc(x)}</span>`).join("") || '<span class="muted">-</span>'}</div></div>
+      <div class="card"><h2>Job preferences</h2><div class="kv2">
+        <span>Countries</span><span>${(pr.countries || m.countries || []).map(x => `<span class="chip">${esc(x)}</span>`).join("") || "-"}</span>
+        <span>Work style</span><span>${pr.onsite_ok ? "Remote, or on-site in " + esc((pr.home_cities || []).join(", ") || "home city") : "Remote only"}</span>
+        <span>Min score</span><span>${esc(pr.min_score ?? 40)}</span>
+        <span>Avoid</span><span>${esc((pr.avoid_companies || []).join(", ") || "-")}</span></div></div>
+    </div>
+    <div class="card"><h2>Target titles</h2>${(m.target_titles || []).map(t => `<span class="chip">${esc(t)}</span>`).join("") || '<span class="muted">-</span>'}</div>
+    <div class="card"><h2>Resume fixes</h2><table><thead><tr><th>Priority</th><th>Area</th><th>What to change</th></tr></thead><tbody>${m.audit.findings.map(f =>
+      `<tr><td><span class="pill ${f.severity >= 3 ? "fail" : f.severity === 2 ? "wait" : ""}">${["", "Low", "Medium", "High"][f.severity]}</span></td><td>${esc(f.area)}</td><td>${esc(f.message)}</td></tr>`).join("")
+      || '<tr><td colspan=3 class="muted">Nothing major.</td></tr>'}</tbody></table></div>`;
+  document.getElementById("edit1").onclick = () => { sub = "Edit"; draw(); };
+}
+
+function experienceView(m, body) {
+  const sk = m.skills || {};
+  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+    <div class="card"><div class="headrow"><h2>Experience</h2><span class="muted">${m.roles.length} jobs · ${m.years ?? "-"} years</span><span class="sp"></span>
+      <button class="b" id="edit2">Edit experience</button></div>
+      <div class="tl">${m.roles.map(r => `<div class="job"><h3>${esc(r.title)}<span class="muted" style="font-weight:600"> · ${esc(r.company)}</span></h3>
+        <div class="muted" style="font-size:12px;font-weight:700">${esc(r.start)} – ${esc(r.end)}${r.location ? " · " + esc(r.location) : ""}${r.kind === "intern" ? " · internship" : ""}</div>
+        ${(r.stack || []).length ? `<div style="margin-top:6px">${r.stack.slice(0, 10).map(x => `<span class="chip soft">${esc(x)}</span>`).join("")}</div>` : ""}
+        <ul>${r.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("") || '<span class="muted">No jobs yet.</span>'}</div></div>
+    ${(m.earlier_roles || []).length ? `<div class="card"><h2>Earlier roles</h2><ul style="margin:0;padding-left:18px">${m.earlier_roles.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : ""}
+    <div class="grid">
+      <div class="card"><h2>Skills</h2><div class="muted" style="font-size:12px;font-weight:700;margin-bottom:6px">PROVEN IN BULLETS</div>
+        ${(sk.proven || []).map(x => `<span class="chip">${esc(x)}</span>`).join("") || '<span class="muted">-</span>'}
+        <div class="muted" style="font-size:12px;font-weight:700;margin:10px 0 6px">LISTED ONLY</div>
+        ${[...(sk.listed_only || []), ...(sk.other_listed || [])].map(x => `<span class="chip soft">${esc(x)}</span>`).join("") || '<span class="muted">-</span>'}</div>
+      <div class="card"><h2>Education</h2>${(m.education || []).map(e => `<div style="margin-bottom:8px"><b>${esc(e.school)}</b><div class="muted">${esc([e.degree, e.field].filter(Boolean).join(", "))}${e.end ? " · " + esc(e.end) : ""}</div></div>`).join("") || '<span class="muted">-</span>'}
+        <h2 style="margin-top:14px">Certifications</h2>${(m.certifications || []).map(x => `<span class="chip soft">${esc(x)}</span>`).join("") || '<span class="muted">-</span>'}</div>
+    </div>`;
+  document.getElementById("edit2").onclick = () => { sub = "Edit"; draw(); };
+}
+
+let EDIT = null;          // working copy while editing
+function editView(m, body) {
+  if (!PG || !PG.ok) { body.innerHTML = '<div class="card muted">Editing needs team progress (Supabase), which is not available right now.</div>'; return; }
+  const pr = m.prefs || {}, sk = m.skills || {}, c = m.contact || {};
+  if (!EDIT || EDIT.slug !== m.slug)
+    EDIT = { slug: m.slug, roles: m.roles.map(r => ({ title: r.title, company: r.company, location: r.location || "", start: r.start, end: r.end,
+                                                       bullets: r.bullets.join("\n") })),
+             education: (m.education || []).map(e => ({ school: e.school, degree: e.degree, field: e.field, start: e.start, end: e.end })) };
+  const inp = (id, label, v, wide, ph) => `<label class="${wide ? "wide" : ""}">${label}<input id="${id}" value="${esc(v ?? "")}" placeholder="${esc(ph || "")}"></label>`;
+  const roleCard = (r, i) => `<div class="role" data-i="${i}"><div class="tools">
+      <button class="b2" data-act="up" ${i === 0 ? "disabled" : ""}>Move up</button><button class="b2" data-act="down" ${i === EDIT.roles.length - 1 ? "disabled" : ""}>Move down</button>
+      <button class="b2" data-act="del">Remove</button></div><div class="form">
+      <label>Job title<input data-f="title" value="${esc(r.title)}"></label><label>Company<input data-f="company" value="${esc(r.company)}"></label>
+      <label>Location<input data-f="location" value="${esc(r.location)}" placeholder="London / Remote"></label>
+      <label>Start<input data-f="start" value="${esc(r.start)}" placeholder="2022-04 or Apr 2022"></label>
+      <label>End<input data-f="end" value="${esc(r.end)}" placeholder="2024-01 or Present"></label>
+      <label class="wide">Bullets (one per line, real results only)<textarea data-f="bullets" rows="${Math.max(3, r.bullets.split("\n").length + 1)}">${esc(r.bullets)}</textarea></label></div></div>`;
+  const eduRow = (e, i) => `<div class="role" data-e="${i}"><div class="tools"><button class="b2" data-act="edel">Remove</button></div><div class="form">
+      <label>School<input data-f="school" value="${esc(e.school)}"></label><label>Degree<input data-f="degree" value="${esc(e.degree)}" placeholder="B.Sc."></label>
+      <label>Field<input data-f="field" value="${esc(e.field)}"></label><label>End year<input data-f="end" value="${esc(e.end)}"></label></div></div>`;
+  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+    <div class="banner info">Everyone on the team can edit this. Only write what is true: the resumes and letters are built from these facts.</div>
+    <div class="card"><h2>Basics</h2><div class="form">
+      ${inp("e_head", "Headline", m.headline, true, "Senior Backend Engineer | C# / .NET · Go")}
+      <label class="wide">Summary<textarea id="e_sum" rows="3">${esc(m.summary || "")}</textarea></label>
+      ${inp("e_email", "Email", c.email)}${inp("e_phone", "Phone", c.phone)}${inp("e_loc", "Location", c.location, false, "London, UK")}
+      ${inp("e_li", "LinkedIn", c.linkedin)}${inp("e_gh", "GitHub", c.github)}${inp("e_web", "Website", c.website)}</div></div>
+    <div class="card"><h2>Job preferences</h2><div class="form">
+      ${inp("p_countries", "Countries they can legally work from", (pr.countries || []).join(", "), false, "US, UK, Europe, Denmark...")}
+      ${inp("p_titles", "Target titles", (pr.target_titles || m.target_titles || []).join(", "), false, "Backend Engineer, Platform Engineer")}
+      <label>Work style<select id="p_onsite"><option value="0">Remote only</option><option value="1" ${pr.onsite_ok ? "selected" : ""}>Remote, or on-site in home city</option></select></label>
+      ${inp("p_home", "Home cities (for on-site)", (pr.home_cities || []).join(", "))}
+      <label>Minimum match score<input id="p_min" type="number" min="0" max="95" value="${esc(pr.min_score ?? 40)}"></label>
+      ${inp("p_avoid", "Companies to avoid", (pr.avoid_companies || []).join(", "))}
+      ${inp("p_excl", "Words to exclude from titles", (pr.exclude_words || []).join(", "), false, "manager, sales")}
+      ${inp("p_auth", "Work authorization", pr.work_auth, false, "Yes, UK citizen / permanent resident")}</div></div>
+    <div class="card"><div class="headrow"><h2>Experience</h2><span class="muted">newest first</span><span class="sp"></span><button class="b2" id="addrole">+ Add job</button></div>
+      <div id="roles">${EDIT.roles.map(roleCard).join("")}</div></div>
+    <div class="card"><h2>Skills</h2><label class="form"><span class="muted" style="font-size:12px;font-weight:700">Comma separated. Skills used in the bullets above count as proven automatically.</span>
+      <textarea id="e_skills" rows="3">${esc([...(sk.proven || []), ...(sk.listed_only || []), ...(sk.other_listed || [])].join(", "))}</textarea></label></div>
+    <div class="card"><div class="headrow"><h2>Education</h2><span class="sp"></span><button class="b2" id="addedu">+ Add school</button></div>
+      <div id="edus">${EDIT.education.map(eduRow).join("")}</div>
+      <label class="form" style="margin-top:6px"><span class="muted" style="font-size:12px;font-weight:700">Certifications (one per line)</span>
+      <textarea id="e_certs" rows="3">${esc((m.certifications || []).join("\n"))}</textarea></label></div>
+    <div class="savebar"><button class="b" id="e_save">Save changes</button><button class="b2" id="e_cancel">Cancel</button><span id="e_msg" class="muted"></span></div>`;
+  const sync = () => {
+    document.querySelectorAll("#roles .role").forEach(el => { const r = EDIT.roles[+el.dataset.i];
+      el.querySelectorAll("[data-f]").forEach(f => r[f.dataset.f] = f.value); });
+    document.querySelectorAll("#edus .role").forEach(el => { const e = EDIT.education[+el.dataset.e];
+      el.querySelectorAll("[data-f]").forEach(f => e[f.dataset.f] = f.value); });
+  };
+  const redraw = () => { sync(); const y = window.scrollY; editView(m, body); window.scrollTo(0, y); };
+  document.getElementById("addrole").onclick = () => { sync(); EDIT.roles.unshift({ title: "", company: "", location: "", start: "", end: "Present", bullets: "" }); redraw(); };
+  document.getElementById("addedu").onclick = () => { sync(); EDIT.education.push({ school: "", degree: "", field: "", start: "", end: "" }); redraw(); };
+  document.querySelectorAll("#roles [data-act]").forEach(b => b.onclick = () => { sync(); const i = +b.closest(".role").dataset.i, R = EDIT.roles;
+    if (b.dataset.act === "del") { if (confirm("Remove this job?")) R.splice(i, 1); }
+    else { const j = b.dataset.act === "up" ? i - 1 : i + 1; [R[i], R[j]] = [R[j], R[i]]; }
+    redraw(); });
+  document.querySelectorAll("#edus [data-act]").forEach(b => b.onclick = () => { sync(); EDIT.education.splice(+b.closest(".role").dataset.e, 1); redraw(); });
+  document.getElementById("e_cancel").onclick = () => { EDIT = null; sub = "Overview"; draw(); };
+  document.getElementById("e_save").onclick = async e => {
+    sync();
+    const bad = EDIT.roles.find(r => (r.title || r.company) && !r.start.trim());
+    if (bad) { document.getElementById("e_msg").textContent = `Add a start date for "${bad.title || bad.company}".`; return; }
+    const data = {
+      profile: { headline: val("e_head"), summary: val("e_sum"),
+                 contact: { email: val("e_email"), phone: val("e_phone"), location: val("e_loc"), linkedin: val("e_li"), github: val("e_gh"), website: val("e_web") },
+                 roles: EDIT.roles, education: EDIT.education, skills: val("e_skills"), certifications: val("e_certs") },
+      prefs: { countries: val("p_countries"), target_titles: val("p_titles"), onsite_ok: val("p_onsite") === "1", home_cities: val("p_home"),
+               min_score: val("p_min"), avoid_companies: val("p_avoid"), exclude_words: val("p_excl"), work_auth: val("p_auth") } };
+    e.target.disabled = true; document.getElementById("e_msg").textContent = "Saving...";
+    try {
+      await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "edit", member: m.slug }, data);
+      EDIT = null; sub = "Overview"; draw();
+    } catch (err) { document.getElementById("e_msg").textContent = err.message; e.target.disabled = false; }
+  };
+}
+
+function addMemberView(body) {
+  if (!PG || !PG.ok) { body.innerHTML = '<div class="card muted">Adding members needs team progress (Supabase), which is not available right now.</div>'; return; }
+  body.innerHTML = adminBanner(r => r.action === "add") + `<div class="card"><h2>Add a team member</h2>
+    <p class="muted" style="margin-top:0">Upload their resume. The cloud reads it, scores it, and matches them against the latest scan, usually in 3-5 minutes.
+      Then open their Overview and check the profile: unusual resume designs are sometimes read wrong, and everything can be fixed with Edit profile.</p>
+    <div class="form">
+      <label>Full name<input id="a_name" placeholder="Jane Doe"></label>
+      <label>Email (optional)<input id="a_email" placeholder="jane@example.com"></label>
+      <label>Countries they can legally work from (optional)<input id="a_countries" placeholder="Leave empty to take it from the resume"></label>
+      <label>Resume (PDF, DOCX or TXT, up to 1.5 MB)<input id="a_file" type="file" accept=".pdf,.docx,.txt,.md"></label></div>
+    <div class="row" style="margin-top:14px"><button class="b" id="a_go">Add member</button><span id="a_msg" class="muted"></span></div></div>`;
+  document.getElementById("a_go").onclick = async e => {
+    const f = document.getElementById("a_file").files[0], name = val("a_name"), msg = document.getElementById("a_msg");
+    if (!name || !f) { msg.textContent = "Name and resume file are required."; return; }
+    if (f.size > 1.5e6) { msg.textContent = "That file is over 1.5 MB. Export a smaller PDF."; return; }
+    if (DATA.members.some(x => x.name.toLowerCase() === name.toLowerCase())) { msg.textContent = `${name} is already on the team. Use Edit profile instead.`; return; }
+    e.target.disabled = true; msg.textContent = "Uploading (encrypted)...";
+    try {
+      const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
+      await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "add", name },
+                    { name, email: val("a_email"), countries: val("a_countries"), filename: f.name, file_b64: b64 });
+      addMemberView(body);
+    } catch (err) { msg.textContent = err.message; e.target.disabled = false; }
+  };
+}
+document.getElementById("addmem").onclick = () => { sub = "Add member"; closeMenu(); draw(); };
+
 function draw() {
   const m = cur, v = document.getElementById("view");
   const subs = ["Matches", "Documents", "Applications", "Overview", "Experience"];
   clearInterval(DOC_TIMER);
   const nav = document.getElementById("subnav");
   nav.innerHTML = subs.map(s => `<button class="navitem ${s === sub ? "on" : ""}" data-s="${s}"><svg viewBox="0 0 24 24">${ICONS[s]}</svg>${s}</button>`).join("");
-  nav.querySelectorAll(".navitem").forEach(b => b.onclick = () => { sub = b.dataset.s; closeMenu(); draw(); });
+  nav.querySelectorAll(".navitem").forEach(b => b.onclick = () => { sub = b.dataset.s; EDIT = null; closeMenu(); draw(); });
+  document.querySelectorAll("#tabs .navitem").forEach(b => b.classList.toggle("on", b.dataset.id === m.id && sub !== "Add member"));
+  document.getElementById("addmem").classList.toggle("on", sub === "Add member");
   document.getElementById("who").textContent = sub === "Matches" ? m.name : `${m.name} · ${sub}`;
   document.getElementById("whosub").textContent = [m.headline, m.region && `remote from ${(m.countries || []).join(", ") || m.region}`].filter(Boolean).join(" · ");
   v.innerHTML = `<div id="body"></div>`;
   const body = document.getElementById("body");
-  if (sub === "Overview") {
-    const c = m.contact || {};
-    body.innerHTML = `<div class="grid">
-      <div class="card"><h2>${esc(m.name)}</h2><div>${esc(m.headline)}</div><div class="muted">${esc(m.level)} · ${esc((m.lanes||[]).join(", "))} · ${m.years ?? "-"} years</div>
-        <div class="muted">Remote from: ${esc((m.countries||[]).join(", "))} (${esc(m.region)})</div></div>
-      <div class="card"><h2>Contact</h2>${Object.entries(c).map(([k,x]) => `<div><span class="muted">${esc(k)}:</span> ${esc(x)}</div>`).join("") || "-"}</div>
-      <div class="card"><h2>Resume score</h2><div class="big">${m.audit.score}<span class="muted" style="font-size:14px">/100 · ${esc(m.audit.grade)}</span></div>
-        <div class="muted">${m.matches.length} matches, ${m.best} best fits, ${m.applications.length} applications tracked in TeamBid</div></div></div>
-      <div class="card"><h2>Resume fixes</h2><table><tr><th>Priority</th><th>Area</th><th>What to change</th></tr>${m.audit.findings.map(f =>
-        `<tr><td>${["","Low","Medium","High"][f.severity]}</td><td>${esc(f.area)}</td><td>${esc(f.message)}</td></tr>`).join("") || "<tr><td colspan=3>Nothing major.</td></tr>"}</table></div>
-      <div class="card"><h2>Target titles</h2>${esc((m.target_titles||[]).join(", "))}</div>`;
+  if (sub === "Add member") {
+    document.querySelectorAll("#tabs .navitem").forEach(b => b.classList.remove("on"));
+    document.getElementById("who").textContent = "Add a team member";
+    document.getElementById("whosub").textContent = "The cloud reads the resume and matches them";
+    addMemberView(body);
+  } else if (sub === "Edit") {
+    document.getElementById("who").textContent = `${m.name} · Edit profile`;
+    editView(m, body);
+  } else if (sub === "Overview") {
+    overviewView(m, body);
   } else if (sub === "Applications") {
     appsView(m, body);
   } else if (sub === "Documents") {
     docsView(m, body);
   } else if (sub === "Experience") {
-    const sk = m.skills || {};
-    body.innerHTML = `<div class="card"><h2>Skills</h2><div><b>Proven:</b> ${esc((sk.proven||[]).join(", "))}</div><div class="muted"><b>Listed:</b> ${esc((sk.listed_only||[]).join(", "))}</div></div>` +
-      m.roles.map(r => `<div class="card"><h2>${esc(r.title)}, ${esc(r.company)} <span class="muted" style="font-weight:400">${esc(r.start)} - ${esc(r.end)}${r.kind==="intern"?" · internship":""}</span></h2>
-        <div class="muted">${esc((r.stack||[]).join(" | "))}</div><ul>${r.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("") +
-      `<div class="card"><h2>Education</h2>${(m.education||[]).map(e => `<div>${esc(e.school)}: ${esc(e.degree)} ${esc(e.field)} ${esc(e.end)}</div>`).join("") || "-"}</div>`;
+    experienceView(m, body);
   } else {
     body.innerHTML = `<div class="card"><div class="row"><input id="q" placeholder="Search company or title" style="flex:1;min-width:200px">
       <select id="tier"><option value="">All tiers</option><option value="best">Best fits</option><option value="consider">Worth a look</option></select>
