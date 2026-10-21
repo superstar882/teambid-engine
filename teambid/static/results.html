@@ -307,10 +307,7 @@ document.getElementById("f").onsubmit = async e => {
 };
 document.getElementById("logout").onclick = () => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); location.reload(); };
 const saved = localStorage.getItem("tb_pw") || sessionStorage.getItem("tb_pw");
-if (saved) {
-  const restore = busyBtn(document.querySelector("#f button"), "Opening");
-  unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); }).finally(restore);
-}
+
 
 const shell = () => document.getElementById("app");
 function closeMenu() { shell().classList.remove("open"); }
@@ -562,7 +559,7 @@ function enhanceSelects(root = document) {
     sel.addEventListener("change", label); label();
   });
 }
-const spin = t => `<span class="spin"></span>${esc(t)}`;
+function spin(t) { return `<span class="spin"></span>${esc(t)}`; }
 function busyBtn(btn, text) {            // spinner inside a button; returns a function that restores it
   const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = spin(text || btn.textContent.trim());
   return () => { btn.disabled = false; btn.innerHTML = old; };
@@ -864,6 +861,11 @@ function draw() {
     ["q", "tier", "st"].forEach(id => document.getElementById(id).addEventListener(id === "q" ? "input" : "change", go));
     go();
   }
+}
+// remembered password: open automatically (last, so everything above is defined)
+if (saved) {
+  const restore = busyBtn(document.querySelector("#f button"), "Opening");
+  unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); }).finally(restore);
 }
 </script>
 </body>
