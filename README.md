@@ -200,3 +200,19 @@ TeamBid/
   workspace/            created at runtime: teambid.db, members/<name>/{resume, vault, applications, reports}, cache, reports
   workspace_demo/       sample workspace with three members and a 600-board scan (delete any time)
 ```
+
+## Team changes on the results page (no admin app needed)
+
+Anyone with the team password can, on the results page:
+
+- **Add member** (sidebar): name, resume file (PDF/DOCX/TXT, up to 1.5 MB), optional countries. The file is uploaded
+  encrypted; the cloud reads it, scores it and matches the person.
+- **Edit profile** (Overview or Experience): headline, summary, contact, every job (title, company, location, dates,
+  bullets; add, remove, reorder), skills, education, certifications, and job preferences (countries, target titles,
+  remote only or on-site in a home city, minimum score, companies to avoid, excluded words, work authorization).
+
+Requests go into the same encrypted, append-only table as team progress. The page starts the cloud right away; the
+"Tailor documents" check starts the **Maintenance** workflow, which pulls the workspace, applies the changes
+(`tb.py admin apply`), re-matches, republishes, pushes, then marks them done (`tb.py admin confirm`). The daily scan
+applies waiting changes too. Applied requests are recorded in the workspace (`admin-applied.json`), so a request is
+never applied twice. Usually live 3-5 minutes after saving; the page shows the status and a Reload button.
