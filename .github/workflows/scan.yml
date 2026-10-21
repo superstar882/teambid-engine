@@ -12,8 +12,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  actions: write                 # queue another Maintenance run for changes that arrived meanwhile                # upload the workspace release asset, keep-alive commit
+  contents: write                # upload the workspace release asset, keep-alive commit
+  actions: write                 # queue another Maintenance run for changes that arrived meanwhile
 
 concurrency:
   group: teambid-scan
