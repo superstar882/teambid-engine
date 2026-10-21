@@ -165,6 +165,10 @@ td { overflow-wrap:anywhere; }
 .modal h3 { margin:0 0 8px; font-size:18px; font-weight:800; }
 .modal input { width:100%; margin:12px 0 16px; }
 .modal .row { justify-content:flex-end; }
+.navitem.pending { opacity:.55; } .navitem .count .spin { margin:0; width:11px; height:11px; }
+.banner .x { margin-left:auto; border:0; background:transparent; color:inherit; font:inherit; font-size:18px; line-height:1; padding:0 4px; opacity:.6; }
+.banner .x:hover { opacity:1; }
+.saved-ok { color:var(--go); font-weight:700; } .saved-err { color:var(--bad); font-weight:700; }
 button.b.danger { background:var(--bad); border-color:var(--bad); } button.b.danger:hover { filter:brightness(1.08); }
 button.b2.danger { color:var(--bad); border-color:var(--bad2); } button.b2.danger:hover { background:var(--bad2); }
 
@@ -235,13 +239,16 @@ async function progressInit(pw) {
 }
 function sbHeaders(extra) { return { apikey: PG.cfg.key, Authorization: "Bearer " + PG.cfg.key, "Content-Type": "application/json", ...(extra || {}) }; }
 async function progressLoad() {
+  // first call: every row; later calls: only rows added since (the poll every 15 s stays tiny)
+  const first = !PG.lastId, since = PG.lastId ? `&id=gt.${PG.lastId}` : "";      // fixed for this whole call
   try {
     for (let off = 0; ; off += 1000) {
-      const r = await fetchT(`${PG.cfg.url}/rest/v1/${PG.cfg.table}?team=eq.${encodeURIComponent(PG.cfg.team)}&select=item,payload,created_at&order=id.asc`,
+      const r = await fetchT(`${PG.cfg.url}/rest/v1/${PG.cfg.table}?team=eq.${encodeURIComponent(PG.cfg.team)}&select=id,item,payload,created_at&order=id.asc${since}`,
                             { headers: sbHeaders({ Range: `${off}-${off + 999}` }) });
       if (!r.ok) throw new Error("progress server answered " + r.status);
       const rows = await r.json();
       for (const row of rows) {
+        PG.lastId = Math.max(PG.lastId || 0, row.id);
         try {
           const raw = b64(row.payload);
           const e = JSON.parse(new TextDecoder().decode(await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, PG.aes, raw.slice(12))));
@@ -250,7 +257,11 @@ async function progressLoad() {
       }
       if (rows.length < 1000) break;
     }
-  } catch (e) { PG.ok = false; PG.err = e.message; }
+    PG.lastErr = "";
+  } catch (e) {
+    if (first) { PG.ok = false; PG.err = e.message; }      // later polls just try again next time
+    else PG.lastErr = e.message;
+  }
 }
 async function itemFor(slug, key) {
   const k = slug + "|" + key;
@@ -289,7 +300,8 @@ async function decrypt(blob, password) {
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(blob.iv) }, key, b64(blob.data));
   return JSON.parse(new TextDecoder().decode(plain));
 }
-let PW = "";
+let PW = "", PG_LOADING = false;
+const loadingCard = what => `<div class="card muted">${spin("Loading team progress (" + what + ")...")}</div>`;
 // the page data, fetched past GitHub's cache (it keeps data.enc.json up to ~10 minutes otherwise)
 async function loadData(pw, say = () => {}) {
   say("Downloading team data...");
@@ -303,9 +315,14 @@ function renderMembers() {
   document.getElementById("meta").textContent = `last scan ${DATA.last_scan || "-"} · updated ${DATA.generated}` +
     (PG ? (PG.ok ? " · team progress on" : ` · progress unavailable (${PG.err})`) : "");
   const initials = n => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
-  document.getElementById("tabs").innerHTML = DATA.members.map(m => `<button class="navitem" data-id="${m.id}">
-      <span class="av">${esc(initials(m.name))}</span><span class="nm"><b>${esc(m.name)}</b><small>${esc(m.headline || m.level || "")}</small></span>
-      <span class="count" title="matches">${m.matches.length}</span></button>`).join("");
+  const st = PG?.ok ? adminState(() => true).waiting : [];
+  const del = new Set(st.filter(r => r.action === "delete").map(r => r.member)), busy = new Set(st.filter(r => r.action === "edit").map(r => r.member));
+  const adding = st.filter(r => r.action === "add" && !DATA.members.some(x => x.name.toLowerCase() === String(r.name || "").toLowerCase()));
+  document.getElementById("tabs").innerHTML = DATA.members.map(m => `<button class="navitem ${del.has(m.slug) ? "pending" : ""}" data-id="${m.id}">
+      <span class="av">${esc(initials(m.name))}</span><span class="nm"><b>${esc(m.name)}</b><small>${del.has(m.slug) ? "Deleting..." : busy.has(m.slug) ? "Saving changes..." : esc(m.headline || m.level || "")}</small></span>
+      <span class="count" title="matches">${del.has(m.slug) || busy.has(m.slug) ? '<span class="spin"></span>' : m.matches.length}</span></button>`).join("") +
+    adding.map(r => `<div class="navitem pending"><span class="av">${esc(initials(r.name))}</span><span class="nm"><b>${esc(r.name || "New member")}</b><small>Adding...</small></span>
+      <span class="count"><span class="spin"></span></span></div>`).join("");
   document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); });
 }
 async function unlock(pw, remember) {
@@ -318,9 +335,12 @@ async function unlock(pw, remember) {
   renderMembers();
   pick(location.hash.slice(1).split("/")[0]);
   // team progress (statuses, documents, team changes) fills in when it arrives; a slow connection can't block the page
+  PG_LOADING = !!DATA.progress;
+  document.getElementById("meta").innerHTML = spin("Loading team progress...");
   progressInit(pw).catch(e => { PG = PG || {}; PG.ok = false; PG.err = e.message; }).finally(() => {
+    PG_LOADING = false;
     renderMembers();
-    if (!["Edit", "Add member"].includes(sub)) draw();
+    safeDraw();
     watchAdmin();
   });
 }
@@ -352,12 +372,17 @@ let WATCH = null;
 function watchAdmin() {
   if (WATCH || !PG || !PG.ok || !adminState(() => true).waiting.length) return;
   WATCH = setInterval(async () => {
+    if (REFRESHING) return;
     const before = adminState(() => true).waiting.map(r => r.rid);
     await progressLoad();
     const still = new Set(adminState(() => true).waiting.map(r => r.rid));
     if (!still.size) { clearInterval(WATCH); WATCH = null; }
-    if (before.some(r => !still.has(r))) { if (!(await refreshData())) draw(); }
-    else if (sub !== "Edit") draw();
+    if (before.some(r => !still.has(r))) {
+      REFRESHING = true; renderMembers(); safeDraw();        // "Done ... loading the updated page"
+      const ok = await refreshData();
+      REFRESHING = false; renderMembers(); safeDraw();
+      if (!ok) alert("The change is done, but the updated page isn't live yet. Reload in a minute.");
+    } else { renderMembers(); safeDraw(); }
   }, 15000);
 }
 document.getElementById("f").onsubmit = async e => {
@@ -390,6 +415,7 @@ function pick(id) {
 const APP_LABEL = { drafting: "Prepared", saved: "Saved", applied: "Applied", interview: "Interview", offer: "Offer",
                     rejected: "Rejected", withdrawn: "Withdrawn", closed: "Closed" };
 async function appsView(m, body) {
+  if (PG_LOADING) { body.innerHTML = loadingCard("statuses"); return; }
   const rows = {}, byKey = Object.fromEntries(m.matches.map(r => [r.url_key, r]));
   for (const a of m.applications)
     rows[a.url_key || "app" + a.id] = { company: a.company, title: a.title, url: a.url, status: a.status, fit: a.fit,
@@ -493,9 +519,9 @@ async function copyText(t) {
 function docCard(d) {
   const r = d.req, x = d.done, when = (r.at || "").replace("T", " ").slice(0, 16);
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
-    <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
+    <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${!x ? '<span class="spin"></span>' : ""}${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
     <span class="muted" style="font-size:12px">${r.model ? esc(MODEL_NAME[r.model] || r.model) + " · " : ""}asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
-  if (!x) return `<div class="doc">${head}<div class="muted">Building in the cloud. This list refreshes by itself every minute.</div></div>`;
+  if (!x) return `<div class="doc">${head}<div class="muted">Building in the cloud. This list checks again every 15 seconds.</div></div>`;
   if (x.error) return `<div class="doc">${head}<div class="bad">${esc(x.error)}</div></div>`;
   return `<div class="doc">${head}
     <div class="row" style="margin-top:6px">${DOC_FILES.filter(([k]) => x.files[k]).map(([k, l]) =>
@@ -507,6 +533,7 @@ function docCard(d) {
     <details style="margin-top:6px"><summary class="muted">Show cover letter</summary><pre style="white-space:pre-wrap;font:inherit">${esc(x.letter || "")}</pre></details></div>`;
 }
 async function docsView(m, body) {
+  if (PG_LOADING) { body.innerHTML = loadingCard("documents"); return; }
   if (!PG || !PG.ok) {
     body.innerHTML = '<div class="card muted">Documents need team progress (Supabase), which is not available right now.</div>';
     return;
@@ -540,7 +567,7 @@ async function docsView(m, body) {
       el.textContent = ok ? "Copied" : "Copy failed"; setTimeout(() => el.textContent = "Copy cover letter", 1500);
     });
     clearInterval(DOC_TIMER);
-    if (items.some(d => !d.done)) DOC_TIMER = setInterval(async () => { await progressLoad(); if (sub === "Documents") list(); }, 60000);
+    if (items.some(d => !d.done)) DOC_TIMER = setInterval(async () => { await progressLoad(); if (sub === "Documents") list(); }, 15000);
   };
   list();
   const sel = document.getElementById("d_model");
@@ -661,6 +688,7 @@ async function putBlob(kind, rid, meta, obj) {
   for (let n = 0; n < parts.length; n++) await pgPut(kind + "part", `${rid}|${n}`, { kind: kind + "part", rid, n, text: parts[n] });
   await pgPut(kind + "req", rid, { ...meta, kind: kind + "req", rid, parts: parts.length, by: localStorage.getItem("tb_name") || "",
                                    at: new Date().toISOString() });
+  rememberSent(rid);
   try { await fetchT(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" }); } catch (_) {}
   watchAdmin();
 }
@@ -675,21 +703,36 @@ function adminState(match) {
            finished: Object.values(done).filter(d => reqs[d.rid] && match(reqs[d.rid]) && Date.parse(reqs[d.rid].at) > recent)
                        .sort((a, b) => (b.at || "").localeCompare(a.at || "")).slice(0, 3) };
 }
+// requests sent from this browser: their result is shown once (until dismissed); other people's are not repeated here
+const SENT = () => { try { return JSON.parse(sessionStorage.getItem("tb_sent") || "[]"); } catch (_) { return []; } };
+function rememberSent(rid) { try { sessionStorage.setItem("tb_sent", JSON.stringify([...SENT(), rid].slice(-30))); } catch (_) {} }
+function dismissSent(rid) { try { sessionStorage.setItem("tb_sent", JSON.stringify(SENT().filter(x => x !== rid))); } catch (_) {} draw(); }
+let REFRESHING = false;
+function safeDraw() {                // background updates: refresh the view unless someone is typing in a form
+  if ((sub === "Edit" && EDIT) || (sub === "Add member" && (val("a_name") || document.getElementById("a_file")?.files?.length))) {
+    const gb = document.getElementById("gb"); if (gb) gb.innerHTML = adminBanner(r => r.action !== "edit" || r.member === cur?.slug); return; }
+  draw();
+}            // a change finished and the updated page data is being fetched
+function actionText(r) {
+  return r.action === "add" ? `Adding ${r.name || "a new member"}` : r.action === "delete" ? `Deleting ${r.name || "this member"}` : "Saving the profile changes";
+}
 function adminBanner(match) {
   if (!PG || !PG.ok) return "";
-  const st = adminState(match);
-  return st.waiting.map(r => `<div class="banner info"><span class="spin"></span>${esc(r.action === "add" ? "Adding " + (r.name || "a new member") :
-           r.action === "delete" ? "Deleting " + (r.name || "this member") : "Saving changes")}${r.by ? " (by " + esc(r.by) + ")" : ""}.
-           The cloud is updating matches and this page, usually 3-5 minutes.</div>`).join("") +
-    st.finished.map(d => `<div class="banner ${d.ok ? "ok" : "err"}">${esc(d.ok ? "Done: " : "Couldn't apply: ")}${esc(d.msg || "")}
-           ${d.ok && !DATA.members.some(x => x.slug === d.slug) && d.action !== "delete" ? '<button class="b2" onclick="location.reload()">Reload</button>' : ""}</div>`).join("");
+  const st = adminState(match), mine = new Set(SENT());
+  const waiting = st.waiting.map(r => `<div class="banner info"><span class="spin"></span><span>${esc(actionText(r))}${r.by ? " (by " + esc(r.by) + ")" : ""}.
+      The cloud applies it and updates this page by itself, usually 2-5 minutes. You can keep working.</span></div>`).join("");
+  const done = st.finished.filter(d => mine.has(d.rid)).map(d => `<div class="banner ${d.ok ? "ok" : "err"}">
+      ${d.ok && REFRESHING ? '<span class="spin"></span>' : ""}<span>${esc(d.ok ? "Done: " : "Couldn't apply: ")}${esc(d.msg || "")}${d.ok && REFRESHING ? " Loading the updated page..." : ""}</span>
+      <button class="x" title="Dismiss" onclick="dismissSent('${esc(d.rid)}')">×</button></div>`).join("");
+  return waiting + done;
 }
+function waitingFor(slug, action) { return PG?.ok ? adminState(r => r.member === slug && (!action || r.action === action)).waiting : []; }
 const val = id => (document.getElementById(id)?.value || "").trim();
 
 function overviewView(m, body) {
   const c = m.contact || {}, pr = m.prefs || {}, sk = m.skills || {};
   const label = { email: "Email", phone: "Phone", location: "Location", linkedin: "LinkedIn", github: "GitHub", website: "Website" };
-  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+  body.innerHTML = `
     <div class="stats">
       <div class="card stat"><small>Matches</small><span class="big">${m.matches.length}</span><span class="muted">${m.best} best fits</span></div>
       <div class="card stat"><small>Resume score</small><span class="big">${m.audit.score}<span class="muted" style="font-size:15px">/100</span></span><span class="muted">${esc(m.audit.grade)}</span></div>
@@ -714,19 +757,23 @@ function overviewView(m, body) {
     <div class="card"><div class="headrow"><h2>Remove from the team</h2><span class="sp"></span><button class="b2 danger" id="delmem">Delete member</button></div>
       <div class="muted">Deletes ${esc(m.name)}'s profile, resume file, matches and applications for everyone. This can't be undone.</div></div>`;
   document.getElementById("edit1").onclick = () => { sub = "Edit"; draw(); };
+  const pendingDel = waitingFor(m.slug, "delete").length, pendingEdit = waitingFor(m.slug, "edit").length;
+  if (pendingDel) { const b = document.getElementById("delmem"); b.disabled = true; b.innerHTML = spin("Deleting"); document.getElementById("edit1").disabled = true; }
+  else if (pendingEdit) { const b = document.getElementById("edit1"); b.disabled = true; b.innerHTML = spin("Saving changes"); }
   document.getElementById("delmem").onclick = async e => {
     const ok = await confirmModal({ title: `Delete ${m.name}?`, danger: true, word: "delete", action: "Delete member",
       text: `This removes their profile, resume file, matches and applications for the whole team. It can't be undone.<br>Type <b>delete</b> to confirm.` });
     if (!ok) return;
     const restore = busyBtn(e.target, "Deleting");
-    try { await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "delete", member: m.slug, name: m.name }, {}); overviewView(m, body); }
+    try { await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "delete", member: m.slug, name: m.name }, {});
+          renderMembers(); draw(); window.scrollTo(0, 0); }
     catch (err) { restore(); alert(err.message); }
   };
 }
 
 function experienceView(m, body) {
   const sk = m.skills || {};
-  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+  body.innerHTML = `
     <div class="card"><div class="headrow"><h2>Experience</h2><span class="muted">${m.roles.length} jobs · ${m.years ?? "-"} years</span><span class="sp"></span>
       <button class="b" id="edit2">Edit experience</button></div>
       <div class="timeline">${m.roles.map(r => `<div class="job"><h3>${esc(r.title)}<span class="muted" style="font-weight:600"> · ${esc(r.company)}</span></h3>
@@ -747,6 +794,7 @@ function experienceView(m, body) {
 
 let EDIT = null;          // working copy while editing
 function editView(m, body) {
+  if (PG_LOADING) { body.innerHTML = loadingCard("needed to save"); return; }
   if (!PG || !PG.ok) { body.innerHTML = '<div class="card muted">Editing needs team progress (Supabase), which is not available right now.</div>'; return; }
   const pr = m.prefs || {}, sk = m.skills || {}, c = m.contact || {};
   if (!EDIT || EDIT.slug !== m.slug)
@@ -765,7 +813,7 @@ function editView(m, body) {
   const eduRow = (e, i) => `<div class="role" data-e="${i}"><div class="tools"><button class="b2" data-act="edel">Remove</button></div><div class="form">
       <label>School<input data-f="school" value="${esc(e.school)}"></label><label>Degree<input data-f="degree" value="${esc(e.degree)}" placeholder="B.Sc."></label>
       <label>Field<input data-f="field" value="${esc(e.field)}"></label><label>End year<input data-f="end" value="${esc(e.end)}"></label></div></div>`;
-  body.innerHTML = adminBanner(r => r.member === m.slug) + `
+  body.innerHTML = `
     <div class="banner info">Everyone on the team can edit this. Only write what is true: the resumes and letters are built from these facts.</div>
     <div class="card"><h2>Basics</h2><div class="form">
       ${inp("e_head", "Headline", m.headline, true, "Senior Backend Engineer | C# / .NET · Go")}
@@ -816,17 +864,19 @@ function editView(m, body) {
                  roles: EDIT.roles, education: EDIT.education, skills: val("e_skills"), certifications: val("e_certs") },
       prefs: { countries: val("p_countries"), target_titles: val("p_titles"), onsite_ok: val("p_onsite") === "1", home_cities: val("p_home"),
                min_score: val("p_min"), avoid_companies: val("p_avoid"), exclude_words: val("p_excl"), work_auth: val("p_auth") } };
+    if (waitingFor(m.slug).length) { document.getElementById("e_msg").textContent = "A change for this member is still being applied. Wait for it to finish."; return; }
     e.target.disabled = true; document.getElementById("e_msg").innerHTML = spin("Saving (encrypted)...");
     try {
       await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "edit", member: m.slug }, data);
-      EDIT = null; sub = "Overview"; draw();
+      EDIT = null; sub = "Overview"; renderMembers(); draw(); window.scrollTo(0, 0);
     } catch (err) { document.getElementById("e_msg").textContent = err.message; e.target.disabled = false; }
   };
 }
 
 function addMemberView(body) {
+  if (PG_LOADING) { body.innerHTML = loadingCard("needed to save"); return; }
   if (!PG || !PG.ok) { body.innerHTML = '<div class="card muted">Adding members needs team progress (Supabase), which is not available right now.</div>'; return; }
-  body.innerHTML = adminBanner(r => r.action === "add") + `<div class="card"><h2>Add a team member</h2>
+  body.innerHTML = `<div class="card"><h2>Add a team member</h2>
     <p class="muted" style="margin-top:0">Upload their resume. The cloud reads it, scores it, and matches them against the latest scan, usually in 3-5 minutes.
       Then open their Overview and check the profile: unusual resume designs are sometimes read wrong, and everything can be fixed with Edit profile.</p>
     <div class="form">
@@ -840,12 +890,13 @@ function addMemberView(body) {
     if (!name || !f) { msg.textContent = "Name and resume file are required."; return; }
     if (f.size > 1.5e6) { msg.textContent = "That file is over 1.5 MB. Export a smaller PDF."; return; }
     if (DATA.members.some(x => x.name.toLowerCase() === name.toLowerCase())) { msg.textContent = `${name} is already on the team. Use Edit profile instead.`; return; }
+    if (adminState(r => r.action === "add" && String(r.name || "").toLowerCase() === name.toLowerCase()).waiting.length) { msg.textContent = `${name} is already being added.`; return; }
     e.target.disabled = true; msg.innerHTML = spin("Uploading the resume (encrypted)...");
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
       await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "add", name },
                     { name, email: val("a_email"), countries: val("a_countries"), filename: f.name, file_b64: b64 });
-      addMemberView(body);
+      renderMembers(); draw(); window.scrollTo(0, 0);
     } catch (err) { msg.textContent = err.message; e.target.disabled = false; }
   };
 }
@@ -863,7 +914,7 @@ function draw() {
   document.getElementById("addmem").classList.toggle("on", sub === "Add member");
   document.getElementById("who").textContent = sub === "Matches" ? m.name : `${m.name} · ${sub}`;
   document.getElementById("whosub").textContent = [m.headline, m.region && `remote from ${(m.countries || []).join(", ") || m.region}`].filter(Boolean).join(" · ");
-  v.innerHTML = `<div id="body"></div>`;
+  v.innerHTML = `<div id="gb">${adminBanner(r => r.action !== "edit" || r.member === m?.slug)}</div><div id="body"></div>`;
   const body = document.getElementById("body");
   if (sub === "Add member") {
     document.querySelectorAll("#tabs .navitem").forEach(b => b.classList.remove("on"));
@@ -911,9 +962,11 @@ function draw() {
       const save = async el => {
         const k = el.dataset.k, row = el.closest("tr");
         const status = row.querySelector(".pst").value, note = row.querySelector(".pnote").value.trim();
-        el.disabled = true;
-        try { await progressSave(m.slug, byKey[k], status, note); el.style.outline = "2px solid var(--go)"; }
-        catch (err) { alert(err.message); }
+        let who = row.querySelector(".who");
+        if (!who) { who = document.createElement("div"); who.className = "muted who"; row.querySelector(".prog").appendChild(who); }
+        el.disabled = true; who.innerHTML = spin("Saving...");
+        try { await progressSave(m.slug, byKey[k], status, note); who.innerHTML = '<span class="saved-ok">Saved</span>'; }
+        catch (err) { who.innerHTML = `<span class="saved-err">${esc(err.message)}</span>`; }
         el.disabled = false;
       };
       document.querySelectorAll(".pst").forEach(el => el.onchange = () => save(el));
