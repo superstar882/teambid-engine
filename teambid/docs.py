@@ -108,6 +108,9 @@ def run(limit=10, log=print):
                               company=req.get("company") or None, title=req.get("title") or None,
                               polish=False,   # the small CPU model took ~5 min and was always rejected
                               ai=req.get("model") or "haiku")
+            for n in (r.get("resume_ai"), r.get("polish")):
+                if n:
+                    log(f"  {n}")
             out_dir = export.SITE / page / "docs" / rid
             out_dir.mkdir(parents=True, exist_ok=True)
             files = {}
