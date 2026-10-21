@@ -240,7 +240,13 @@ def score_job(job, member, lane_pats, today, facts=None):
             age = (today - dt.date.fromisoformat(posted[:10])).days
         except ValueError:
             age = None
-    if age is not None and age > prefs.get("days", 2):
+    window = max(1, int(prefs.get("days", 2))) - 1          # days=2: posted today or yesterday
+    if age is None and job.get("first_seen"):
+        try:
+            age = (today - dt.date.fromisoformat(job["first_seen"][:10])).days
+        except ValueError:
+            age = None
+    if age is not None and age > window:
         return None, "old"
     reasons = []
     s = 0

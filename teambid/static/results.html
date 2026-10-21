@@ -282,7 +282,7 @@ async function itemFor(slug, key) {
 async function progressSave(slug, r, status, note) {
   const item = await itemFor(slug, r.url_key);
   const entry = { member: slug, job: r.url_key, status, note, by: localStorage.getItem("tb_name") || "", at: new Date().toISOString(),
-                  company: r.company, title: r.title };
+                  company: r.company, title: r.title, url: r.url, posted: r.posted || "" };
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, PG.aes, new TextEncoder().encode(JSON.stringify(entry))));
   const payload = btoa(String.fromCharCode(...iv, ...ct));
@@ -441,7 +441,7 @@ async function appsView(m, body) {
       if (e.member !== m.slug || e.kind) continue;
       const r = byKey[e.job] || {}, old = rows[e.job];
       if (!e.status || e.status === "skipped") { if (old && old.live) delete rows[e.job]; continue; }
-      rows[e.job] = { company: e.company || r.company || old?.company, title: e.title || r.title || old?.title, url: r.url || old?.url,
+      rows[e.job] = { company: e.company || r.company || old?.company, title: e.title || r.title || old?.title, url: r.url || e.url || old?.url,
                       status: e.status, fit: old?.fit, note: e.note || "", by: e.by || "", when: (e.saved_at || e.at || "").slice(0, 10), live: true };
     }
   }

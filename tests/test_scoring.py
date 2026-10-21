@@ -52,5 +52,14 @@ class FactsTest(unittest.TestCase):
         self.assertTrue(f["full_remote"])
 
 
+class PostedWindowTest(unittest.TestCase):
+    def test_two_days_means_today_and_yesterday(self):
+        m = {**MEMBER, "prefs": {**MEMBER["prefs"], "days": 2}}
+        f = {"must": ["Python", "Go"], "years": 2}
+        for posted, ok in (("2026-10-21", True), ("2026-10-20", True), ("2026-10-19", False)):
+            sc, why = M.score_job(job("Backend Engineer", posted=posted), m, LANES, TODAY, f)
+            self.assertEqual(sc is not None, ok, posted)
+
+
 if __name__ == "__main__":
     unittest.main()
