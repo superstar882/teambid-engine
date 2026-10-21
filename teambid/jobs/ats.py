@@ -55,8 +55,23 @@ def iso(ts):
             d = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
         return d.date().isoformat()
     except (ValueError, OverflowError, OSError):
-        m = re.match(r"(\d{4}-\d{2}-\d{2})", str(ts))
-        return m[1] if m else None
+        s = str(ts).strip()
+        m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
+        if m:
+            return m[1]
+        try:                                     # RSS feeds: "Tue, 21 Oct 2026 09:15:00 +0200"
+            from email.utils import parsedate_to_datetime
+            d = parsedate_to_datetime(s)
+            return (d.astimezone(dt.timezone.utc) if d.tzinfo else d).date().isoformat()
+        except (TypeError, ValueError, IndexError):
+            pass
+        m = re.match(r"(\d{1,2})[./](\d{1,2})[./](\d{4})$", s)       # "21.10.2026" (day first, European)
+        if m:
+            try:
+                return dt.date(int(m[3]), int(m[2]), int(m[1])).isoformat()
+            except ValueError:
+                return None
+        return None
 
 
 # job systems that say Hybrid / On-site outright: the tag makes the matcher treat the job as not remote
@@ -121,9 +136,18 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
     elif ats == "bamboohr":
         for j in (get(f"https://{s}.bamboohr.com/careers/list") or {}).get("result", []):
             loc = j.get("location") or {}
-            jobs.append({"title": j.get("jobOpeningName", ""), "location": ("Remote " if j.get("isRemote") else "") +
-                         ", ".join(filter(None, [loc.get("city"), loc.get("state")])),
-                         "url": f"https://{s}.bamboohr.com/careers/{j.get('id')}", "posted": None})
+            row = {"title": j.get("jobOpeningName", ""), "location": ("Remote " if j.get("isRemote") else "") +
+                   ", ".join(filter(None, [loc.get("city"), loc.get("state")])),
+                   "url": f"https://{s}.bamboohr.com/careers/{j.get('id')}", "posted": None}
+            if TECH_TITLE.search(row["title"]):
+                # the list has no date: the job's detail gives the posting date, the full description and the country
+                op = ((get(f"https://{s}.bamboohr.com/careers/{j.get('id')}/detail") or {}).get("result") or {}).get("jobOpening") or {}
+                row["posted"] = iso(op.get("datePosted"))
+                row["description"] = _plain(op.get("description"))
+                country = (op.get("atsLocation") or {}).get("country")
+                if country and country not in row["location"]:
+                    row["location"] = (row["location"] + ", " if row["location"] else "") + country
+            jobs.append(row)
     elif ats == "personio":
         jobs = _personio(s)
     elif ats == "teamtailor":
