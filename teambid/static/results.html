@@ -210,6 +210,12 @@ button.b2.danger { color:var(--bad); border-color:var(--bad2); } button.b2.dange
   </main>
 </div>
 <script>
+function fetchT(url, opts = {}, ms = 25000) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
+  return fetch(url, { ...opts, signal: ctl.signal }).finally(() => clearTimeout(timer))
+    .catch(e => { throw new Error(e.name === "AbortError" ? `no answer from ${new URL(url, location.href).host} after ${ms / 1000} s (network or VPN?)` :
+                                 `couldn't reach ${new URL(url, location.href).host} (${e.message})`); });
+}
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 let DATA, cur, sub = "Matches";
@@ -231,7 +237,7 @@ function sbHeaders(extra) { return { apikey: PG.cfg.key, Authorization: "Bearer 
 async function progressLoad() {
   try {
     for (let off = 0; ; off += 1000) {
-      const r = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}?team=eq.${encodeURIComponent(PG.cfg.team)}&select=item,payload,created_at&order=id.asc`,
+      const r = await fetchT(`${PG.cfg.url}/rest/v1/${PG.cfg.table}?team=eq.${encodeURIComponent(PG.cfg.team)}&select=item,payload,created_at&order=id.asc`,
                             { headers: sbHeaders({ Range: `${off}-${off + 999}` }) });
       if (!r.ok) throw new Error("progress server answered " + r.status);
       const rows = await r.json();
@@ -258,7 +264,7 @@ async function progressSave(slug, r, status, note) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, PG.aes, new TextEncoder().encode(JSON.stringify(entry))));
   const payload = btoa(String.fromCharCode(...iv, ...ct));
-  const res = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
+  const res = await fetchT(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
                                                                      body: JSON.stringify({ team: PG.cfg.team, item, payload }) });
   if (!res.ok) throw new Error("Save failed (" + res.status + ")");
   PG.latest[item] = { ...entry, saved_at: entry.at };
@@ -267,7 +273,7 @@ async function pgPut(kind, key, entry) {
   const item = await itemFor(kind, key);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const ct = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, PG.aes, new TextEncoder().encode(JSON.stringify(entry))));
-  const res = await fetch(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
+  const res = await fetchT(`${PG.cfg.url}/rest/v1/${PG.cfg.table}`, { method: "POST", headers: sbHeaders({ Prefer: "return=minimal" }),
                           body: JSON.stringify({ team: PG.cfg.team, item, payload: btoa(String.fromCharCode(...iv, ...ct)) }) });
   if (!res.ok) throw new Error("Save failed (" + res.status + ")");
   PG.latest[item] = { ...entry, saved_at: entry.at };
@@ -285,9 +291,13 @@ async function decrypt(blob, password) {
 }
 let PW = "";
 // the page data, fetched past GitHub's cache (it keeps data.enc.json up to ~10 minutes otherwise)
-async function loadData(pw) {
-  const blob = await (await fetch(`data.enc.json?v=${Date.now()}`, { cache: "no-store" })).json();
-  return decrypt(blob, pw);
+async function loadData(pw, say = () => {}) {
+  say("Downloading team data...");
+  const r = await fetchT(`data.enc.json?v=${Date.now()}`, { cache: "no-store" }, 30000);
+  if (!r.ok) throw new Error(`the page data didn't load (${r.status}). Try again in a minute.`);
+  const blob = await r.json();
+  say("Decrypting...");
+  try { return await decrypt(blob, pw); } catch (e) { throw new Error("Wrong password."); }
 }
 function renderMembers() {
   document.getElementById("meta").textContent = `last scan ${DATA.last_scan || "-"} · updated ${DATA.generated}` +
@@ -299,14 +309,20 @@ function renderMembers() {
   document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); });
 }
 async function unlock(pw, remember) {
-  try { DATA = await loadData(pw); } catch (e) { throw new Error("Wrong password."); }
+  const say = t => { const el = document.getElementById("err"); el.className = "muted"; el.textContent = t; };
+  DATA = await loadData(pw, say);
   PW = pw;
   (remember ? localStorage : sessionStorage).setItem("tb_pw", pw);
-  await progressInit(pw);
+  say("");
   document.getElementById("lock").classList.add("hide"); document.getElementById("app").classList.remove("hide");
   renderMembers();
   pick(location.hash.slice(1).split("/")[0]);
-  watchAdmin();
+  // team progress (statuses, documents, team changes) fills in when it arrives; a slow connection can't block the page
+  progressInit(pw).catch(e => { PG = PG || {}; PG.ok = false; PG.err = e.message; }).finally(() => {
+    renderMembers();
+    if (!["Edit", "Add member"].includes(sub)) draw();
+    watchAdmin();
+  });
 }
 // reload the page data in place after the cloud applied a change (the new site can take a minute to go live)
 async function refreshData(tries = 8) {
@@ -348,7 +364,7 @@ document.getElementById("f").onsubmit = async e => {
   e.preventDefault(); document.getElementById("err").textContent = "";
   const restore = busyBtn(e.target.querySelector("button"), "Opening");
   try { await unlock(document.getElementById("pw").value, document.getElementById("remember").checked); }
-  catch (err) { document.getElementById("err").textContent = err.message; }
+  catch (err) { const el = document.getElementById("err"); el.className = "bad"; el.textContent = err.message; }
   restore();
 };
 document.getElementById("logout").onclick = () => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); location.reload(); };
@@ -410,7 +426,7 @@ function htmlText(h) {
   return (doc.body.textContent || "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
 }
 async function getJSON(u) {
-  const r = await fetch(u, { headers: { Accept: "application/json" } });
+  const r = await fetchT(u, { headers: { Accept: "application/json" } });
   if (!r.ok) throw new Error("the job site answered " + r.status);
   return r.json();
 }
@@ -459,7 +475,7 @@ function docsFor(slug) {
   return out;
 }
 async function docDownload(rid, key, meta) {
-  const r = await fetch(`docs/${rid}/${key}.enc`, { cache: "no-store" });
+  const r = await fetchT(`docs/${rid}/${key}.enc`, { cache: "no-store" });
   if (!r.ok) throw new Error("The file isn't live yet. Try again in a minute.");
   const raw = new Uint8Array(await r.arrayBuffer());
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, PG.aes, raw.slice(12));
@@ -562,7 +578,7 @@ async function docsView(m, body) {
                                    by: localStorage.getItem("tb_name") || "", at: new Date().toISOString() });
       // start the cloud build now (Supabase function -> GitHub); if it isn't set up, the 15-minute check still picks it up
       let quick = false;
-      try { quick = (await fetch(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" })).ok; } catch (_) {}
+      try { quick = (await fetchT(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" })).ok; } catch (_) {}
       msg.textContent = quick ? "Sent. Usually ready in about 5 minutes." : "Sent. Ready in about 15-30 minutes.";
       document.getElementById("d_text").value = "";
       list();
@@ -645,7 +661,7 @@ async function putBlob(kind, rid, meta, obj) {
   for (let n = 0; n < parts.length; n++) await pgPut(kind + "part", `${rid}|${n}`, { kind: kind + "part", rid, n, text: parts[n] });
   await pgPut(kind + "req", rid, { ...meta, kind: kind + "req", rid, parts: parts.length, by: localStorage.getItem("tb_name") || "",
                                    at: new Date().toISOString() });
-  try { await fetch(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" }); } catch (_) {}
+  try { await fetchT(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" }); } catch (_) {}
   watchAdmin();
 }
 function adminState(match) {
@@ -912,7 +928,10 @@ function draw() {
 // remembered password: open automatically (last, so everything above is defined)
 if (saved) {
   const restore = busyBtn(document.querySelector("#f button"), "Opening");
-  unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); }).finally(restore);
+  unlock(saved, !!localStorage.getItem("tb_pw")).catch(err => {
+    if (err.message === "Wrong password.") { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); }
+    const el = document.getElementById("err"); el.className = "bad"; el.textContent = err.message;
+  }).finally(restore);
 }
 </script>
 </body>
