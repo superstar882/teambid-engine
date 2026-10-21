@@ -149,7 +149,12 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             j.setdefault("source", "Company board")
         all_jobs = list(board_jobs)
         for name, fn in (("Himalayas", lambda: feeds.himalayas(queries)), ("RemoteOK", feeds.remoteok),
-                         ("Remotive", feeds.remotive), ("HN Who is hiring", feeds.hackernews)):
+                         ("Remotive", feeds.remotive), ("HN Who is hiring", feeds.hackernews),
+                         # sources for members outside the US (checked free + allowed, 2026-10-21)
+                         ("Himalayas by country", lambda: feeds.himalayas_countries(queries)), ("Jobicy", feeds.jobicy),
+                         ("4dayweek", feeds.fourdayweek), ("Working Nomads", feeds.workingnomads), ("Get on Board", feeds.getonboard),
+                         ("Djinni", feeds.djinni), ("Jobindex DK", feeds.jobindex_dk), ("JobTech SE", feeds.jobtech_se),
+                         ("GitHub BR", feeds.github_br), ("We Work Remotely", feeds.weworkremotely)):
             t1 = time.monotonic()
             try:
                 js = fn()
@@ -166,6 +171,15 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             n = storage.upsert_jobs(con, all_jobs, day)
         timing["store"] = time.monotonic() - t1
         log(f"stored {n:,} open jobs")
+        # feeds send the job text with the job: keep it, so the location checks can read it without another request
+        with storage.connect() as con:
+            texts = {storage.url_key(j["url"]): j["description"] for j in all_jobs if j.get("description") and j.get("url")}
+            keys = list(texts)
+            for i in range(0, len(keys), 500):
+                part = keys[i:i + 500]
+                for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
+                    storage.save_jd(con, r["id"], texts[r["url_key"]])
+        log(f"kept the text of {len(texts):,} feed jobs")
         try:
             from . import company
             with storage.connect() as con:
