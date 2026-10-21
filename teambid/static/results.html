@@ -283,12 +283,13 @@ async function decrypt(blob, password) {
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: b64(blob.iv) }, key, b64(blob.data));
   return JSON.parse(new TextDecoder().decode(plain));
 }
-async function unlock(pw, remember) {
-  const blob = await (await fetch("data.enc.json", { cache: "no-store" })).json();
-  try { DATA = await decrypt(blob, pw); } catch (e) { throw new Error("Wrong password."); }
-  (remember ? localStorage : sessionStorage).setItem("tb_pw", pw);
-  await progressInit(pw);
-  document.getElementById("lock").classList.add("hide"); document.getElementById("app").classList.remove("hide");
+let PW = "";
+// the page data, fetched past GitHub's cache (it keeps data.enc.json up to ~10 minutes otherwise)
+async function loadData(pw) {
+  const blob = await (await fetch(`data.enc.json?v=${Date.now()}`, { cache: "no-store" })).json();
+  return decrypt(blob, pw);
+}
+function renderMembers() {
   document.getElementById("meta").textContent = `last scan ${DATA.last_scan || "-"} · updated ${DATA.generated}` +
     (PG ? (PG.ok ? " · team progress on" : ` · progress unavailable (${PG.err})`) : "");
   const initials = n => String(n || "?").split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("");
@@ -296,7 +297,52 @@ async function unlock(pw, remember) {
       <span class="av">${esc(initials(m.name))}</span><span class="nm"><b>${esc(m.name)}</b><small>${esc(m.headline || m.level || "")}</small></span>
       <span class="count" title="matches">${m.matches.length}</span></button>`).join("");
   document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); });
+}
+async function unlock(pw, remember) {
+  try { DATA = await loadData(pw); } catch (e) { throw new Error("Wrong password."); }
+  PW = pw;
+  (remember ? localStorage : sessionStorage).setItem("tb_pw", pw);
+  await progressInit(pw);
+  document.getElementById("lock").classList.add("hide"); document.getElementById("app").classList.remove("hide");
+  renderMembers();
   pick(location.hash.slice(1).split("/")[0]);
+  watchAdmin();
+}
+// reload the page data in place after the cloud applied a change (the new site can take a minute to go live)
+async function refreshData(tries = 8) {
+  const before = DATA.generated, slug = cur?.slug;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const d = await loadData(PW);
+      if (d.generated !== before) {
+        DATA = d; renderMembers();
+        if (sub === "Edit") { cur = DATA.members.find(x => x.slug === slug) || cur; renderMembers();
+          document.querySelectorAll("#tabs .navitem").forEach(b => b.classList.toggle("on", b.dataset.id === cur?.id)); return true; }
+        // just added someone: open their Overview so the profile gets checked
+        const added = adminState(r => r.action === "add").finished.find(d => d.ok && DATA.members.some(x => x.slug === d.slug));
+        let m = sub === "Add member" && added ? DATA.members.find(x => x.slug === added.slug) : DATA.members.find(x => x.slug === slug);
+        if (sub === "Add member") sub = m ? "Overview" : "Add member";
+        if (!m) { m = DATA.members[0]; if (sub !== "Add member") sub = "Matches"; }   // the member was deleted
+        pick(m?.id);
+        return true;
+      }
+    } catch (_) {}
+    await new Promise(r => setTimeout(r, 20000));
+  }
+  return false;
+}
+// while team changes are waiting: check every 15 s; when one finishes, pull the new data so nobody has to reload
+let WATCH = null;
+function watchAdmin() {
+  if (WATCH || !PG || !PG.ok || !adminState(() => true).waiting.length) return;
+  WATCH = setInterval(async () => {
+    const before = adminState(() => true).waiting.map(r => r.rid);
+    await progressLoad();
+    const still = new Set(adminState(() => true).waiting.map(r => r.rid));
+    if (!still.size) { clearInterval(WATCH); WATCH = null; }
+    if (before.some(r => !still.has(r))) { if (!(await refreshData())) draw(); }
+    else if (sub !== "Edit") draw();
+  }, 15000);
 }
 document.getElementById("f").onsubmit = async e => {
   e.preventDefault(); document.getElementById("err").textContent = "";
@@ -600,6 +646,7 @@ async function putBlob(kind, rid, meta, obj) {
   await pgPut(kind + "req", rid, { ...meta, kind: kind + "req", rid, parts: parts.length, by: localStorage.getItem("tb_name") || "",
                                    at: new Date().toISOString() });
   try { await fetch(`${PG.cfg.url}/rest/v1/rpc/teambid_kick`, { method: "POST", headers: sbHeaders(), body: "{}" }); } catch (_) {}
+  watchAdmin();
 }
 function adminState(match) {
   const reqs = {}, done = {};
@@ -619,7 +666,7 @@ function adminBanner(match) {
            r.action === "delete" ? "Deleting " + (r.name || "this member") : "Saving changes")}${r.by ? " (by " + esc(r.by) + ")" : ""}.
            The cloud is updating matches and this page, usually 3-5 minutes.</div>`).join("") +
     st.finished.map(d => `<div class="banner ${d.ok ? "ok" : "err"}">${esc(d.ok ? "Done: " : "Couldn't apply: ")}${esc(d.msg || "")}
-           ${d.ok ? '<button class="b2" onclick="location.reload()">Reload</button>' : ""}</div>`).join("");
+           ${d.ok && !DATA.members.some(x => x.slug === d.slug) && d.action !== "delete" ? '<button class="b2" onclick="location.reload()">Reload</button>' : ""}</div>`).join("");
 }
 const val = id => (document.getElementById(id)?.value || "").trim();
 
