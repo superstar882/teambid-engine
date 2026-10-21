@@ -220,6 +220,23 @@ def pull(password=None, force=False, log=print):
     return {"pulled": True, "version": ver}
 
 
+def _keep_daily_copy(rp, f, log, keep=3):
+    """Besides the live copy, keep one dated copy per day (the last `keep` days), so a bad run can be rolled back:
+    gh release download workspace -p workspace-YYYY-MM-DD.enc, then upload it as workspace.enc."""
+    name = f"workspace-{config.today()}.enc"
+    try:
+        assets = _gh("api", f"repos/{rp}/releases/tags/{TAG}", "--jq", ".assets[].name").stdout.split()
+        if name not in assets:
+            dated = Path(f).with_name(name)
+            dated.write_bytes(Path(f).read_bytes())
+            _gh("release", "upload", TAG, "-R", rp, str(dated))
+            assets.append(name)
+        for old in sorted(a for a in assets if a.startswith("workspace-") and a.endswith(".enc"))[:-keep]:
+            _gh("release", "delete-asset", TAG, old, "-R", rp, "-y", check=False)
+    except Exception as e:                       # a backup problem must never fail the run
+        log(f"daily copy skipped: {e}")
+
+
 def push(password=None, force=False, log=print):
     rp = repo()
     if not in_runner():
@@ -236,6 +253,8 @@ def push(password=None, force=False, log=print):
                 "Encrypted TeamBid workspace (AES-256-GCM). Unreadable without the team password.", str(f))
         else:
             _gh("release", "upload", TAG, "-R", rp, str(f), "--clobber")
+        if in_runner():
+            _keep_daily_copy(rp, f, log)
     ver = remote_version(rp)
     if not in_runner():
         _save_state(version=ver, pending=False, pushed_at=config.now().isoformat(timespec="seconds"))

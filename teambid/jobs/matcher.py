@@ -179,6 +179,8 @@ def _lane_pattern(lanes):
 
 
 def title_level(title):
+    # "Member of Technical Staff" is a generic engineer title at every level, not the Staff level
+    title = re.sub(r"(?i)\b(member of )?technical staff\b", "", title)
     return [k for k, p in LEVEL_WORDS.items() if p.search(title)]
 
 
@@ -202,7 +204,9 @@ def place_ok(loc, title, prefs):
     return False, "place"
 
 
-def score_job(job, member, lane_pats, today):
+def score_job(job, member, lane_pats, today, facts=None):
+    """facts: what the job's description (and form) says, from facts.py. With facts, any engineering title can match
+    on skills; without them the title must fit the member's lanes or target titles (old behaviour)."""
     prefs, prof = member["prefs"], member["profile"]
     title = job["title"]
     if NON_ENG.search(title) and not any(re.search(rf"(?i)\b{re.escape(w)}\b", title) for w in prefs.get("include_words", [])):
@@ -217,7 +221,9 @@ def score_job(job, member, lane_pats, today):
     lane_hit = next(((i, l) for i, l, p in lane_pats if p.search(title)), None)
     tt = [t for t in prefs.get("target_titles", []) if t and t.lower() in title.lower()]
     if not lane_hit and not tt:
-        return None, "title"
+        from .facts import is_engineering
+        if not (facts and is_engineering(title)):
+            return None, "title"
     lv = title_level(title)
     blocked = BLOCK_BY_LEVEL.get(prefs.get("level", "mid"), set())
     if "intern" in lv and prefs.get("level") not in ("entry",):
@@ -281,6 +287,38 @@ def score_job(job, member, lane_pats, today):
     if any(c and c.lower() in job["company"].lower() for c in prefs.get("target_companies", [])):
         s += 10
         reasons.append("target company")
+    if facts:
+        # what the description requires vs. what this member's resume shows; the title counts less once that's known
+        s = int(s * 0.55)
+        must = facts.get("must") or []
+        got = [k for k in must if k in have]
+        miss = [k for k in must if k not in have]
+        if must:
+            cov = len(got) / len(must)
+            if len(must) >= 3 and cov < 0.4:
+                return None, "skills"
+            s += int(40 * cov) - 12
+            reasons.append(f"has {len(got)} of {len(must)} required skills")
+            if miss:
+                reasons.append("missing: " + ", ".join(miss[:5]))
+        nice = [k for k in facts.get("nice") or [] if k in have]
+        if nice:
+            s += min(5, len(nice))
+        req, yrs = facts.get("years"), member["profile"].get("years_experience", 0) or 0
+        if req:
+            if yrs + 0.5 >= req:
+                s += 4
+                reasons.append(f"asks {req}+ years: you have {yrs:g}")
+            elif req - yrs >= 3:
+                return None, "years"
+            else:
+                s -= int(6 * (req - yrs))
+                reasons.append(f"asks {req}+ years, you have {yrs:g}")
+    elif not (lane_hit or tt):
+        return None, "title"
+    if re.search(r"(?i)^(djinni employer|danish employer|empresa \(brasil\)|latam company)$", job["company"] or ""):
+        s -= 5                                  # the feed doesn't name the company: rank fully described jobs first
+        reasons.append("company not named in the feed")
     return max(0, min(100, s + 20)), reasons
 
 
@@ -297,55 +335,98 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     lane_pats = _lane_pattern(lanes)
     reasons = Counter()
     hits, rejected = [], set()          # rejected: seen in this scan and failed a real test (not just the date window)
+    from . import facts as F
+    known = F.load(con)                  # description facts, computed once per scan for every engineering job
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
-        sc, why = score_job(job, member, lane_pats, today)
+        sc, why = score_job(job, member, lane_pats, today, known.get(job["id"]))
         if sc is None:
             reasons[why] += 1
             if why != "old":
                 rejected.add(job["id"])
             continue
-        hits.append((sc, why, job))
+        hits.append([sc, why, job])
     hits.sort(key=lambda x: -x[0])
-    # dedupe the same role listed on several boards/feeds
-    seen, uniq = set(), []
-    for sc, why, job in hits:
-        k = (re.sub(r"\W", "", job["company"].lower()), re.sub(r"\W", "", job["title"].lower()))
-        if k in seen:
-            reasons["duplicate"] += 1
-            continue
-        seen.add(k)
-        uniq.append([sc, why, job])
-    # job-description coverage for the top matches (cached in the jd table), plus a meaning match from local
-    # embeddings when Ollama runs: similarity between the member's strongest bullets and the job post
-    have = set(member["profile"].get("skills", {}).get("all", []))
-    prof_text = " ".join(b["text"] for r in member["profile"].get("roles", [])[:3] for b in r["bullets"][:4])[:2000]
-    prof_vec = local_ai.embed([prof_text], "document") if prof_text else None
+    uniq = _dedupe(hits, reasons)
     allowed = set(norm_countries(prefs.get("countries")) or ["US"])
     us_ok = "US" in allowed
 
     def unknown_place(job):          # "Remote" with no country, region or "worldwide"
         t = f"{job.get('location') or ''} {job['title']}"
         return not any(p.search(t) for p in COUNTRY.values()) and not WORLDWIDE.search(t)
-    # members who can't work in the US: every "Remote"-only job must show it is open to them, so read those posts too
-    checks = uniq[:enrich] + ([it for it in uniq[enrich:] if unknown_place(it[2])][:geo_check] if not us_ok else [])
-    fetched = _prefetch_jds(con, [it[2] for it in checks])
+    # jobs whose description didn't come with the board list (Workday, SmartRecruiters, ...): read the top ones now
+    need = [it for it in uniq[:enrich * 4] if it[2]["id"] not in known]
+    if not us_ok:
+        need += [it for it in uniq[enrich * 4:] if it[2]["id"] not in known and unknown_place(it[2])][:geo_check]
+    fetched = _prefetch_jds(con, [it[2] for it in need])
+    new_facts = []
+    for it in need:
+        text = storage.get_jd(con, it[2]["id"])
+        if text:
+            f = F.analyze(text, it[2]["title"])
+            known[it[2]["id"]] = f
+            new_facts.append((it[2]["id"], f))
+            sc, why = score_job(it[2], member, lane_pats, today, f)          # score again, now with the description
+            if sc is None:
+                reasons[why] += 1
+                rejected.add(it[2]["id"])
+                it[0] = -1
+            else:
+                it[0], it[1] = sc, why
+    if new_facts:
+        F.save(con, new_facts, day)
+    uniq = sorted([it for it in uniq if it[0] >= 0], key=lambda x: -x[0])
+    # application forms of the top candidates (Greenhouse API, Lever /apply; Ashby forbids it in robots.txt)
+    from . import forms
+    form_jobs = [it[2] for it in uniq[:40] if it[2]["id"] in known and "form" not in known[it[2]["id"]]
+                 and re.search(r"greenhouse\.io|lever\.co|apply\.workable\.com", it[2]["url"])]
+    if form_jobs:
+        from concurrent.futures import ThreadPoolExecutor
+        gh = [j for j in form_jobs if "greenhouse" in j["url"] or "workable" in j["url"]]
+        lv = [j for j in form_jobs if "lever.co" in j["url"]]
+        with ThreadPoolExecutor(8) as ex:
+            got = list(zip(gh, ex.map(lambda j: forms.read(j["url"]), gh)))
+        got += [(j, forms.read(j["url"])) for j in lv]               # Lever: one request a second
+        upd = []
+        for j, qs in got:
+            if qs is not None:
+                known[j["id"]]["form"] = forms.analyze(qs)
+                upd.append((j["id"], known[j["id"]]))
+        if upd:
+            F.save(con, upd, day)
     offices = {}
     if not us_ok:
         from . import company
         offices = company.lookup(con, day)
-    for idx, item in enumerate(checks):
+    langs = {str(x).split()[0].title() for x in member["profile"].get("languages", []) or []} | {"English"}
+    prof_text = " ".join(b["text"] for r in member["profile"].get("roles", [])[:3] for b in r["bullets"][:4])[:2000]
+    prof_vec = local_ai.embed([prof_text], "document") if prof_text else None
+    for idx, item in enumerate(uniq):
         sc, why, job = item
-        text = storage.get_jd(con, job["id"]) or ""
+        f = known.get(job["id"]) or {}
+        form = f.get("form") or {}
         loc = job.get("location") or ""
-        if text and place_ok(loc, job["title"], prefs)[1] == "remote" and IN_OFFICE.search(text) and not FULL_REMOTE.search(text):
-            item[0] = 0                       # listed as remote, but the post says hybrid / in office: drop it
+        if f.get("in_office") and not f.get("full_remote") and place_ok(loc, job["title"], prefs)[1] == "remote":
+            item[0] = 0                       # listed as remote, but the post says hybrid / in office
             why.append("job post says hybrid / in office, not remote")
             continue
-        ok_here = open_to(text, allowed) if text else ""
-        blocked = [c for c, pat in RESTRICT.items() if c not in allowed and pat.search(text)]
-        if not us_ok and "US" not in blocked and US_ONLY.search(text):
+        if form.get("office") and not prefs.get("onsite_ok") and place_ok(loc, job["title"], prefs)[1] == "remote":
+            item[0] = 0                       # listed as remote, but the application form asks about office days
+            why.append(f"application form asks: {form['office']}")
+            continue
+        regions = set(f.get("regions") or [])
+        ok_here = next((c for c in allowed if c in regions or f"{c}_tz" in regions), "") or ("worldwide" if "worldwide" in regions else "")
+        blocked = [c for c in (f.get("restrict") or []) if c not in allowed]
+        if not us_ok and "US" not in blocked and f.get("us_only"):
             blocked.append("US")
+        form_block = [c for c in form.get("restrict") or [] if c not in allowed]
+        if not us_ok and form.get("us_only") and "US" not in form_block:
+            form_block.append("US")
+        if form_block and not (set(form.get("restrict") or []) & allowed):
+            item[0] = 0
+            q = next((x for x in form.get("questions", []) if any(COUNTRY[c].search(x) for c in form_block if c in COUNTRY)), "")
+            why.append(f"application form asks: {q.split(' [')[0][:110]}" if q else f"application form limits it to {', '.join(form_block)}")
+            continue
         if blocked:
             if ok_here:                       # "US or Europe": keep, but say it
                 item[0] = max(0, item[0] - 10)
@@ -354,7 +435,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                 item[0] = 0
                 why.append(f"post limits it to people already allowed to work in: {', '.join(blocked)}")
                 continue
-            if NO_SPONSOR.search(text):
+            if f.get("no_sponsor"):
                 why.append("says no visa sponsorship")
         if not us_ok and unknown_place(job):
             if ok_here:
@@ -362,27 +443,26 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                 why.append(f"post says open to {ok_here}")
             else:
                 offs = (offices.get(job["company"]) or {}).get("offices", [])
-                us_offices = us_centred(offs)
-                if us_offices:
+                if us_centred(offs):
                     item[0] = 0
-                    why.append("post doesn't say it's open outside the US and every office is in the US")
+                    why.append("post doesn't say it's open outside the US and most offices are in the US")
                     continue
                 item[0] = max(0, item[0] - 15)
                 why.append("post doesn't say which countries can apply" + (f" (offices: {', '.join(offs[:2])})" if offs else ""))
-        if idx < enrich and text:
-            need = SK.find(text, with_counts=True)
-            if need:
-                cov = sum(1 for k in need if k in have) / len(need)
-                item[0] = max(0, min(100, int(item[0] + (cov - 0.5) * 30)))     # on top of the checks above, not the raw score
-                why.append(f"description coverage {cov:.0%} of {len(need)} skills")
-            if prof_vec:
+        need_lang = [l for l in form.get("languages") or [] if l not in langs]
+        if need_lang:
+            item[0] = max(0, item[0] - 20)
+            why.append("application form asks for fluent " + ", ".join(need_lang))
+        if idx < enrich and prof_vec:
+            text = storage.get_jd(con, job["id"])
+            if text:
                 qv = local_ai.embed([text[:2000]], "query")
                 if qv:
                     sim = local_ai.cosine(prof_vec[0], qv[0])
                     item[0] = max(0, min(100, int(item[0] + (sim - 0.55) * 40)))
                     why.append(f"meaning match {sim:.2f}")
     if fetched:
-        log(f"  {member['name']}: read {fetched} job posts to check location rules")
+        log(f"  {member['name']}: read {fetched} job posts")
     stamp = str(today)
     new = best = 0
     min_score = int(prefs.get("min_score", 40))
@@ -414,6 +494,46 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     write_member_report(con, member, stamp, reasons, total)
     log(f"  {member['name']}: {total} matches ({new} new, {best} best)")
     return {"name": member["name"], "matches": total, "new": new, "best": best, "filtered": dict(reasons)}
+
+
+CO_SUFFIX = re.compile(r"(?i)\b(inc|llc|ltd|limited|gmbh|ag|sa|bv|plc|corp|corporation|co|company|group|holdings?|technologies|"
+                       r"technology|labs?|careers?|jobs|hiring|hq|io|ai|app|software|systems)\b")
+TITLE_NOISE = re.compile(r"(?i)\(.*?\)|\[.*?\]|\b(remote|hybrid|on-?site|anywhere|worldwide|full[- ]?time|contract|m/f/d|f/m/d|"
+                         r"w/m/d|all genders)\b")
+
+
+TECH_ABBR = {"AI", "ML", "QA", "UX", "UI", "BI", "IT", "HR", "PM", "VR", "AR", "DB", "OS", "CV", "DX", "GO"}
+
+
+def _drop_place_tail(title):
+    """'Software Engineer, Payments - Remote, US' -> 'Software Engineer, Payments': only location / work-mode tails go."""
+    parts = re.split(r"\s*[-–|,/]\s*", title)
+    while len(parts) > 1 and (not parts[-1].strip() or REMOTE.search(parts[-1])
+                              or (len(parts[-1]) < 30 and any(p.search(parts[-1]) for p in COUNTRY.values()))
+                              or US_PLACE.search(parts[-1]) or (re.fullmatch(r"[A-Z]{2}", parts[-1].strip())
+                                                                and parts[-1].strip() not in TECH_ABBR)):
+        parts.pop()
+    return " ".join(parts)
+
+
+def dedupe_key(company, title):
+    c = re.sub(r"[^a-z0-9]", "", CO_SUFFIX.sub("", (company or "").lower()))
+    c = re.sub(r"(careers?|jobs|hiring|hq|talent|recruiting|inc|ltd|gmbh|group)$", "", c) or c   # "bjakcareer" -> "bjak"
+    t = re.sub(r"[^a-z0-9]", "", TITLE_NOISE.sub("", _drop_place_tail(title or "").lower())) or re.sub(r"[^a-z0-9]", "", (title or "").lower())
+    return c[:12], t
+
+
+def _dedupe(hits, reasons):
+    """Keep the best-scoring copy of a role listed on several boards, feeds or locations."""
+    seen, out = set(), []
+    for item in hits:
+        k = dedupe_key(item[2]["company"], item[2]["title"])
+        if k in seen:
+            reasons["duplicate"] += 1
+            continue
+        seen.add(k)
+        out.append(item)
+    return out
 
 
 def match_all(days=None, log=print):

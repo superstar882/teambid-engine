@@ -21,7 +21,8 @@ UA = {"User-Agent": config.USER_AGENT, "Accept": "application/json"}
 WD_H = {"User-Agent": config.USER_AGENT, "Accept": "application/json", "Content-Type": "application/json", "Accept-Language": "en-US"}
 ICIMS_H = {"User-Agent": config.USER_AGENT, "Accept": "text/html", "Accept-Language": "en-US"}
 TIMEOUT = (5, 20)
-SYSTEMS = ("greenhouse", "ashby", "lever", "smartrecruiters", "workable", "recruitee", "breezy", "bamboohr", "icims", "workday")
+SYSTEMS = ("greenhouse", "ashby", "lever", "smartrecruiters", "workable", "recruitee", "breezy", "bamboohr", "icims", "workday",
+           "personio", "teamtailor", "pinpoint")
 TECH_TITLE = re.compile(r"(?i)\b(engineer|developer|programmer|software|data|machine learning|ml|ai|scientist|analyst|devops|sre|"
                         r"architect|platform|cloud|security|qa|sdet|mobile|ios|android|frontend|backend|full[- ]?stack|web)\b")
 BLOCKED = {}
@@ -67,9 +68,10 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
     s, jobs = slug, []
     company = slug.split("|")[0].replace("-", " ").replace("_", " ").title()
     if ats == "greenhouse":
-        for j in (get(f"https://boards-api.greenhouse.io/v1/boards/{s}/jobs") or {}).get("jobs", []):
+        for j in (get(f"https://boards-api.greenhouse.io/v1/boards/{s}/jobs", params={"content": "true"}) or {}).get("jobs", []):
             jobs.append({"title": j.get("title", ""), "location": (j.get("location") or {}).get("name", ""),
-                         "url": j.get("absolute_url"), "posted": iso(j.get("first_published") or j.get("updated_at"))})
+                         "url": j.get("absolute_url"), "posted": iso(j.get("first_published") or j.get("updated_at")),
+                         "description": _plain(_plain(j.get("content")))})          # content is escaped HTML
     elif ats == "ashby":
         for j in (get(f"https://api.ashbyhq.com/posting-api/job-board/{s}") or {}).get("jobs", []):
             # Ashby sets isRemote=true on Hybrid jobs too; workplaceType is the real answer when present
@@ -77,14 +79,22 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
             remote = wt == "Remote" if wt else bool(j.get("isRemote"))
             loc = " / ".join(filter(None, [j.get("location", ""), *[x.get("location", "") for x in j.get("secondaryLocations") or []],
                                            "Remote" if remote else "", WORKPLACE_TAG.get(wt or "", "")]))
-            jobs.append({"title": j.get("title", ""), "location": loc, "url": j.get("jobUrl"), "posted": iso(j.get("publishedAt"))})
+            jobs.append({"title": j.get("title", ""), "location": loc, "url": j.get("jobUrl"), "posted": iso(j.get("publishedAt")),
+                         "description": j.get("descriptionPlain") or _plain(j.get("descriptionHtml"))})
     elif ats == "lever":
-        for j in get(f"https://api.lever.co/v0/postings/{s}?mode=json") or []:
+        # EU-hosted Lever companies only answer on api.eu.lever.co
+        lev = get(f"https://api.lever.co/v0/postings/{s}?mode=json")
+        if not isinstance(lev, list):
+            lev = get(f"https://api.eu.lever.co/v0/postings/{s}?mode=json")
+        for j in lev if isinstance(lev, list) else []:
             c = j.get("categories") or {}
             wt = (j.get("workplaceType") or "").lower()
             loc = " / ".join(filter(None, [c.get("location", ""), *(c.get("allLocations") or []),
                                            "Remote" if wt == "remote" else "", WORKPLACE_TAG.get(wt, "")]))
-            jobs.append({"title": j.get("text", ""), "location": loc, "url": j.get("hostedUrl"), "posted": iso(j.get("createdAt"))})
+            text = "\n\n".join([j.get("descriptionPlain") or ""] + [(l.get("text") or "") + "\n" + _plain(l.get("content"))
+                                                                    for l in j.get("lists") or []] + [j.get("additionalPlain") or ""])
+            jobs.append({"title": j.get("text", ""), "location": loc, "url": j.get("hostedUrl"), "posted": iso(j.get("createdAt")),
+                         "description": text.strip()})
     elif ats == "smartrecruiters":
         for j in (get(f"https://api.smartrecruiters.com/v1/companies/{s}/postings", params={"limit": 100}) or {}).get("content", []):
             loc = j.get("location") or {}
@@ -100,7 +110,8 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
     elif ats == "recruitee":
         for j in (get(f"https://{s}.recruitee.com/api/offers/") or {}).get("offers", []):
             jobs.append({"title": j.get("title", ""), "location": ("Remote " if j.get("remote") else "") + (j.get("location") or ""),
-                         "url": j.get("careers_url"), "posted": iso(j.get("published_at"))})
+                         "url": j.get("careers_url"), "posted": iso(j.get("published_at")),
+                         "description": _plain((j.get("description") or "") + " " + (j.get("requirements") or ""))})
     elif ats == "breezy":
         d = get(f"https://{s}.breezy.hr/json")
         for j in d if isinstance(d, list) else []:
@@ -113,6 +124,21 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
             jobs.append({"title": j.get("jobOpeningName", ""), "location": ("Remote " if j.get("isRemote") else "") +
                          ", ".join(filter(None, [loc.get("city"), loc.get("state")])),
                          "url": f"https://{s}.bamboohr.com/careers/{j.get('id')}", "posted": None})
+    elif ats == "personio":
+        jobs = _personio(s)
+    elif ats == "teamtailor":
+        jobs = _teamtailor(s)
+    elif ats == "pinpoint":
+        d = get(f"https://{s}.pinpointhq.com/postings.json") or {}
+        for j in d.get("data", []):
+            loc = j.get("location") or {}
+            where = ", ".join(x for x in [loc.get("city"), loc.get("province")] if x)
+            wt = (j.get("workplace_type") or "").lower()
+            jobs.append({"title": j.get("title", ""), "url": j.get("url"), "posted": None,
+                         "location": ("Remote " if wt == "remote" else "") + where + {"hybrid": " [Hybrid]", "onsite": " [On-site]",
+                                                                                         "on_site": " [On-site]"}.get(wt, ""),
+                         "description": _plain(" ".join(str(j.get(k) or "") for k in ("description", "key_responsibilities",
+                                                                                         "skills_knowledge_expertise")))})
     elif ats == "icims":
         jobs = _icims(s)
     elif ats == "workday":
@@ -120,6 +146,67 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
     for j in jobs:
         j["company"], j["ats"] = company, ats
     return [j for j in jobs if j.get("url") and j.get("title")]
+
+
+def _plain(h):
+    """HTML (or escaped HTML) -> text."""
+    import html as H
+    if not h:
+        return ""
+    t = H.unescape(str(h))
+    t = re.sub(r"(?i)<br\s*/?>|</p>|</li>|</h\d>|</div>", "\n", t)
+    t = re.sub(r"<[^>]+>", " ", t)
+    return re.sub(r"[ \t]+", " ", re.sub(r"\n\s*\n+", "\n\n", t)).strip()[:20000]
+
+
+def _xml(url):
+    import xml.etree.ElementTree as ET
+    try:
+        r = http().get(url, headers={"User-Agent": config.USER_AGENT, "Accept": "application/xml, application/rss+xml"}, timeout=TIMEOUT)
+        return ET.fromstring(r.content) if r.ok and r.content.strip().startswith(b"<") else None
+    except Exception:
+        return None
+
+
+def _personio(s):
+    """Personio public XML feed (the company must have it switched on; 404 = off). No remote field: read the text."""
+    root = _xml(f"https://{s}.jobs.personio.de/xml?language=en")
+    if root is not None and root.findall(".//position") and not any((v.text or "").strip() for v in root.iter("value")):
+        root = _xml(f"https://{s}.jobs.personio.de/xml") or root      # texts only in the company's own language
+    out = []
+    for p in (root.findall(".//position") if root is not None else []):
+        title = (p.findtext("name") or "").strip()
+        offices = [p.findtext("office") or ""] + [o.text or "" for o in p.findall(".//additionalOffices/office")]
+        desc = "\n\n".join(f"{d.findtext('name') or ''}\n{_plain(d.findtext('value'))}" for d in p.findall(".//jobDescription"))
+        kw = p.findtext("keywords") or ""
+        remote = re.search(r"(?i)\b(remote|home ?office|work from home|100% remote|fully remote)\b", f"{title} {' '.join(offices)} {kw}")
+        hybrid = re.search(r"(?i)\bhybrid\b", f"{title} {' '.join(offices)}")
+        where = ", ".join(dict.fromkeys(o.strip() for o in offices if o.strip() and o.strip().lower() != "remote"))
+        out.append({"title": title, "url": f"https://{s}.jobs.personio.de/job/{p.findtext('id')}",
+                    "posted": iso(p.findtext("createdAt")),
+                    "location": ("Remote " if remote and not hybrid else "") + where + (" [Hybrid]" if hybrid else ""),
+                    "description": desc})
+    return out
+
+
+def _teamtailor(s):
+    """Teamtailor public RSS: remoteStatus fully / hybrid / onsite / none / temporary, and tt:locations."""
+    root = _xml(f"https://{s}.teamtailor.com/jobs.rss?per_page=200")
+    out = []
+    for it in (root.findall(".//item") if root is not None else []):
+        rs = (it.findtext("remoteStatus") or "").lower()
+        locs = []
+        for l in it.iter():
+            if l.tag.endswith("location"):
+                city = next((c.text for c in l if c.tag.endswith("city") and c.text), "")
+                country = next((c.text for c in l if c.tag.endswith("country") and c.text), "")
+                locs.append(", ".join(x for x in (city, country) if x))
+        where = " / ".join(dict.fromkeys(x for x in locs if x))
+        tag = {"fully": "Remote ", "remote": "Remote "}.get(rs, "")
+        out.append({"title": it.findtext("title") or "", "url": (it.findtext("link") or "").strip(), "posted": iso(it.findtext("pubDate")),
+                    "location": tag + where + {"hybrid": " [Hybrid]", "onsite": " [On-site]", "none": " [On-site]"}.get(rs, ""),
+                    "description": _plain(it.findtext("description"))})
+    return out
 
 
 def _icims(s):

@@ -14,7 +14,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, storage
-from . import ats, feeds, matcher
+from . import ats, facts, feeds, matcher
 
 LOCK = config.CACHE / "scan-running.txt"      # holds {"pid", "started"} while a scan runs
 MARK = config.CACHE / "last-scan.txt"
@@ -56,6 +56,18 @@ def running():
         LOCK.unlink(missing_ok=True)
         return None
     return info
+
+
+def _with_facts(jobs):
+    """Analyze each engineering job's description right away and keep only the compact facts (not the text)."""
+    for j in jobs:
+        text = j.pop("description", None)
+        if text and len(text) > 200 and facts.is_engineering(j.get("title")):
+            try:
+                j["facts"] = facts.analyze(text, j.get("title", ""))
+            except Exception:
+                pass
+    return jobs
 
 
 def load_boards(only=None, per_ats=None):
@@ -122,7 +134,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                 return saved[b]
             start, js = time.monotonic(), []
             try:
-                js = ats.fetch(b[1], b[0], queries)
+                js = _with_facts(ats.fetch(b[1], b[0], queries))
                 return js
             except Exception:
                 return []
@@ -164,22 +176,32 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             if not js:
                 problems.append(f"{name}: returned 0 jobs")
             timing[name] = time.monotonic() - t1
-            all_jobs += js
+            all_jobs += _with_facts(js)
         problems += [f"{a}: {n} boards kept saying 'too many requests'" for a, n in ats.BLOCKED.items()]
         t1 = time.monotonic()
         with storage.connect() as con:
             n = storage.upsert_jobs(con, all_jobs, day)
         timing["store"] = time.monotonic() - t1
         log(f"stored {n:,} open jobs")
-        # feeds send the job text with the job: keep it, so the location checks can read it without another request
+        # description facts (skills, years, location rules) for every engineering job, shared by all members
         with storage.connect() as con:
-            texts = {storage.url_key(j["url"]): j["description"] for j in all_jobs if j.get("description") and j.get("url")}
-            keys = list(texts)
-            for i in range(0, len(keys), 500):
-                part = keys[i:i + 500]
+            rows, keys = [], {storage.url_key(j["url"]): j["facts"] for j in all_jobs if j.get("facts") and j.get("url")}
+            ks = list(keys)
+            for i in range(0, len(ks), 900):
+                part = ks[i:i + 900]
                 for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
-                    storage.save_jd(con, r["id"], texts[r["url_key"]])
-        log(f"kept the text of {len(texts):,} feed jobs")
+                    rows.append((r["id"], keys[r["url_key"]]))
+            facts.save(con, rows, day)
+            facts.prune(con, day)
+        log(f"read the description of {len(rows):,} engineering jobs")
+        t1 = time.monotonic()
+        try:                                         # application forms: every job whose form may be read (see forms.py)
+            from . import forms
+            with storage.connect() as con:
+                forms.read_all(con, day, log=log, minutes=float(__import__("os").environ.get("TEAMBID_FORM_MINUTES", "30")))
+        except Exception as e:
+            problems.append(f"application forms: {type(e).__name__} {str(e)[:100]}")
+        timing["forms"] = time.monotonic() - t1
         try:
             from . import company
             with storage.connect() as con:

@@ -155,7 +155,7 @@ def _compiled():
     for name, (cat, aliases) in S.items():
         names = [name] + aliases
         pat = re.compile("|".join(_alias_pattern(a) for a in sorted(set(names), key=len, reverse=True)), re.I)
-        out.append((name, cat, pat))
+        out.append((name, cat, pat, tuple({a.lower() for a in names})))   # literal anchors: skip the regex when none occurs
     return out
 
 
@@ -170,7 +170,9 @@ def find(text, with_counts=False, trusted=False):
         return Counter() if with_counts else []
     low = text.lower()
     found = Counter()
-    for name, cat, pat in _compiled():
+    for name, cat, pat, anchors in _compiled():
+        if not any(x in low for x in anchors):
+            continue
         hits = pat.findall(low)
         if not hits:
             continue
