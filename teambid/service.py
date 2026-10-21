@@ -106,7 +106,8 @@ def member_matches(slug, status=None, tier=None, limit=200, new_only=False):
 
 
 # ---------------------------------------------------------------- apply (Quick Bid)
-def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, polish=False):
+def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, polish=False, ai=None):
+    """ai: "haiku" / "sonnet" (Claude, needs a key), "free" (fact-only template), None = Claude Sonnet if a key is set."""
     """Analyze a job, build the tailored resume + cover letter + answers, save an application folder."""
     with storage.connect() as con:
         m = storage.member(con, slug)
@@ -136,14 +137,18 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     fit = tailor.fit(p, jd)
     spec = tailor.build_resume(p, jd)
     resume_note = ""
-    if llm.available():               # with a Claude key: reword the chosen bullets toward the post (facts kept)
-        spec, resume_note = llm.rewrite_resume(spec, p, jd_text)
+    model = llm.MODELS.get(ai or "sonnet", (None, None))[0]
+    use_claude = bool(model) and llm.available()
+    if model and not llm.available():
+        resume_note = "no Claude key set yet: built with the free template"
+    if use_claude:                    # reword the chosen bullets toward the post (facts kept)
+        spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
     problems = tailor.validate(spec, p)
     kw = tailor.keyword_report(spec, jd)
     letter, letter_check = cover.draft_letter(p, jd, fit)
     polish_note = ""
-    if llm.available():               # with a Claude key: Claude writes the letter; the fact-only draft is the fallback
-        letter, polish_note = llm.write_letter(p, jd_text, company, title, letter)
+    if use_claude:                    # Claude writes the letter; the fact-only draft is the fallback
+        letter, polish_note = llm.write_letter(p, jd_text, company, title, letter, model)
         letter_check = writing.check(letter)
     elif polish:
         letter, polish_note = llm.polish_letter(letter, p, jd_text, company, prefer=polish if isinstance(polish, str) else "auto")

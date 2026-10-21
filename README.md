@@ -110,7 +110,8 @@ resume and cover letter (PDF + DOCX) from the member's real resume with the usua
 puts them on the site. The Documents tab decrypts them in the browser: four download buttons plus **Copy cover letter**
 (plain text). Usually ready 15-20 minutes after the click.
 
-- **Free (default):** fact-only letter, optionally polished by a small local model (rejected if it invents anything).
+- **Writer dropdown** on the Documents tab: Claude Haiku 5.5 (default, fast, low cost), Claude Sonnet 5.5 (best writing) or the free template. Without a Claude key, every choice uses the free template.
+- **Job description:** filled in from the link when the job system allows browser reads (Greenhouse, Ashby, Lever, SmartRecruiters); for Workday, iCIMS and others the cloud reads the link during the build, or members paste it.
 - **Claude:** run `python tb.py claude-key` in a terminal and paste the key (hidden). It is saved on this PC and as
   the engine repo's `ANTHROPIC_API_KEY` secret. From then on Claude writes the letters and rewords the chosen resume
   bullets toward the post. Every rewording must keep its numbers and add no tool or result, or the original stays.

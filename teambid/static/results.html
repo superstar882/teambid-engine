@@ -191,6 +191,45 @@ async function appsView(m, body) {
 // ---- Documents: tailored resume + cover letter, built in the cloud, encrypted files decrypted here ----
 let DOC_PREFILL = null, DOC_TIMER = null;
 const DOC_FILES = [["resume_pdf", "Resume PDF"], ["resume_docx", "Resume DOCX"], ["letter_pdf", "Cover letter PDF"], ["letter_docx", "Cover letter DOCX"]];
+const MODEL_OPTS = [["haiku", "Claude Haiku 5.5 (fast, low cost)"], ["sonnet", "Claude Sonnet 5.5 (best writing)"], ["free", "Free template (no AI)"]];
+const MODEL_NAME = Object.fromEntries(MODEL_OPTS.map(([v, l]) => [v, l.split(" (")[0]]));
+function htmlText(h) {
+  // DOMParser documents are inert: no scripts run and no images load, so job-post HTML can't do anything here
+  const doc = new DOMParser().parseFromString(String(h || "").replace(/<br\s*\/?>|<\/p>|<\/li>|<\/h\d>|<\/div>/gi, "\n").replace(/<li[^>]*>/gi, "- "), "text/html");
+  return (doc.body.textContent || "").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n\n").trim();
+}
+async function getJSON(u) {
+  const r = await fetch(u, { headers: { Accept: "application/json" } });
+  if (!r.ok) throw new Error("the job site answered " + r.status);
+  return r.json();
+}
+async function fetchJobPost(url) {
+  let m;
+  if ((m = url.match(/greenhouse\.io\/(?:embed\/job_app\?for=)?([\w-]+)\/jobs\/(\d+)/))) {
+    const j = await getJSON(`https://boards-api.greenhouse.io/v1/boards/${m[1]}/jobs/${m[2]}`);
+    return { title: j.title, location: j.location?.name, text: htmlText(htmlText(j.content)) };   // content is escaped HTML
+  }
+  if ((m = url.match(/jobs\.ashbyhq\.com\/([\w.-]+)\/([\w-]{36})/))) {
+    const b = await getJSON(`https://api.ashbyhq.com/posting-api/job-board/${m[1]}?includeCompensation=true`);
+    const j = (b.jobs || []).find(x => x.id === m[2] || (x.jobUrl || "").includes(m[2]));
+    if (!j) throw new Error("this posting is no longer on the board");
+    const comp = j.compensation?.compensationTierSummary;
+    return { title: j.title, location: [j.location, j.workplaceType].filter(Boolean).join(" · "),
+             text: (j.descriptionPlain || htmlText(j.descriptionHtml)) + (comp ? `\n\nCompensation: ${comp}` : "") };
+  }
+  if ((m = url.match(/jobs\.lever\.co\/([\w-]+)\/([\w-]{36})/))) {
+    const j = await getJSON(`https://api.lever.co/v0/postings/${m[1]}/${m[2]}`);
+    const parts = [j.descriptionPlain, ...(j.lists || []).map(l => l.text + "\n" + htmlText(l.content)), j.additionalPlain];
+    return { title: j.text, location: [j.categories?.location, j.workplaceType].filter(Boolean).join(" · "), text: parts.filter(Boolean).join("\n\n") };
+  }
+  if ((m = url.match(/jobs\.smartrecruiters\.com\/([\w-]+)\/(\d+)/))) {
+    const j = await getJSON(`https://api.smartrecruiters.com/v1/companies/${m[1]}/postings/${m[2]}`);
+    const sec = j.jobAd?.sections || {};
+    const parts = ["companyDescription", "jobDescription", "qualifications", "additionalInformation"].map(k => sec[k] && ((sec[k].title ? sec[k].title + "\n" : "") + htmlText(sec[k].text)));
+    return { title: j.name, location: [j.location?.city, j.location?.country?.toUpperCase()].filter(Boolean).join(", "), text: parts.filter(Boolean).join("\n\n") };
+  }
+  return null;        // Workday, iCIMS, Workable and company sites block browser reads: the cloud reads the link instead
+}
 function docsFor(slug) {
   const reqs = {}, done = {};
   for (const e of Object.values(PG.latest)) {
@@ -228,7 +267,7 @@ function docCard(d) {
   const r = d.req, x = d.done, when = (r.at || "").replace("T", " ").slice(0, 16);
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
     <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
-    <span class="muted" style="font-size:12px">asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
+    <span class="muted" style="font-size:12px">${r.model ? esc(MODEL_NAME[r.model] || r.model) + " · " : ""}asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
   if (!x) return `<div class="doc">${head}<div class="muted">Building in the cloud. This list refreshes by itself every minute.</div></div>`;
   if (x.error) return `<div class="doc">${head}<div class="bad">${esc(x.error)}</div></div>`;
   return `<div class="doc">${head}
@@ -250,11 +289,14 @@ async function docsView(m, body) {
     <div class="muted">Paste the job post (copying the whole page from the browser is fine), or give a link the tool can read.
       It's built in the cloud from ${esc(m.name.split(" ")[0])}'s real resume, fact-checked, usually in about 5 minutes.</div>
     <div class="row" style="margin-top:8px"><input id="d_url" placeholder="Job link" value="${esc(p.url || "")}" style="flex:2;min-width:220px">
+      <button class="b2" id="d_fetch" title="Read the job description from the link">Get description</button>
       <input id="d_co" placeholder="Company" value="${esc(p.company || "")}" style="flex:1;min-width:140px">
       <input id="d_ti" placeholder="Job title" value="${esc(p.title || "")}" style="flex:1;min-width:160px"></div>
-    <textarea id="d_text" rows="7" placeholder="Paste the job description here (needed when the link is LinkedIn, Indeed or a login page)"
+    <textarea id="d_text" rows="10" placeholder="Job description. Filled in from the link when the job site allows it; otherwise paste it here (or leave it empty and the cloud reads the link)."
       style="width:100%;margin-top:8px"></textarea>
-    <div class="row" style="margin-top:8px"><button class="b" id="d_go">Make resume + cover letter</button><span id="d_msg" class="muted"></span>
+    <div class="row" style="margin-top:8px"><label class="muted" for="d_model">Writer</label>
+      <select id="d_model">${MODEL_OPTS.map(([v, l]) => `<option value="${v}">${esc(l)}</option>`).join("")}</select>
+      <button class="b" id="d_go">Make resume + cover letter</button><span id="d_msg" class="muted"></span>
       <span style="flex:1"></span><button class="b2" id="d_ref">Refresh</button></div></div>
     <div class="card"><h2>Requests</h2><div id="d_list"></div></div>`;
   const list = () => {
@@ -274,6 +316,24 @@ async function docsView(m, body) {
     if (items.some(d => !d.done)) DOC_TIMER = setInterval(async () => { await progressLoad(); if (sub === "Documents") list(); }, 60000);
   };
   list();
+  const sel = document.getElementById("d_model");
+  try { sel.value = localStorage.getItem("tb_model") || "haiku"; } catch (_) { sel.value = "haiku"; }
+  sel.onchange = () => { try { localStorage.setItem("tb_model", sel.value); } catch (_) {} };
+  const fill = async () => {
+    const url = document.getElementById("d_url").value.trim(), box = document.getElementById("d_text"), msg = document.getElementById("d_msg");
+    if (!url) { msg.textContent = "Add the job link first."; return; }
+    msg.textContent = "Reading the job post...";
+    try {
+      const j = await fetchJobPost(url);
+      if (!j) { msg.textContent = "This job site doesn't allow reading from the browser. Paste the description, or leave it empty and the cloud reads the link."; return; }
+      box.value = j.text || "";
+      if (j.title && !document.getElementById("d_ti").value) document.getElementById("d_ti").value = j.title;
+      msg.textContent = `Description loaded (${box.value.length.toLocaleString()} characters)` + (j.location ? ` · ${j.location}` : "") + ". Check it, then make the documents.";
+    } catch (err) { msg.textContent = "Couldn't read it (" + err.message + "). Paste the description instead."; }
+  };
+  document.getElementById("d_fetch").onclick = fill;
+  document.getElementById("d_url").onchange = () => { if (!document.getElementById("d_text").value.trim()) fill(); };
+  if (p.url) fill();
   document.getElementById("d_ref").onclick = async e => { e.target.disabled = true; await progressLoad(); list(); e.target.disabled = false; };
   document.getElementById("d_go").onclick = async e => {
     const url = document.getElementById("d_url").value.trim(), company = document.getElementById("d_co").value.trim(),
@@ -287,6 +347,7 @@ async function docsView(m, body) {
       for (let i = 0; i < text.length; i += 1500) parts.push(text.slice(i, i + 1500));   // one row holds 8,000 characters
       for (let n = 0; n < parts.length; n++) await pgPut("docpart", `${rid}|${n}`, { kind: "docpart", rid, n, text: parts[n] });
       await pgPut("docreq", rid, { kind: "docreq", rid, member: m.slug, url, company, title, parts: parts.length,
+                                   model: document.getElementById("d_model").value,
                                    by: localStorage.getItem("tb_name") || "", at: new Date().toISOString() });
       // start the cloud build now (Supabase function -> GitHub); if it isn't set up, the 15-minute check still picks it up
       let quick = false;

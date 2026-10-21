@@ -13,6 +13,8 @@ from . import config, local_ai, writing
 from . import skills as SK
 
 API = "https://api.anthropic.com/v1/messages"
+# the choices on the results page ("free" = no AI, the fact-only template)
+MODELS = {"haiku": ("claude-haiku-5-5", "Claude Haiku 5.5"), "sonnet": ("claude-sonnet-5-5", "Claude Sonnet 5.5")}
 
 
 def available():
@@ -28,10 +30,10 @@ def provider(prefer="auto"):
     return None
 
 
-def _call(system, user, max_tokens=1500):
+def _call(system, user, max_tokens=1500, model=None):
     r = requests.post(API, timeout=120, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
                                                  "content-type": "application/json"},
-                      json={"model": config.MODEL, "max_tokens": max_tokens, "system": system,
+                      json={"model": model or config.MODEL, "max_tokens": max_tokens, "system": system,
                             "messages": [{"role": "user", "content": user}]})
     r.raise_for_status()
     return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
@@ -195,25 +197,26 @@ WRITE_RULES = (
     + ", ".join(sorted(writing.BANNED)) + ". Return only the letter.")
 
 
-def write_letter(profile, jd_text, company, title, draft):
+def write_letter(profile, jd_text, company, title, draft, model=None):
     """Claude writes the letter from the facts. -> (text, note). Falls back to the fact-only draft if the guard rejects it twice."""
     if not available():
         return draft, "no Claude API key"
     user = (f"ROLE: {title} at {company}\n\nCANDIDATE FACTS (the only allowed facts):\n{_facts(profile)}\n\n"
             f"JOB POST:\n{jd_text[:12000]}")
     try:
-        out = _call(WRITE_RULES.replace("{company}", company), user, 2000).strip().strip("`").strip()
+        out = _call(WRITE_RULES.replace("{company}", company), user, 2000, model).strip().strip("`").strip()
         problems = guard(out, draft, profile, company, jd_text)
         if problems:
             out = _call(WRITE_RULES.replace("{company}", company), user + "\n\nYOUR LAST VERSION WAS REJECTED FOR: " +
-                        "; ".join(problems) + ". Fix exactly these problems.\n\nLAST VERSION:\n" + out, 2000).strip().strip("`").strip()
+                        "; ".join(problems) + ". Fix exactly these problems.\n\nLAST VERSION:\n" + out, 2000, model).strip().strip("`").strip()
             problems = guard(out, draft, profile, company, jd_text)
     except Exception as e:
         return draft, f"Claude error: {e}"
     if problems:
         return draft, f"Claude letter rejected twice ({'; '.join(problems)}); kept the fact-only draft"
     novel = claims_to_check(out, draft, profile, jd_text)
-    note = "written by Claude, passed the fact and writing checks"
+    label = next((n for m, n in MODELS.values() if m == model), "Claude")
+    note = f"letter written by {label}, passed the fact and writing checks"
     if novel:
         note += f". Verify the sentences with these words (not in your resume): {', '.join(novel[:12])}"
     return out, note
@@ -241,7 +244,7 @@ def _bullet_ok(new, old, have):
     return not gained and 0.7 <= len(new) / max(1, len(old)) <= 1.3
 
 
-def rewrite_resume(spec, profile, jd_text):
+def rewrite_resume(spec, profile, jd_text, model=None):
     """Claude rewords the chosen bullets + summary toward the job post. Each change must pass _bullet_ok; the rest stay
     verbatim. Accepted rewordings are recorded in spec['rewritten'] (new -> original) for validate(). -> (spec, note)."""
     if not available():
@@ -250,7 +253,7 @@ def rewrite_resume(spec, profile, jd_text):
     user = (f"JOB POST:\n{jd_text[:12000]}\n\nSUMMARY:\n{spec.get('summary', '')}\n\nBULLETS:\n" +
             "\n".join(f"{k}: {v}" for k, v in ids.items()))
     try:
-        out = _call(RESUME_RULES, user, 3000)
+        out = _call(RESUME_RULES, user, 3000, model)
         data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))
     except Exception as e:
         return spec, f"Claude resume step skipped: {e}"

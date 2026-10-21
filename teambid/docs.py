@@ -106,7 +106,8 @@ def run(limit=10, log=print):
         try:
             r = service.apply(slug, url=req.get("url") or None, jd_text=req.get("text") or None,
                               company=req.get("company") or None, title=req.get("title") or None,
-                              polish=False)   # Claude writes when a key is set; the small CPU model took ~5 min and was always rejected
+                              polish=False,   # the small CPU model took ~5 min and was always rejected
+                              ai=req.get("model") or "haiku")
             out_dir = export.SITE / page / "docs" / rid
             out_dir.mkdir(parents=True, exist_ok=True)
             files = {}
@@ -120,6 +121,7 @@ def run(limit=10, log=print):
                             "fit": {"verdict": r["fit"]["verdict"], "coverage": r["fit"]["coverage"]},
                             "keywords": r["keywords"]["pct"], "pages": r["files"]["pages"],
                             "checks": (r["problems"] or [])[:4], "notes": [n for n in (r.get("resume_ai"), r.get("polish")) if n],
+                            "model": req.get("model") or "haiku",
                             "at": config.now().isoformat(timespec="seconds")})
         except Exception as e:
             log(f"  failed: {e}")
