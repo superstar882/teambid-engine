@@ -90,6 +90,16 @@ TZ_EVIDENCE = {
 }
 
 
+US_PLACE = re.compile(r"(?i)(\b(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|District of Columbia)\b|\b(San Francisco|SF Bay Area|Bay Area|Silicon Valley|Palo Alto|Mountain View|San Jose|Sunnyvale|Menlo Park|Seattle|Bellevue|Redmond|Portland|Los Angeles|San Diego|Austin|Dallas|Houston|Denver|Boulder|Chicago|Boston|Cambridge, MA|Atlanta|Miami|Nashville|Raleigh|Durham|Charlotte|Pittsburgh|Philadelphia|Phoenix|Salt Lake City|Minneapolis|Detroit|NYC|Brooklyn|Manhattan)\b|^(US|USA)\b|\b[A-Z]{2}\s*-\s*(?=[A-Z])|,\s*(A[LKZR]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b)")
+
+
+def us_centred(offices):
+    """True when at least 60% of a company's posting offices are in the US (one Mexico office doesn't change that)."""
+    if not offices:
+        return False
+    us = sum(1 for o in offices if US_PLACE.search(o) or US.search(o))
+    return us / len(offices) >= 0.6
+
 def open_to(text, allowed):
     """What in a job post says people in `allowed` can take it -> short label or ''."""
     for c in allowed:
@@ -352,7 +362,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                 why.append(f"post says open to {ok_here}")
             else:
                 offs = (offices.get(job["company"]) or {}).get("offices", [])
-                us_offices = offs and all(US.search(o) for o in offs)
+                us_offices = us_centred(offs)
                 if us_offices:
                     item[0] = 0
                     why.append("post doesn't say it's open outside the US and every office is in the US")
