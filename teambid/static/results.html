@@ -168,7 +168,9 @@ td { overflow-wrap:anywhere; }
 .navitem.pending { opacity:.55; } .navitem .count .spin { margin:0; width:11px; height:11px; }
 .banner .x { margin-left:auto; border:0; background:transparent; color:inherit; font:inherit; font-size:18px; line-height:1; padding:0 4px; opacity:.6; }
 .banner .x:hover { opacity:1; }
-.saved-ok { color:var(--go); font-weight:700; } .saved-err { color:var(--bad); font-weight:700; }
+.saved-ok { color:var(--go); font-weight:700; }
+.office { display:block; font-size:12px; color:var(--muted); font-weight:600; margin-top:2px; }
+.office svg { width:12px; height:12px; vertical-align:-1px; margin-right:3px; stroke:currentColor; fill:none; stroke-width:2.2; } .saved-err { color:var(--bad); font-weight:700; }
 button.b.danger { background:var(--bad); border-color:var(--bad); } button.b.danger:hover { filter:brightness(1.08); }
 button.b2.danger { color:var(--bad); border-color:var(--bad2); } button.b2.danger:hover { background:var(--bad2); }
 
@@ -949,7 +951,7 @@ function draw() {
       const rows = m.matches.map((r, i) => [r, states[i]]).filter(([r, e]) => (!t || r.tier === t) &&
         (!s || (s === "none" ? !e.status : e.status === s)) && (!q || (r.company + " " + r.title).toLowerCase().includes(q)));
       document.getElementById("count").textContent = `${rows.length} shown`;
-      document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr class="click" data-url="${esc(r.url)}" title="Open the job post"><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td>
+      document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr class="click" data-url="${esc(r.url)}" title="Open the job post"><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}${(r.offices || []).length ? `<span class="office" title="Offices in this company's job posts: ${esc(r.offices.join(" · "))}"><svg viewBox="0 0 24 24"><path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/></svg>${esc(r.offices[0])}${r.offices.length > 1 ? ` +${r.offices.length - 1}` : ""}</span>` : ""}</td>
         <td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td class="m-hide">${esc((r.location||"").slice(0,50))}</td>
         <td class="nw">${esc(r.posted || "?")}</td>
         <td>${PG && PG.ok ? `<div class="prog"><select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>

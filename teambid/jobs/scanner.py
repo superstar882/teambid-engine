@@ -166,6 +166,13 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             n = storage.upsert_jobs(con, all_jobs, day)
         timing["store"] = time.monotonic() - t1
         log(f"stored {n:,} open jobs")
+        try:
+            from . import company
+            with storage.connect() as con:
+                c, total = company.refresh(con, day)
+            log(f"office locations for {c:,} of {total:,} companies")
+        except Exception as e:                       # nice to have: never let it stop a scan
+            problems.append(f"company offices: {type(e).__name__} {str(e)[:100]}")
         t1 = time.monotonic()
         match_stats = matcher.match_all(days=days, log=log)
         timing["match"] = time.monotonic() - t1

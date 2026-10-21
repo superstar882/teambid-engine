@@ -83,6 +83,8 @@ def build_data(include_skipped=True):
     with storage.connect() as con:
         members = storage.members(con)
         last_scan = con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
+        from .jobs import company
+        offices = company.lookup(con, last_scan) if last_scan else {}
         out = []
         for i, m in enumerate(members):
             rows = [dict(r) for r in con.execute(
@@ -91,6 +93,7 @@ def build_data(include_skipped=True):
                 "LEFT JOIN applications a ON a.member_id=m.member_id AND a.job_id=m.job_id WHERE m.member_id=? AND j.last_seen=? AND m.last_matched>=j.last_seen"
                 + ("" if include_skipped else " AND m.status != 'skipped'") + " ORDER BY m.score DESC", (m["id"], last_scan))]
             for r in rows:
+                r["offices"] = (offices.get(r["company"]) or {}).get("offices", [])[:4]
                 r["reasons"] = json.loads(r["reasons"] or "[]")
                 # one status the page understands: application status wins, else the match status
                 r["progress"] = r["app_status"] if r["app_status"] in ("applied", "interview", "offer", "rejected") else \

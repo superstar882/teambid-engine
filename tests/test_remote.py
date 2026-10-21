@@ -20,5 +20,16 @@ class RemoteOnlyTest(unittest.TestCase):
             self.assertTrue(matcher.FULL_REMOTE.search(t), t)
 
 
+
+class CompanyOfficesTest(unittest.TestCase):
+    def test_offices_from_postings(self):
+        from teambid.jobs import company
+        ranked = [p for p, _ in company.offices(["Stockholm HQ / Remote", "NYC", "London / Remote", "NYC"])]
+        self.assertEqual(ranked[0], "Stockholm")                 # marked HQ wins
+        self.assertIn("NYC", ranked)
+        self.assertEqual(company.offices(["Remote - US", "United States / Remote", "US West", "& 13 other countries"]), [])
+        self.assertEqual([p for p, _ in company.offices(["UK - London", "Budapest, Hungary"])], ["Budapest, Hungary", "London"])
+
+
 if __name__ == "__main__":
     unittest.main()
