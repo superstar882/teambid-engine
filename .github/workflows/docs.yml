@@ -52,10 +52,10 @@ jobs:
       - name: Start Maintenance for team changes
         if: steps.q.outputs.admin != '0'
         run: |
-          # one Maintenance run at a time; if a scan or Maintenance run is already waiting or running, it applies them
-          busy=$(gh run list -R "$GITHUB_REPOSITORY" --json workflowName,status \
-                 --jq '[.[] | select((.workflowName=="Daily scan" or .workflowName=="Maintenance") and (.status=="queued" or .status=="in_progress" or .status=="waiting" or .status=="pending"))] | length')
-          if [ "$busy" = "0" ]; then gh workflow run maintain.yml -R "$GITHUB_REPOSITORY" -f task=admin; else echo "a run that applies team changes is already queued"; fi
+          # a run that hasn't started yet will apply them; a running one may be past that step, so queue another
+          queued=$(gh run list -R "$GITHUB_REPOSITORY" --json workflowName,status \
+                 --jq '[.[] | select((.workflowName=="Daily scan" or .workflowName=="Maintenance") and (.status=="queued" or .status=="waiting" or .status=="pending" or .status=="requested"))] | length')
+          if [ "$queued" = "0" ]; then gh workflow run maintain.yml -R "$GITHUB_REPOSITORY" -f task=admin; else echo "a queued run will apply them"; fi
 
       - name: Embedding model (ranks resume bullets by meaning)
         if: steps.q.outputs.pending != '0'

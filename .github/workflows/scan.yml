@@ -12,7 +12,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write                # upload the workspace release asset, keep-alive commit
+  contents: write
+  actions: write                 # queue another Maintenance run for changes that arrived meanwhile                # upload the workspace release asset, keep-alive commit
 
 concurrency:
   group: teambid-scan
@@ -81,6 +82,12 @@ jobs:
       - name: Confirm team changes
         if: always() && steps.push.outcome == 'success'
         run: python tb.py admin confirm
+
+      - name: Team changes that arrived during this run
+        if: always() && steps.push.outcome == 'success'
+        run: |
+          n=$(python tb.py admin check | sed -n 's/^admin=//p')
+          if [ "${n:-0}" != "0" ]; then gh workflow run maintain.yml -R "$GITHUB_REPOSITORY" -f task=admin && echo "started another Maintenance run for $n change(s)"; fi
 
       - name: Keep the schedule alive
         # GitHub turns off scheduled workflows after 60 days without commits

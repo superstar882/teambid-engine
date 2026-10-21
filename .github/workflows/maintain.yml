@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: write
+  actions: write                 # queue another Maintenance run for changes that arrived meanwhile
 
 concurrency:
   group: teambid-scan            # never at the same time as the daily scan (both change the workspace)
@@ -82,3 +83,9 @@ jobs:
       - name: Confirm team changes
         if: always() && steps.push.outcome == 'success'
         run: python tb.py admin confirm
+
+      - name: Team changes that arrived during this run
+        if: always() && steps.push.outcome == 'success'
+        run: |
+          n=$(python tb.py admin check | sed -n 's/^admin=//p')
+          if [ "${n:-0}" != "0" ]; then gh workflow run maintain.yml -R "$GITHUB_REPOSITORY" -f task=admin && echo "started another Maintenance run for $n change(s)"; fi
