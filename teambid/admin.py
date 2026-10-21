@@ -190,6 +190,21 @@ def _edit(req, body):
             f"{matched['matches'] if matched else 0} matches"}
 
 
+def _delete(req, body):
+    """Remove a member everywhere: database rows (matches, applications, history) and their folder (resume, vault)."""
+    import shutil
+    slug = str(req.get("member") or "")
+    with storage.connect() as con:
+        m = storage.member(con, slug)
+        if not m:
+            raise ValueError(f"no member {slug} (already deleted?)")
+        storage.delete_member(con, m["id"])
+    folder = (config.MEMBERS / slug).resolve()
+    if folder.parent == config.MEMBERS.resolve():          # never anything outside the members folder
+        shutil.rmtree(folder, ignore_errors=True)
+    return {"ok": True, "slug": slug, "msg": f"deleted {m['name']}: profile, resume file, matches and applications removed"}
+
+
 def apply(log=print):
     reqs = pending()
     applied = _applied()
@@ -200,7 +215,7 @@ def apply(log=print):
         try:
             if req.get("body") is None:
                 raise ValueError("the request didn't arrive complete; please send it again")
-            res = {"add": _add, "edit": _edit}[req.get("action")](req, req["body"])
+            res = {"add": _add, "edit": _edit, "delete": _delete}[req.get("action")](req, req["body"])
         except Exception as e:
             res = {"ok": False, "msg": str(e)[:300]}
         res.update({"action": req.get("action"), "member": res.get("slug") or req.get("member") or (req.get("body") or {}).get("name", ""),

@@ -110,11 +110,11 @@ select:hover { border-color:var(--brand-line); background-color:var(--brand-soft
 .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:16px; margin-bottom:16px; }
 .stats .card { margin:0; }
 .kv2 { display:grid; grid-template-columns:120px 1fr; gap:6px 12px; } .kv2 span:nth-child(odd) { color:var(--muted); font-weight:700; }
-.tl { position:relative; padding-left:22px; }
-.tl:before { content:""; position:absolute; left:6px; top:6px; bottom:6px; width:2px; background:var(--brand-line); border-radius:2px; }
-.tl .job { position:relative; margin-bottom:18px; } .tl .job:last-child { margin-bottom:0; }
-.tl .job:before { content:""; position:absolute; left:-21px; top:6px; width:12px; height:12px; border-radius:50%; background:var(--card); border:3px solid var(--brand); }
-.tl .job h3 { margin:0; font-size:15px; font-weight:800; } .tl ul { margin:6px 0 0; padding-left:18px; } .tl li { margin:3px 0; }
+.timeline { position:relative; padding-left:22px; }
+.timeline:before { content:""; position:absolute; left:6px; top:6px; bottom:6px; width:2px; background:var(--brand-line); border-radius:2px; }
+.timeline .job { position:relative; margin-bottom:18px; } .timeline .job:last-child { margin-bottom:0; }
+.timeline .job:before { content:""; position:absolute; left:-21px; top:6px; width:12px; height:12px; border-radius:50%; background:var(--card); border:3px solid var(--brand); }
+.timeline .job h3 { margin:0; font-size:15px; font-weight:800; } .timeline ul { margin:6px 0 0; padding-left:18px; } .timeline li { margin:3px 0; }
 .headrow { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:12px; } .headrow h2 { margin:0; } .headrow .sp { flex:1; }
 .form { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
 .form label { display:flex; flex-direction:column; gap:5px; font-weight:700; font-size:12px; color:var(--muted); }
@@ -128,6 +128,45 @@ select:hover { border-color:var(--brand-line); background-color:var(--brand-soft
 .banner.info { background:var(--brand-tint); color:var(--brand-text); } .banner.ok { background:var(--go2); color:var(--go); } .banner.err { background:var(--bad2); color:var(--bad); }
 .navitem.add { color:var(--brand-text); border:1.5px dashed var(--brand-line); margin-top:4px; justify-content:center; }
 .navitem.add:hover { background:var(--card); }
+/* custom dropdown (the native option list can't be styled) */
+.dd { position:relative; display:inline-block; min-width:120px; }
+.dd-native { display:none !important; }
+.dd-btn { width:100%; font:inherit; font-weight:600; color:var(--ink); text-align:left; background:var(--card); border:1px solid var(--line);
+          border-radius:12px; padding:8px 36px 8px 12px; cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; position:relative;
+          transition:border-color .15s, box-shadow .15s, background .15s; }
+.dd-btn:after { content:""; position:absolute; right:14px; top:50%; width:7px; height:7px; margin-top:-6px; border-right:2px solid var(--brand-text);
+                border-bottom:2px solid var(--brand-text); transform:rotate(45deg); transition:transform .15s, margin-top .15s; }
+.dd-btn:hover { background:var(--brand-soft); border-color:var(--brand-line); }
+.dd.open .dd-btn { border-color:var(--brand-text); box-shadow:0 0 0 3px var(--brand-tint); }
+.dd.open .dd-btn:after { transform:rotate(-135deg); margin-top:-2px; }
+.prog .dd-btn { height:34px; padding-top:5px; padding-bottom:5px; }
+.dd-menu { position:absolute; z-index:40; top:calc(100% + 6px); left:0; min-width:100%; max-height:300px; overflow-y:auto;
+           background:var(--card); border:1px solid var(--brand-line); border-radius:14px; padding:6px; box-shadow:0 12px 32px rgba(16,1,75,.16); }
+.dd-opt { padding:8px 12px 8px 30px; border-radius:10px; cursor:pointer; font-weight:600; white-space:nowrap; position:relative; }
+.dd-opt:hover, .dd-opt.kb { background:var(--brand-soft); }
+.dd-opt.on { background:var(--brand-tint); color:var(--brand-text); }
+.dd-opt.on:before { content:""; position:absolute; left:12px; top:50%; width:5px; height:9px; margin-top:-6px; border-right:2px solid currentColor;
+                    border-bottom:2px solid currentColor; transform:rotate(45deg); }
+/* spinner */
+.spin { display:inline-block; width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%;
+        animation:spin .7s linear infinite; vertical-align:-2px; margin-right:7px; }
+@keyframes spin { to { transform:rotate(360deg); } }
+/* pointer on everything clickable */
+button, select, summary, a, .navitem, .dd-btn, .dd-opt, tr.click, input[type=checkbox], input[type=file], label:has(> input[type=checkbox]) { cursor:pointer; }
+input[type=file]::file-selector-button { cursor:pointer; font:inherit; font-weight:700; border:1px solid var(--line); background:var(--brand-soft);
+                                         color:var(--brand-text); border-radius:999px; padding:5px 12px; margin-right:10px; }
+button:disabled { cursor:progress; }
+/* same column widths for every member */
+@media (min-width:701px) { table.fixed { table-layout:fixed; } }
+td { overflow-wrap:anywhere; }
+/* confirmation modal */
+.modal-back { position:fixed; inset:0; z-index:60; background:rgba(16,1,75,.35); display:grid; place-items:center; padding:16px; }
+.modal { width:min(440px, 100%); background:var(--card); border:1px solid var(--line); border-radius:22px; padding:22px; box-shadow:0 24px 60px rgba(16,1,75,.3); }
+.modal h3 { margin:0 0 8px; font-size:18px; font-weight:800; }
+.modal input { width:100%; margin:12px 0 16px; }
+.modal .row { justify-content:flex-end; }
+button.b.danger { background:var(--bad); border-color:var(--bad); } button.b.danger:hover { filter:brightness(1.08); }
+button.b2.danger { color:var(--bad); border-color:var(--bad2); } button.b2.danger:hover { background:var(--bad2); }
 
 @media (max-width:900px) {
   .shell { grid-template-columns:1fr; }
@@ -260,13 +299,18 @@ async function unlock(pw, remember) {
   pick(location.hash.slice(1).split("/")[0]);
 }
 document.getElementById("f").onsubmit = async e => {
-  e.preventDefault(); document.getElementById("err").textContent = "Opening...";
+  e.preventDefault(); document.getElementById("err").textContent = "";
+  const restore = busyBtn(e.target.querySelector("button"), "Opening");
   try { await unlock(document.getElementById("pw").value, document.getElementById("remember").checked); }
   catch (err) { document.getElementById("err").textContent = err.message; }
+  restore();
 };
 document.getElementById("logout").onclick = () => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); location.reload(); };
 const saved = localStorage.getItem("tb_pw") || sessionStorage.getItem("tb_pw");
-if (saved) unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); });
+if (saved) {
+  const restore = busyBtn(document.querySelector("#f button"), "Opening");
+  unlock(saved, !!localStorage.getItem("tb_pw")).catch(() => { localStorage.removeItem("tb_pw"); sessionStorage.removeItem("tb_pw"); }).finally(restore);
+}
 
 const shell = () => document.getElementById("app");
 function closeMenu() { shell().classList.remove("open"); }
@@ -305,11 +349,12 @@ async function appsView(m, body) {
   const counts = order.map(s => [s, list.filter(x => x.status === s).length]).filter(([, n]) => n);
   body.innerHTML = `<div class="card">${counts.map(([s, n]) => `<span class="pill">${APP_LABEL[s] || s}: ${n}</span>`).join(" ") || ""}
     ${PG ? "" : '<div class="muted">Team progress is off, showing what TeamBid exported.</div>'}</div>
-    <div class="card"><table><tr><th>Company</th><th>Role</th><th>Status</th><th class="m-hide">Fit</th><th>Note</th><th>Updated</th></tr>${list.map(a =>
-      `<tr><td>${esc(a.company || "")}</td><td>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title || "")}</a>` : esc(a.title || "")}</td>
+    <div class="card"><table class="fixed"><colgroup><col style="width:18%"><col style="width:26%"><col style="width:110px"><col class="m-hide" style="width:70px">
+      <col><col style="width:120px"></colgroup><thead><tr><th>Company</th><th>Role</th><th>Status</th><th class="m-hide">Fit</th><th>Note</th><th>Updated</th></tr></thead><tbody>${list.map(a =>
+      `<tr class="${a.url ? "click" : ""}" data-url="${esc(a.url || "")}"><td>${esc(a.company || "")}</td><td>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title || "")}</a>` : esc(a.title || "")}</td>
        <td>${esc(APP_LABEL[a.status] || a.status)}</td><td class="m-hide">${a.fit != null ? a.fit + "%" : ""}</td><td class="muted">${esc(a.note)}</td>
        <td>${esc(a.when || "")}${a.by ? `<div class="muted" style="font-size:11px">${esc(a.by)}</div>` : ""}</td></tr>`).join("")
-      || '<tr><td colspan=6 class="muted">No applications yet. Set a job to Saved or Applied in the Matches tab and it shows up here.</td></tr>'}</table></div>`;
+      || '<tr><td colspan=6 class="muted">No applications yet. Set a job to Saved or Applied in the Matches tab and it shows up here.</td></tr>'}</tbody></table></div>`;
 }
 // ---- Documents: tailored resume + cover letter, built in the cloud, encrypted files decrypted here ----
 let DOC_PREFILL = null, DOC_TIMER = null;
@@ -427,9 +472,9 @@ async function docsView(m, body) {
     document.getElementById("d_list").innerHTML = items.map(docCard).join("") || '<div class="muted">Nothing yet.</div>';
     const byRid = Object.fromEntries(items.filter(d => d.done).map(d => [d.done.rid, d.done]));
     document.querySelectorAll(".dl").forEach(el => el.onclick = async () => {
-      el.disabled = true;
+      const restore = busyBtn(el);
       try { await docDownload(el.dataset.rid, el.dataset.k, byRid[el.dataset.rid].files[el.dataset.k]); } catch (e) { alert(e.message); }
-      el.disabled = false;
+      restore();
     });
     document.querySelectorAll(".cp").forEach(el => el.onclick = async () => {
       const ok = await copyText(byRid[el.dataset.rid].letter || "");
@@ -445,7 +490,7 @@ async function docsView(m, body) {
   const fill = async () => {
     const url = document.getElementById("d_url").value.trim(), box = document.getElementById("d_text"), msg = document.getElementById("d_msg");
     if (!url) { msg.textContent = "Add the job link first."; return; }
-    msg.textContent = "Reading the job post...";
+    msg.innerHTML = spin("Reading the job post...");
     try {
       const j = await fetchJobPost(url);
       if (!j) { msg.textContent = "This job site doesn't allow reading from the browser. Paste the description, or leave it empty and the cloud reads the link."; return; }
@@ -454,16 +499,16 @@ async function docsView(m, body) {
       msg.textContent = `Description loaded (${box.value.length.toLocaleString()} characters)` + (j.location ? ` · ${j.location}` : "") + ". Check it, then make the documents.";
     } catch (err) { msg.textContent = "Couldn't read it (" + err.message + "). Paste the description instead."; }
   };
-  document.getElementById("d_fetch").onclick = fill;
+  document.getElementById("d_fetch").onclick = async e => { const restore = busyBtn(e.currentTarget, "Reading"); await fill(); restore(); };
   document.getElementById("d_url").onchange = () => { if (!document.getElementById("d_text").value.trim()) fill(); };
   if (p.url) fill();
-  document.getElementById("d_ref").onclick = async e => { e.target.disabled = true; await progressLoad(); list(); e.target.disabled = false; };
+  document.getElementById("d_ref").onclick = async e => { const restore = busyBtn(e.currentTarget, "Refreshing"); await progressLoad(); restore(); list(); };
   document.getElementById("d_go").onclick = async e => {
     const url = document.getElementById("d_url").value.trim(), company = document.getElementById("d_co").value.trim(),
           title = document.getElementById("d_ti").value.trim(), text = document.getElementById("d_text").value.trim().slice(0, 40000),
           msg = document.getElementById("d_msg");
     if (!text && !url) { msg.textContent = "Paste the job text or a job link first."; return; }
-    e.target.disabled = true; msg.textContent = "Sending...";
+    e.target.disabled = true; msg.innerHTML = spin("Sending (encrypted)...");
     try {
       const rid = hex(crypto.getRandomValues(new Uint8Array(12)));
       const parts = [];
@@ -482,6 +527,72 @@ async function docsView(m, body) {
     e.target.disabled = false;
   };
 }
+// ---- custom dropdowns: the real <select> stays (hidden) so values and change events work as before ----
+function closeAllDD() { document.querySelectorAll(".dd.open").forEach(w => { w.classList.remove("open"); w.querySelector(".dd-menu").classList.add("hide"); }); }
+document.addEventListener("click", e => { if (!e.target.closest(".dd")) closeAllDD(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeAllDD(); });
+function enhanceSelects(root = document) {
+  root.querySelectorAll("select:not([data-dd])").forEach(sel => {
+    sel.dataset.dd = "1";
+    const wrap = document.createElement("div"); wrap.className = "dd";
+    if (sel.style.width) wrap.style.width = sel.style.width;
+    if (sel.style.flex) wrap.style.flex = sel.style.flex;
+    if (sel.closest(".prog") || sel.closest(".form")) wrap.style.width = "100%";
+    const btn = document.createElement("button"); btn.type = "button"; btn.className = "dd-btn";
+    const menu = document.createElement("div"); menu.className = "dd-menu hide"; menu.setAttribute("role", "listbox");
+    sel.parentNode.insertBefore(wrap, sel); wrap.append(sel, btn, menu); sel.classList.add("dd-native");
+    const label = () => { btn.textContent = sel.selectedOptions[0]?.text ?? ""; };
+    const open = () => {
+      closeAllDD();
+      menu.innerHTML = [...sel.options].map((o, i) => `<div class="dd-opt ${o.selected ? "on" : ""}" data-i="${i}" role="option">${esc(o.text)}</div>`).join("");
+      menu.classList.remove("hide"); wrap.classList.add("open");
+      menu.querySelector(".on")?.scrollIntoView({ block: "nearest" });
+    };
+    const choose = i => { sel.selectedIndex = i; label(); closeAllDD(); btn.focus(); sel.dispatchEvent(new Event("change", { bubbles: true })); };
+    btn.onclick = e => { e.stopPropagation(); wrap.classList.contains("open") ? closeAllDD() : open(); };
+    btn.onkeydown = e => {
+      const opts = [...menu.querySelectorAll(".dd-opt")], at = opts.findIndex(o => o.classList.contains("kb"));
+      if (!wrap.classList.contains("open") && ["ArrowDown", "Enter", " "].includes(e.key)) { e.preventDefault(); open(); return; }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault(); const n = Math.max(0, Math.min(opts.length - 1, (at < 0 ? sel.selectedIndex : at) + (e.key === "ArrowDown" ? 1 : -1)));
+        opts.forEach(o => o.classList.remove("kb")); opts[n]?.classList.add("kb"); opts[n]?.scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter" && at >= 0) { e.preventDefault(); choose(at); }
+    };
+    menu.onclick = e => { e.stopPropagation(); const o = e.target.closest(".dd-opt"); if (o) choose(+o.dataset.i); };
+    sel.addEventListener("change", label); label();
+  });
+}
+const spin = t => `<span class="spin"></span>${esc(t)}`;
+function busyBtn(btn, text) {            // spinner inside a button; returns a function that restores it
+  const old = btn.innerHTML; btn.disabled = true; btn.innerHTML = spin(text || btn.textContent.trim());
+  return () => { btn.disabled = false; btn.innerHTML = old; };
+}
+function confirmModal({ title, text, word, action = "Confirm", danger = false }) {
+  return new Promise(res => {
+    const back = document.createElement("div"); back.className = "modal-back";
+    back.innerHTML = `<div class="modal" role="dialog" aria-modal="true"><h3>${esc(title)}</h3><div class="muted">${text}</div>
+      ${word ? `<input id="mw" placeholder="Type ${esc(word)} to confirm" autocomplete="off">` : '<div style="height:14px"></div>'}
+      <div class="row"><button class="b2" id="mno">Cancel</button><button class="b ${danger ? "danger" : ""}" id="myes" ${word ? "disabled" : ""}>${esc(action)}</button></div></div>`;
+    document.body.appendChild(back);
+    const done = v => { back.remove(); document.removeEventListener("keydown", key); res(v); };
+    const key = e => { if (e.key === "Escape") done(false); };
+    document.addEventListener("keydown", key);
+    back.onclick = e => { if (e.target === back) done(false); };
+    back.querySelector("#mno").onclick = () => done(false);
+    back.querySelector("#myes").onclick = () => done(true);
+    const w = back.querySelector("#mw");
+    if (w) { w.focus(); w.oninput = () => { back.querySelector("#myes").disabled = w.value.trim().toLowerCase() !== word; };
+             w.onkeydown = e => { if (e.key === "Enter" && !back.querySelector("#myes").disabled) done(true); }; }
+    else back.querySelector("#myes").focus();
+  });
+}
+// open the job post when a row (not a control in it) is clicked
+document.addEventListener("click", e => {
+  const tr = e.target.closest("tr.click");
+  if (!tr || e.target.closest("button, a, input, select, textarea, .dd, .prog")) return;
+  if (tr.dataset.url) window.open(tr.dataset.url, "_blank", "noopener");
+});
+
 // ---- team changes (add member, edit profile): encrypted request in the progress table, applied by the cloud ----
 async function putBlob(kind, rid, meta, obj) {
   const bytes = new TextEncoder().encode(JSON.stringify(obj));
@@ -507,7 +618,8 @@ function adminState(match) {
 function adminBanner(match) {
   if (!PG || !PG.ok) return "";
   const st = adminState(match);
-  return st.waiting.map(r => `<div class="banner info">Saved ${esc(r.action === "add" ? "new member " + (r.name || "") : "changes")}${r.by ? " by " + esc(r.by) : ""}.
+  return st.waiting.map(r => `<div class="banner info"><span class="spin"></span>${esc(r.action === "add" ? "Adding " + (r.name || "a new member") :
+           r.action === "delete" ? "Deleting " + (r.name || "this member") : "Saving changes")}${r.by ? " (by " + esc(r.by) + ")" : ""}.
            The cloud is updating matches and this page, usually 3-5 minutes.</div>`).join("") +
     st.finished.map(d => `<div class="banner ${d.ok ? "ok" : "err"}">${esc(d.ok ? "Done: " : "Couldn't apply: ")}${esc(d.msg || "")}
            ${d.ok ? '<button class="b2" onclick="location.reload()">Reload</button>' : ""}</div>`).join("");
@@ -538,8 +650,18 @@ function overviewView(m, body) {
     <div class="card"><h2>Target titles</h2>${(m.target_titles || []).map(t => `<span class="chip">${esc(t)}</span>`).join("") || '<span class="muted">-</span>'}</div>
     <div class="card"><h2>Resume fixes</h2><table><thead><tr><th>Priority</th><th>Area</th><th>What to change</th></tr></thead><tbody>${m.audit.findings.map(f =>
       `<tr><td><span class="pill ${f.severity >= 3 ? "fail" : f.severity === 2 ? "wait" : ""}">${["", "Low", "Medium", "High"][f.severity]}</span></td><td>${esc(f.area)}</td><td>${esc(f.message)}</td></tr>`).join("")
-      || '<tr><td colspan=3 class="muted">Nothing major.</td></tr>'}</tbody></table></div>`;
+      || '<tr><td colspan=3 class="muted">Nothing major.</td></tr>'}</tbody></table></div>
+    <div class="card"><div class="headrow"><h2>Remove from the team</h2><span class="sp"></span><button class="b2 danger" id="delmem">Delete member</button></div>
+      <div class="muted">Deletes ${esc(m.name)}'s profile, resume file, matches and applications for everyone. This can't be undone.</div></div>`;
   document.getElementById("edit1").onclick = () => { sub = "Edit"; draw(); };
+  document.getElementById("delmem").onclick = async e => {
+    const ok = await confirmModal({ title: `Delete ${m.name}?`, danger: true, word: "delete", action: "Delete member",
+      text: `This removes their profile, resume file, matches and applications for the whole team. It can't be undone.<br>Type <b>delete</b> to confirm.` });
+    if (!ok) return;
+    const restore = busyBtn(e.target, "Deleting");
+    try { await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "delete", member: m.slug, name: m.name }, {}); overviewView(m, body); }
+    catch (err) { restore(); alert(err.message); }
+  };
 }
 
 function experienceView(m, body) {
@@ -547,7 +669,7 @@ function experienceView(m, body) {
   body.innerHTML = adminBanner(r => r.member === m.slug) + `
     <div class="card"><div class="headrow"><h2>Experience</h2><span class="muted">${m.roles.length} jobs · ${m.years ?? "-"} years</span><span class="sp"></span>
       <button class="b" id="edit2">Edit experience</button></div>
-      <div class="tl">${m.roles.map(r => `<div class="job"><h3>${esc(r.title)}<span class="muted" style="font-weight:600"> · ${esc(r.company)}</span></h3>
+      <div class="timeline">${m.roles.map(r => `<div class="job"><h3>${esc(r.title)}<span class="muted" style="font-weight:600"> · ${esc(r.company)}</span></h3>
         <div class="muted" style="font-size:12px;font-weight:700">${esc(r.start)} – ${esc(r.end)}${r.location ? " · " + esc(r.location) : ""}${r.kind === "intern" ? " · internship" : ""}</div>
         ${(r.stack || []).length ? `<div style="margin-top:6px">${r.stack.slice(0, 10).map(x => `<span class="chip soft">${esc(x)}</span>`).join("")}</div>` : ""}
         <ul>${r.bullets.map(b => `<li>${esc(b)}</li>`).join("")}</ul></div>`).join("") || '<span class="muted">No jobs yet.</span>'}</div></div>
@@ -623,6 +745,7 @@ function editView(m, body) {
     redraw(); });
   document.querySelectorAll("#edus [data-act]").forEach(b => b.onclick = () => { sync(); EDIT.education.splice(+b.closest(".role").dataset.e, 1); redraw(); });
   document.getElementById("e_cancel").onclick = () => { EDIT = null; sub = "Overview"; draw(); };
+  enhanceSelects(body);
   document.getElementById("e_save").onclick = async e => {
     sync();
     const bad = EDIT.roles.find(r => (r.title || r.company) && !r.start.trim());
@@ -633,7 +756,7 @@ function editView(m, body) {
                  roles: EDIT.roles, education: EDIT.education, skills: val("e_skills"), certifications: val("e_certs") },
       prefs: { countries: val("p_countries"), target_titles: val("p_titles"), onsite_ok: val("p_onsite") === "1", home_cities: val("p_home"),
                min_score: val("p_min"), avoid_companies: val("p_avoid"), exclude_words: val("p_excl"), work_auth: val("p_auth") } };
-    e.target.disabled = true; document.getElementById("e_msg").textContent = "Saving...";
+    e.target.disabled = true; document.getElementById("e_msg").innerHTML = spin("Saving (encrypted)...");
     try {
       await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "edit", member: m.slug }, data);
       EDIT = null; sub = "Overview"; draw();
@@ -657,7 +780,7 @@ function addMemberView(body) {
     if (!name || !f) { msg.textContent = "Name and resume file are required."; return; }
     if (f.size > 1.5e6) { msg.textContent = "That file is over 1.5 MB. Export a smaller PDF."; return; }
     if (DATA.members.some(x => x.name.toLowerCase() === name.toLowerCase())) { msg.textContent = `${name} is already on the team. Use Edit profile instead.`; return; }
-    e.target.disabled = true; msg.textContent = "Uploading (encrypted)...";
+    e.target.disabled = true; msg.innerHTML = spin("Uploading the resume (encrypted)...");
     try {
       const b64 = await new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f); });
       await putBlob("admin", hex(crypto.getRandomValues(new Uint8Array(12))), { action: "add", name },
@@ -669,6 +792,7 @@ function addMemberView(body) {
 document.getElementById("addmem").onclick = () => { sub = "Add member"; closeMenu(); draw(); };
 
 function draw() {
+  setTimeout(() => enhanceSelects(document.getElementById("view")), 0);
   const m = cur, v = document.getElementById("view");
   const subs = ["Matches", "Documents", "Applications", "Overview", "Experience"];
   clearInterval(DOC_TIMER);
@@ -704,7 +828,9 @@ function draw() {
       ${PG ? `<input id="me" placeholder="Your name" title="Shown next to the statuses you set" value="${esc(localStorage.getItem("tb_name") || "")}" style="width:190px">` : ""}
       <span class="muted" id="count"></span></div>
       ${PG ? '<div class="muted" style="margin-top:6px">Set a status or note on any job: it is saved for the whole team (encrypted) and synced into TeamBid daily.</div>' : ""}</div>
-      <div class="card"><table><thead><tr><th>Score</th><th>Company</th><th>Title</th><th class="m-hide">Location</th><th>Posted</th><th>Progress</th><th class="m-hide">Why</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+      <div class="card"><table class="fixed"><colgroup><col style="width:64px"><col style="width:13%"><col style="width:21%"><col class="m-hide" style="width:15%">
+        <col style="width:104px"><col style="width:236px"><col class="m-hide"></colgroup>
+        <thead><tr><th>Score</th><th>Company</th><th>Title</th><th class="m-hide">Location</th><th>Posted</th><th>Progress</th><th class="m-hide">Why</th></tr></thead><tbody id="rows"></tbody></table></div>`;
     if (PG) document.getElementById("me").oninput = e => localStorage.setItem("tb_name", e.target.value.trim());
     const go = async () => {
       const q = document.getElementById("q").value.toLowerCase(), t = document.getElementById("tier").value, s = document.getElementById("st").value;
@@ -712,7 +838,7 @@ function draw() {
       const rows = m.matches.map((r, i) => [r, states[i]]).filter(([r, e]) => (!t || r.tier === t) &&
         (!s || (s === "none" ? !e.status : e.status === s)) && (!q || (r.company + " " + r.title).toLowerCase().includes(q)));
       document.getElementById("count").textContent = `${rows.length} shown`;
-      document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td>
+      document.getElementById("rows").innerHTML = rows.map(([r, e]) => `<tr class="click" data-url="${esc(r.url)}" title="Open the job post"><td><span class="pill ${r.tier}">${r.score}</span></td><td>${esc(r.company)}</td>
         <td><a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.title)}</a></td><td class="m-hide">${esc((r.location||"").slice(0,50))}</td>
         <td class="nw">${esc(r.posted || "?")}</td>
         <td>${PG && PG.ok ? `<div class="prog"><select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
@@ -731,6 +857,7 @@ function draw() {
         el.disabled = false;
       };
       document.querySelectorAll(".pst").forEach(el => el.onchange = () => save(el));
+      enhanceSelects(document.getElementById("rows"));
       document.querySelectorAll(".pnote").forEach(el => el.onchange = () => save(el));
       document.querySelectorAll(".tl").forEach(el => el.onclick = () => { DOC_PREFILL = byKey[el.dataset.k]; sub = "Documents"; draw(); });
     };
