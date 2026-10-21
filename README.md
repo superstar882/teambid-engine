@@ -216,3 +216,26 @@ Requests go into the same encrypted, append-only table as team progress. The pag
 (`tb.py admin apply`), re-matches, republishes, pushes, then marks them done (`tb.py admin confirm`). The daily scan
 applies waiting changes too. Applied requests are recorded in the workspace (`admin-applied.json`), so a request is
 never applied twice. Usually live 3-5 minutes after saving; the page shows the status and a Reload button.
+
+## How matching works (2026-10 redesign)
+
+1. **Descriptions for every engineering job.** Greenhouse (with `content=true`), Ashby, Lever, Recruitee, Personio,
+   Teamtailor, Pinpoint and all feeds send the description with the job list. Each engineering job's text is turned into
+   compact facts (`teambid/jobs/facts.py`): required and nice-to-have skills, years asked for, regions it is open to,
+   country work-rights limits, "US only" wording, hybrid/office wording. Only the facts are kept, not the text.
+2. **Application forms for every job where allowed** (`teambid/jobs/forms.py`): Greenhouse (official API,
+   `questions=true`), Lever (`/apply`, one request a second per its robots.txt) and Workable (`/api/v1/jobs/{code}/form`).
+   Questions such as "Are you authorized to work in the United States?", "Do you hold a work permit for France?",
+   "Are you available to work in a hybrid model…?" or "Do you speak fluent French?" become limits. Ashby is not read:
+   its robots.txt disallows `/api/`. Forms are read newest first within a time budget (`TEAMBID_FORM_MINUTES`, default 30)
+   and kept per job, so later scans only read new ones.
+3. **Scoring per member.** Any engineering title can match when the description fits; the member's lanes and target
+   titles add points. Required skills the resume shows ("has 6 of 8 required skills; missing: …") carry most of the
+   score; posts needing several skills the resume lacks (under 40% of 3+), or 3+ more years than the member has, are
+   dropped. Non-US members only keep remote jobs whose post or form shows they are open to their region.
+4. **Duplicates.** The same role from several boards, feeds or locations is shown once (company name variants like
+   "Bjakcareer"/"BJAK" merge; different teams like "Software Engineer, Payments" / "…, Billing" stay separate).
+5. **Sources:** about 52,500 company boards (13 job systems, list from github.com/kalil0321/ats-scrapers, MIT, plus
+   Common Crawl) and feeds checked as free and allowed: Himalayas (also per country), RemoteOK, Remotive, HN, Jobicy,
+   4dayweek, Working Nomads, Get on Board, Djinni, Jobindex (DK), JobTech (SE), Brazilian GitHub boards, We Work Remotely.
+   Not used because their terms or robots.txt forbid it: Gupy, JOIN, No Fluff Jobs, Just Join IT, Infostud, CV.ee.
