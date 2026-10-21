@@ -59,14 +59,11 @@ def running():
 
 
 def _with_facts(jobs):
-    """Analyze each engineering job's description right away and keep only the compact facts (not the text)."""
+    """Keep descriptions only for engineering jobs (analyzed after the download, see facts.build); drop the rest."""
     for j in jobs:
         text = j.pop("description", None)
         if text and len(text) > 200 and facts.is_engineering(j.get("title")):
-            try:
-                j["facts"] = facts.analyze(text, j.get("title", ""))
-            except Exception:
-                pass
+            j["description"] = text[:12000]
     return jobs
 
 
@@ -183,17 +180,16 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             n = storage.upsert_jobs(con, all_jobs, day)
         timing["store"] = time.monotonic() - t1
         log(f"stored {n:,} open jobs")
-        # description facts (skills, years, location rules) for every engineering job, shared by all members
+        # description facts (skills, years, location rules) for every engineering job, shared by all members.
+        # Only jobs not analyzed on an earlier day; all CPU cores.
+        t1 = time.monotonic()
         with storage.connect() as con:
-            rows, keys = [], {storage.url_key(j["url"]): j["facts"] for j in all_jobs if j.get("facts") and j.get("url")}
-            ks = list(keys)
-            for i in range(0, len(ks), 900):
-                part = ks[i:i + 900]
-                for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
-                    rows.append((r["id"], keys[r["url_key"]]))
-            facts.save(con, rows, day)
+            new_facts, kept = facts.build(con, all_jobs, day, log=log)
             facts.prune(con, day)
-        log(f"read the description of {len(rows):,} engineering jobs")
+        for j in all_jobs:
+            j.pop("description", None)
+        timing["facts"] = time.monotonic() - t1
+        log(f"analyzed {new_facts:,} new job descriptions ({kept:,} known from earlier scans) in {timing['facts'] / 60:.1f} min")
         t1 = time.monotonic()
         try:                                         # application forms: every job whose form may be read (see forms.py)
             from . import forms

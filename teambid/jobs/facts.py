@@ -84,24 +84,28 @@ def _work(args):
 
 
 def build(con, jobs, day, log=print, processes=None):
-    """Analyze every engineering job that came with its description. jobs: dicts with url, title, description."""
+    """Analyze engineering jobs that came with a description and weren't analyzed before. -> (new, already known)"""
+    import os
     from concurrent.futures import ProcessPoolExecutor
     from .. import storage
-    todo = {storage.url_key(j["url"]): j for j in jobs if j.get("description") and j.get("url") and is_engineering(j.get("title"))}
+    _ensure(con)
+    todo = {storage.url_key(j["url"]): j for j in jobs if j.get("description") and j.get("url")}
     keys, ids = list(todo), {}
     for i in range(0, len(keys), 900):
         part = keys[i:i + 900]
         for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
             ids[r["url_key"]] = r["id"]
-    args = [(ids[k], todo[k]["description"], todo[k].get("title", "")) for k in keys if k in ids]
+    have = {r[0] for r in con.execute("SELECT job_id FROM job_facts")}
+    args = [(ids[k], todo[k]["description"], todo[k].get("title", "")) for k in keys if k in ids and ids[k] not in have]
+    kept = sum(1 for k in keys if k in ids and ids[k] in have)
     if not args:
-        return 0
+        return 0, kept
     rows = []
     try:
-        with ProcessPoolExecutor(processes) as ex:
-            rows = [r for r in ex.map(_work, args, chunksize=200) if r[1]]
+        with ProcessPoolExecutor(processes or os.cpu_count()) as ex:
+            rows = [r for r in ex.map(_work, args, chunksize=100) if r[1]]
     except Exception as e:                      # e.g. no process support: do it in this process
-        log(f"  (single process: {type(e).__name__})")
+        log(f"  (analysis in one process: {type(e).__name__})")
         rows = [r for r in map(_work, args) if r[1]]
     save(con, rows, day)
-    return len(rows)
+    return len(rows), kept
