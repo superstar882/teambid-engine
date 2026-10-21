@@ -31,5 +31,25 @@ class CompanyOfficesTest(unittest.TestCase):
         self.assertEqual([p for p, _ in company.offices(["UK - London", "Budapest, Hungary"])], ["Budapest, Hungary", "London"])
 
 
+class OpenToNonUsTest(unittest.TestCase):
+    def test_evidence_and_us_only(self):
+        E = {"Europe"}
+        self.assertTrue(matcher.open_to("We hire anywhere in Europe (CET +/- 2).", E))
+        self.assertTrue(matcher.open_to("We are US-based but hire globally.", E))
+        self.assertTrue(matcher.open_to("Open to candidates in EMEA.", E))
+        self.assertFalse(matcher.open_to("Fully remote team.", E))
+        self.assertTrue(matcher.US_ONLY.search("You must reside in the United States."))
+        self.assertTrue(matcher.US_ONLY.search("Our team works Pacific Time hours."))
+        self.assertFalse(matcher.US_ONLY.search("We are a US-based company."))
+        self.assertTrue(matcher.open_to("Remote across Latin America (UTC-3).", {"LATAM"}))
+
+    def test_regions(self):
+        from teambid import region
+        self.assertEqual(region.detect("São Paulo, Brazil")["region"], "LATAM")
+        self.assertEqual(region.detect("Novi Sad")["region"], "EU")
+        self.assertEqual(matcher.norm_countries(["Serbia"]), ["Europe"])
+        self.assertTrue(matcher.place_ok("Remote - Americas", "Engineer", {"countries": ["LATAM"]})[0])
+
+
 if __name__ == "__main__":
     unittest.main()

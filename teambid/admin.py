@@ -142,6 +142,12 @@ def edit_prefs(old, data):
             pr[k] = _words(data[k], 30)
     if "countries" in data:
         pr["countries"] = matcher.norm_countries(_words(data["countries"], 20)) or old.get("countries") or ["US"]
+        from . import region as RG
+        implied = RG.from_countries(pr["countries"])
+        if implied and implied["region"] != pr.get("region"):        # e.g. a CV with no location defaulted to US
+            pr["region"] = implied["region"]
+            if implied["timezone"]:
+                pr["timezone"] = implied["timezone"]
     if "onsite_ok" in data:
         pr["onsite_ok"] = bool(data["onsite_ok"])
     if "min_score" in data:

@@ -49,7 +49,8 @@ COUNTRY = {
                          r"Finland|Helsinki|Switzerland|Zurich|Geneva|Austria|Vienna|Belgium|Brussels|Czech|Czechia|Prague|Romania|"
                          r"Bucharest|Ukraine|Kyiv|Greece|Athens|Estonia|Tallinn|Latvia|Riga|Lithuania|Vilnius|Hungary|Budapest|"
                          r"Croatia|Slovenia|Slovakia|Bulgaria|Serbia|Luxembourg|Iceland)\b"),
-    "LATAM": re.compile(r"(?i)\b(LATAM|Latin America|Brazil|Mexico|Argentina|Colombia|Chile|Peru|Costa Rica)\b"),
+    "LATAM": re.compile(r"(?i)\b(LATAM|LatAm|Latin America|South America|Americas|Brazil|Brasil|Mexico|Argentina|Colombia|Chile|Peru|"
+                        r"Uruguay|Costa Rica|S[ãa]o Paulo|Rio de Janeiro|Buenos Aires|Bogot[áa]|Medell[ií]n)\b"),
     "APAC": re.compile(r"(?i)\b(APAC|Asia|Philippines|Vietnam|Indonesia|Malaysia|Thailand|Korea|Seoul|China|Taiwan|Hong Kong|Myanmar)\b"),
     "MEA": re.compile(r"(?i)\b(Israel|UAE|Dubai|Turkey|Egypt|Nigeria|Kenya|South Africa|Pakistan|Saudi)\b"),
 }
@@ -65,7 +66,7 @@ IN_OFFICE = re.compile(r"(?i)\b(location type:?\s*(hybrid|on-?site)|hybrid (role
                        r"in[- ]person (role|position|team|company|culture))\b")
 FULL_REMOTE = re.compile(r"(?i)\b(fully remote|100% remote|remote[- ]first|remote[- ]friendly|work from anywhere|remote (or|/) hybrid|"
                          r"hybrid (or|/) remote|open to remote|can be (done|performed|worked) remotely)\b")
-WORLDWIDE = re.compile(r"(?i)\b(anywhere|worldwide|global|any location|work from anywhere|fully distributed)\b")
+WORLDWIDE = re.compile(r"(?i)\b(anywhere|worldwide|global|globally|any location|any country|work from anywhere|fully distributed|hire (from )?(anywhere|globally|internationally|worldwide)|international(ly)? remote)\b")
 # job-post sentences that limit a remote job to people already allowed to work in one country
 RESTRICT = {
     "US": re.compile(r"(?i)(must (?:be )?(?:located|based|reside|residing|live) in the (?:US|U\.S\.|United States)|"
@@ -77,6 +78,49 @@ RESTRICT = {
 }
 NO_SPONSOR = re.compile(r"(?i)(no (?:visa )?sponsorship|not (?:able to |able |)sponsor|unable to sponsor|cannot sponsor|"
                         r"does not (?:provide|offer) (?:visa )?sponsorship|without (?:the need for )?sponsorship)")
+# extra "US only" wording that RESTRICT doesn't cover
+US_ONLY = re.compile(r"(?i)(\b(US|U\.S\.|United States)[- ](based )?(candidates|applicants|residents|citizens|persons|individuals)\b(?! or)|\b(US|U\.S\.|United States) (residents|citizens) only\b|"
+                     r"\b(reside|residing|live|living|located|based) (in|within) the (US|U\.S\.|United States)\b(?! or)|"
+                     r"\bUS time ?zones?\b|\b(Pacific|Eastern|Central|Mountain) (Standard )?Time\b|\b(PST|EST|CST|MST|PT|ET)\b.{0,25}\b(hours|time ?zone)|"
+                     r"\bremote,? (US|USA|United States) only\b)")
+TZ_EVIDENCE = {
+    "Europe": re.compile(r"(?i)\b(CET|CEST|EET|EEST|WET|GMT|BST|European time ?zones?|UTC ?[+]? ?[0-3](:00)?)\b"),
+    "UK": re.compile(r"(?i)\b(GMT|BST|UK time ?zone|UTC ?[+]? ?[0-1](:00)?)\b"),
+    "LATAM": re.compile(r"(?i)\b(BRT|ART|UTC ?-[3-6]|GMT ?-[3-6]|Latin American time ?zones?)\b"),
+}
+
+
+def open_to(text, allowed):
+    """What in a job post says people in `allowed` can take it -> short label or ''."""
+    for c in allowed:
+        pat = COUNTRY.get(c)
+        if pat and pat.search(text):
+            return pat.search(text).group(0)
+        tz = TZ_EVIDENCE.get(c)
+        if tz and tz.search(text):
+            return tz.search(text).group(0) + " time zone"
+    m = WORLDWIDE.search(text)
+    return m.group(0) if m else ""
+
+
+def _prefetch_jds(con, jobs, workers=16):
+    """Fetch the missing job posts in parallel (cached in the jd table, shared by every member)."""
+    from concurrent.futures import ThreadPoolExecutor
+    todo = [j for j in jobs if j.get("ats") != "feed" and storage.get_jd(con, j["id"]) is None]
+
+    def get(j):
+        try:
+            res = JD.fetch(j["url"])
+            return j["id"], (res.get("text", "") if res else "")
+        except Exception:
+            return j["id"], ""
+    if todo:
+        with ThreadPoolExecutor(workers) as ex:
+            for jid, text in ex.map(get, todo):
+                storage.save_jd(con, jid, text or "")
+    return len(todo)
+
+
 ONSITE_ONLY = re.compile(r"(?i)\b(on-?site only|in-office|in office 5)\b")
 
 
@@ -230,7 +274,7 @@ def score_job(job, member, lane_pats, today):
     return max(0, min(100, s + 20)), reasons
 
 
-def match_member(con, member, day=None, days=None, log=print, enrich=15):
+def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_check=400):
     today = config.today()
     day = day or con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
     if not day:
@@ -267,33 +311,59 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
     have = set(member["profile"].get("skills", {}).get("all", []))
     prof_text = " ".join(b["text"] for r in member["profile"].get("roles", [])[:3] for b in r["bullets"][:4])[:2000]
     prof_vec = local_ai.embed([prof_text], "document") if prof_text else None
-    for item in uniq[:enrich]:
+    allowed = set(norm_countries(prefs.get("countries")) or ["US"])
+    us_ok = "US" in allowed
+
+    def unknown_place(job):          # "Remote" with no country, region or "worldwide"
+        t = f"{job.get('location') or ''} {job['title']}"
+        return not any(p.search(t) for p in COUNTRY.values()) and not WORLDWIDE.search(t)
+    # members who can't work in the US: every "Remote"-only job must show it is open to them, so read those posts too
+    checks = uniq[:enrich] + ([it for it in uniq[enrich:] if unknown_place(it[2])][:geo_check] if not us_ok else [])
+    fetched = _prefetch_jds(con, [it[2] for it in checks])
+    offices = {}
+    if not us_ok:
+        from . import company
+        offices = company.lookup(con, day)
+    for idx, item in enumerate(checks):
         sc, why, job = item
-        text = storage.get_jd(con, job["id"])
-        if text is None and job.get("ats") != "feed":
-            try:
-                res = JD.fetch(job["url"])
-                text = res.get("text", "") if res else ""
-            except Exception:
-                text = ""
-            storage.save_jd(con, job["id"], text or "")
-        if text and place_ok(job.get("location") or "", job["title"], prefs)[1] == "remote" \
-                and IN_OFFICE.search(text) and not FULL_REMOTE.search(text):
+        text = storage.get_jd(con, job["id"]) or ""
+        loc = job.get("location") or ""
+        if text and place_ok(loc, job["title"], prefs)[1] == "remote" and IN_OFFICE.search(text) and not FULL_REMOTE.search(text):
             item[0] = 0                       # listed as remote, but the post says hybrid / in office: drop it
             why.append("job post says hybrid / in office, not remote")
             continue
-        if text:
-            allowed = set(norm_countries(prefs.get("countries")) or ["US"])
-            blocked = [c for c, pat in RESTRICT.items() if c not in allowed and pat.search(text)]
-            if blocked:
-                item[0] = max(0, item[0] - 40)
+        ok_here = open_to(text, allowed) if text else ""
+        blocked = [c for c, pat in RESTRICT.items() if c not in allowed and pat.search(text)]
+        if not us_ok and "US" not in blocked and US_ONLY.search(text):
+            blocked.append("US")
+        if blocked:
+            if ok_here:                       # "US or Europe": keep, but say it
+                item[0] = max(0, item[0] - 10)
+                why.append(f"post mentions work rights in {', '.join(blocked)} but also {ok_here}")
+            else:
+                item[0] = 0
                 why.append(f"post limits it to people already allowed to work in: {', '.join(blocked)}")
-                if NO_SPONSOR.search(text):
-                    why.append("says no visa sponsorship")
+                continue
+            if NO_SPONSOR.search(text):
+                why.append("says no visa sponsorship")
+        if not us_ok and unknown_place(job):
+            if ok_here:
+                item[0] = min(100, item[0] + 5)
+                why.append(f"post says open to {ok_here}")
+            else:
+                offs = (offices.get(job["company"]) or {}).get("offices", [])
+                us_offices = offs and all(US.search(o) for o in offs)
+                if us_offices:
+                    item[0] = 0
+                    why.append("post doesn't say it's open outside the US and every office is in the US")
+                    continue
+                item[0] = max(0, item[0] - 15)
+                why.append("post doesn't say which countries can apply" + (f" (offices: {', '.join(offs[:2])})" if offs else ""))
+        if idx < enrich and text:
             need = SK.find(text, with_counts=True)
             if need:
                 cov = sum(1 for k in need if k in have) / len(need)
-                item[0] = max(0, min(100, int(sc + (cov - 0.5) * 30)))
+                item[0] = max(0, min(100, int(item[0] + (cov - 0.5) * 30)))     # on top of the checks above, not the raw score
                 why.append(f"description coverage {cov:.0%} of {len(need)} skills")
             if prof_vec:
                 qv = local_ai.embed([text[:2000]], "query")
@@ -301,6 +371,8 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15):
                     sim = local_ai.cosine(prof_vec[0], qv[0])
                     item[0] = max(0, min(100, int(item[0] + (sim - 0.55) * 40)))
                     why.append(f"meaning match {sim:.2f}")
+    if fetched:
+        log(f"  {member['name']}: read {fetched} job posts to check location rules")
     stamp = str(today)
     new = best = 0
     min_score = int(prefs.get("min_score", 40))
