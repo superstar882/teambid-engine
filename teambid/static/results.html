@@ -169,6 +169,15 @@ td { overflow-wrap:anywhere; }
 .banner .x { margin-left:auto; border:0; background:transparent; color:inherit; font:inherit; font-size:18px; line-height:1; padding:0 4px; opacity:.6; }
 .banner .x:hover { opacity:1; }
 .saved-ok { color:var(--go); font-weight:700; }
+/* loading screen: logo + a bar whose dark segment slides left to right while growing and shrinking */
+.loader { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:20px; min-height:56vh; text-align:center; }
+.loader img { height:58px; width:auto; filter:var(--logo-filter); }
+.loader .bar { position:relative; width:220px; height:4px; border-radius:999px; background:var(--brand-tint); overflow:hidden; }
+.loader .bar:before { content:""; position:absolute; top:0; bottom:0; left:-30%; width:20%; border-radius:999px; background:var(--brand);
+                      animation:loadbar 1.5s cubic-bezier(.45,.05,.55,.95) infinite; }
+@keyframes loadbar { 0% { left:-30%; width:18%; } 50% { width:48%; } 100% { left:105%; width:18%; } }
+.loader .what { color:var(--muted); font-weight:700; font-size:13px; }
+@media (prefers-reduced-motion: reduce) { .loader .bar:before { animation-duration:3s; } }
 .office { display:block; font-size:12px; color:var(--muted); font-weight:600; margin-top:2px; }
 .office svg { width:12px; height:12px; vertical-align:-1px; margin-right:3px; stroke:currentColor; fill:none; stroke-width:2.2; } .saved-err { color:var(--bad); font-weight:700; }
 button.b.danger { background:var(--bad); border-color:var(--bad); } button.b.danger:hover { filter:brightness(1.08); }
@@ -303,7 +312,12 @@ async function decrypt(blob, password) {
   return JSON.parse(new TextDecoder().decode(plain));
 }
 let PW = "", PG_LOADING = false;
-const loadingCard = what => `<div class="card muted">${spin("Loading team progress (" + what + ")...")}</div>`;
+function loaderHTML(text) {
+  const logo = document.querySelector(".brandrow img")?.src || "";
+  return `<div class="loader" role="status" aria-live="polite">${logo ? `<img src="${logo}" alt="Bid">` : ""}<div class="bar"></div>
+    <div class="what">${esc(text)}</div></div>`;
+}
+const loadingCard = what => loaderHTML("Loading team progress...");
 // the page data, fetched past GitHub's cache (it keeps data.enc.json up to ~10 minutes otherwise)
 async function loadData(pw, say = () => {}) {
   say("Downloading team data...");
@@ -333,12 +347,12 @@ async function unlock(pw, remember) {
   PW = pw;
   (remember ? localStorage : sessionStorage).setItem("tb_pw", pw);
   say("");
+  // team progress (statuses, documents, team changes) loads next; views show the loader until it arrives
+  PG_LOADING = !!DATA.progress;
   document.getElementById("lock").classList.add("hide"); document.getElementById("app").classList.remove("hide");
   renderMembers();
   pick(location.hash.slice(1).split("/")[0]);
-  // team progress (statuses, documents, team changes) fills in when it arrives; a slow connection can't block the page
-  PG_LOADING = !!DATA.progress;
-  document.getElementById("meta").innerHTML = spin("Loading team progress...");
+  if (PG_LOADING) document.getElementById("meta").innerHTML = spin("Loading team progress...");
   progressInit(pw).catch(e => { PG = PG || {}; PG.ok = false; PG.err = e.message; }).finally(() => {
     PG_LOADING = false;
     renderMembers();
@@ -934,6 +948,8 @@ function draw() {
     docsView(m, body);
   } else if (sub === "Experience") {
     experienceView(m, body);
+  } else if (PG_LOADING) {
+    body.innerHTML = loaderHTML("Loading team progress...");
   } else {
     body.innerHTML = `<div class="card"><div class="row"><input id="q" placeholder="Search company or title" style="flex:1;min-width:200px">
       <select id="tier"><option value="">All tiers</option><option value="best">Best fits</option><option value="consider">Worth a look</option></select>
