@@ -149,11 +149,17 @@ def remote_version(rp=None):
     rp = rp or repo()
     # the releases list (not /tags/) also shows a draft release, which is what an empty repo gets
     # a network failure must not look like "no cloud copy": push would then skip its newer-data check and overwrite it
-    r = _gh("api", f"repos/{rp}/releases", "--jq",
-            f'.[] | select(.tag_name=="{TAG}") | .assets[] | select(.name=="{ASSET}") | "\\(.id)-\\(.updated_at)"', check=False)
+    # GitHub's API now and then answers an empty list for a moment (seen 2026-10-22): ask again before saying "none"
+    for i in range(4):
+        r = _gh("api", f"repos/{rp}/releases", "--jq",
+                f'.[] | select(.tag_name=="{TAG}") | .assets[] | select(.name=="{ASSET}") | "\\(.id)-\\(.updated_at)"', check=False)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip().splitlines()[0]
+        if i < 3:
+            time.sleep(3 * (i + 1))
     if r.returncode != 0:
         raise RuntimeError(f"couldn't reach GitHub to check the cloud copy (network/VPN?): {(r.stderr or r.stdout).strip()[:200]}")
-    return (r.stdout.strip().splitlines() or [None])[0]
+    return None
 
 
 def download(rp, tries=6, log=print):
