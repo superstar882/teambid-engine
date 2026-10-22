@@ -8,8 +8,8 @@ name: Daily scan
 
 on:
   schedule:
-    - cron: "0 5 * * *"          # 05:00 UTC = 14:00 Japan time = 22:00 California the day before (GitHub may start it a little late)
-  workflow_dispatch:
+    - cron: "0 5 * * *"          # backup only: GitHub often starts this hours late. Supabase pg_cron starts it on time
+  workflow_dispatch:             # (setup/supabase-schedule.sql: 05:00 UTC = 14:00 Japan time)
 
 permissions:
   contents: write                # upload the workspace release asset, keep-alive commit
@@ -20,7 +20,26 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  check:                         # a late GitHub schedule run is skipped when today's scan already started
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.c.outputs.skip }}
+    steps:
+      - id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          skip=false
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            n=$(gh run list -R "$GITHUB_REPOSITORY" -w scan.yml -L 10 --json databaseId,createdAt,conclusion                 --jq '[.[] | select(.databaseId != ${{ github.run_id }}) | select(.conclusion != "cancelled" and .conclusion != "failure")
+                       | select(now - (.createdAt | fromdateiso8601) < 72000)] | length')
+            [ "$n" -gt 0 ] && skip=true && echo "A scan already started in the last 20 hours, skipping."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+
   scan:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 330
     services:
