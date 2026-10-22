@@ -219,10 +219,7 @@ def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=
         if spec["projects"]:
             spec["projects"].pop()
             continue
-        if not cands:
-            if len(spec["skills"]) > 3:
-                spec["skills"].pop()
-                continue
+        if not cands:                            # skills are never dropped to save space
             return pages
         _, i = max(cands, key=lambda x: (x[0], x[1]))
         spec["roles"][i]["bullets"].pop()

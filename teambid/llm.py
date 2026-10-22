@@ -223,12 +223,23 @@ def write_letter(profile, jd_text, company, title, draft, model=None):
 
 
 RESUME_RULES = (
-    "You tailor resume wording to a job post. You get the summary and bullets already chosen from the candidate's real "
-    "resume. Reword them so the job post's own terms show up where the bullet truly supports them. Hard rules: keep every "
-    "number exactly as written, keep the same facts and scope, never add a tool, skill, company, result or claim, keep "
-    "each bullet about the same length (one line stays one line), start bullets with a strong past-tense verb, no em "
-    "dashes or semicolons. If a bullet can't be improved honestly, return it unchanged. Never use these words: "
-    + ", ".join(sorted(writing.BANNED)) + ". Return ONLY JSON: {\"summary\": \"...\", \"bullets\": {\"<id>\": \"...\"}}.")
+    "You are a senior engineering recruiter editing one candidate's resume for one job post. You get the summary and "
+    "the experience bullets already picked from their real resume, each with its role. Rewrite them so a hiring manager "
+    "for THIS job sees the match in a 6-second skim.\n"
+    "How a strong bullet reads: past-tense action verb first, then what was built or changed, then the result. Concrete "
+    "nouns, plain words, the way a sharp engineer talks. Example: 'Worked on dashboard performance improvements using "
+    "React' becomes 'Cut dashboard load time from 6 s to 1.8 s by moving reports to React Query'. Only when those facts "
+    "are already in the original.\n"
+    "Use the job post's own term when the bullet truly shows it ('ETL' vs 'data pipelines', 'LLM' vs 'AI model'). Lead "
+    "with the part of the bullet that matters most to this job. One or two job terms per bullet at most. Never stuff "
+    "keywords, never list tools the bullet doesn't use.\n"
+    "Hard rules: keep every number exactly as written. Keep the same facts, scope and seniority (no 'led' if they "
+    "'helped'). Never add a tool, skill, company, metric or result that isn't in the original. Keep each bullet about "
+    "the same length, under 120 characters when the original is. No em dashes, no semicolons, no first person. If a "
+    "bullet is already strong for this job, return it unchanged.\n"
+    "Summary: 1-2 sentences, facts from the summary and bullets only, aimed at this job's main need.\n"
+    "Never use these words: " + ", ".join(sorted(writing.BANNED)) + ".\n"
+    "Return ONLY JSON: {\"summary\": \"...\", \"bullets\": {\"<id>\": \"...\"}}.")
 
 
 def _bullet_ok(new, old, have):
@@ -250,8 +261,9 @@ def rewrite_resume(spec, profile, jd_text, model=None):
     if not available():
         return spec, "no Claude API key"
     ids = {f"r{i}b{j}": b for i, r in enumerate(spec["roles"]) for j, b in enumerate(r["bullets"])}
-    user = (f"JOB POST:\n{jd_text[:12000]}\n\nSUMMARY:\n{spec.get('summary', '')}\n\nBULLETS:\n" +
-            "\n".join(f"{k}: {v}" for k, v in ids.items()))
+    roles = "\n\n".join(f"{r['title']} at {r['company']}:\n" + "\n".join(f"r{i}b{j}: {b}" for j, b in enumerate(r["bullets"]))
+                        for i, r in enumerate(spec["roles"]) if r["bullets"])
+    user = f"JOB POST:\n{jd_text[:12000]}\n\nSUMMARY:\n{spec.get('summary', '')}\n\nBULLETS BY ROLE:\n{roles}"
     try:
         out = _call(RESUME_RULES, user, 3000, model)
         data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))

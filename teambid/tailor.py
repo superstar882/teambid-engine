@@ -150,15 +150,14 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
             projects.append((sc, {"name": p["name"], "link": p.get("link", ""), "bullets": [b["text"] for b in ranked[:2]],
                                   "stack": p.get("stack", [])[:6]}))
     projects = [p for _, p in sorted(projects, key=lambda x: -x[0])[:2]]
-    # skills: the job's must-haves the member has first, then the rest grouped by category
-    core = [s for s in jd["required"] + jd["preferred"] if s in have]
-    rest = [s for s in have if s not in core]
-    groups = []
-    if core:
-        groups.append(("Core for this role", core[:12]))
-    for cat, items in SK.group(sorted(rest, key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))).items():
-        groups.append((SK.CATEGORY_LABEL.get(cat, cat.title()), items[:10]))
-    groups = groups[:6]
+    # skills: every skill the member has stays; the job's required ones come first, then preferred, then each
+    # category ordered by how much the post mentions it (categories with job skills first)
+    core = list(dict.fromkeys(s for s in jd["required"] + jd["preferred"] if s in have))
+    rest = sorted((s for s in have if s not in core), key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))
+    groups = [("Core for this role", core)] if core else []
+    cats = SK.group(rest)
+    for cat in sorted(cats, key=lambda c: -max(weights.get(x, 0) for x in cats[c])):
+        groups.append((SK.CATEGORY_LABEL.get(cat, cat.title()), cats[cat]))
     # headline + summary from the member's own facts
     lane = (profile.get("lanes") or ["backend"])[0]
     headline = jd.get("title") if _title_fits(profile, jd.get("title", "")) else (profile.get("headline") or SK.LANES[lane][1][0])
