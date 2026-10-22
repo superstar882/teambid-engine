@@ -141,8 +141,8 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     use_claude = bool(model) and llm.available()
     if model and not llm.available():
         resume_note = "no Claude key set yet: built with the free template"
-    if use_claude:                    # reword the chosen bullets toward the post (facts kept)
-        spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
+    if use_claude:                    # resume bullets stay the member's own words: Claude rewording read worse (2026-10-22)
+        resume_note = "resume bullets kept as written in your resume, picked and ordered for this job"
     problems = tailor.validate(spec, p)
     kw = tailor.keyword_report(spec, jd)
     letter, letter_check = cover.draft_letter(p, jd, fit)

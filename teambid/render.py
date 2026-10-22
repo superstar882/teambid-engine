@@ -109,6 +109,17 @@ def html_to_pdf(body_html, path, css=CSS, paper="letter"):
     return pages
 
 
+def resume_pdf(spec, path, paper="letter"):
+    """Resume PDF -> pages. RenderCV's typeset layout when installed (cv_pdf.py); the HTML layout above otherwise."""
+    from . import cv_pdf
+    if cv_pdf.available():
+        try:
+            return cv_pdf.write_pdf(spec, path, paper)
+        except Exception as e:                   # odd data RenderCV won't take: still give the member a resume
+            print(f"RenderCV failed, using the basic layout: {str(e)[:200]}")
+    return html_to_pdf(resume_html(spec), path, paper=paper)
+
+
 def _paper_docx(d, paper):
     from docx.shared import Mm
     for s in d.sections:
@@ -200,7 +211,7 @@ def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=
     budget = budget or (2 if years >= 8 else 1)
     tmp = Path(pdf_path) if pdf_path else Path(tempfile.mkstemp(suffix=".pdf")[1])
     for _ in range(40):
-        pages = html_to_pdf(resume_html(spec), tmp, paper=paper)
+        pages = resume_pdf(spec, tmp, paper)
         if pages <= budget:
             return pages
         # drop one bullet: from the role (or project) with the most bullets, oldest first on ties
@@ -215,7 +226,7 @@ def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=
             return pages
         _, i = max(cands, key=lambda x: (x[0], x[1]))
         spec["roles"][i]["bullets"].pop()
-    return html_to_pdf(resume_html(spec), tmp, paper=paper)
+    return resume_pdf(spec, tmp, paper)
 
 
 def _last_page_fill(pdf_path):
@@ -243,11 +254,11 @@ def fit_pages(spec, years, pdf_path, paper, budget):
             trial["roles"][max(cands, key=lambda x: (x[0], x[1]))[1]]["bullets"].pop()
         else:
             break
-        if html_to_pdf(resume_html(trial), pdf_path, paper=paper) < pages:
+        if resume_pdf(trial, pdf_path, paper) < pages:
             spec.clear()
             spec.update(trial)
             return pages - 1
-    return html_to_pdf(resume_html(spec), pdf_path, paper=paper)
+    return resume_pdf(spec, pdf_path, paper)
 
 
 def write_resume(spec, folder, base, years=0, region="US"):

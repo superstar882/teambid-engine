@@ -2,5 +2,6 @@ requests>=2.31
 pyyaml>=6.0
 python-docx>=1.1
 pymupdf>=1.24,<2  # 2.0 reads some PDF layouts differently; keep PC and cloud identical
+rendercv[full]==2.8  # resume PDF layout (Typst, MIT); pinned so the look never changes by itself
 tzdata; platform_system == "Windows"
 cryptography>=42
