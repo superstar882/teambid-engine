@@ -95,6 +95,11 @@ English (C1), German (native)
 
 def make():
     HERE.mkdir(exist_ok=True)
+    out = HERE / "maya_chen_frontend.docx"
+    if out.exists():                 # a fresh save changes the file's timestamps: keep git clean between test runs
+        (HERE / "raj_patel_data.txt").write_text(DATA_TXT, encoding="utf-8")
+        (HERE / "lena_schmidt_eu.txt").write_text(EU_TXT, encoding="utf-8")
+        return out, HERE / "raj_patel_data.txt"
     d = docx.Document()
     for text, style in FRONTEND:
         if style == "Title":
