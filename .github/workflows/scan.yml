@@ -8,7 +8,7 @@ name: Daily scan
 
 on:
   schedule:
-    - cron: "0 5 * * *"          # backup only: GitHub often starts this hours late. Supabase pg_cron starts it on time
+    - cron: "14 5 * * *"         # backup only, off the busy :00 mark. Supabase pg_cron starts the scan at 05:00 on time
   workflow_dispatch:             # (setup/supabase-schedule.sql: 05:00 UTC = 14:00 Japan time)
 
 permissions:
