@@ -63,7 +63,25 @@ IN_OFFICE = re.compile(r"(?i)\b(location type:?\s*(hybrid|on-?site)|hybrid (role
                        r"this (role|position|job) is (a )?(hybrid|on-?site|in[- ]office|in[- ]person)|we work in[- ]person|"
                        r"\d\s*(days?|x) (a|per) week (in|at) (the|our) (office|hq)|in[- ]office \d|"
                        r"(must|required to|expected to) (be )?(work )?(in|from) (the|our) office|on-?site (role|position|only)|"
-                       r"in[- ]person (role|position|team|company|culture))\b")
+                       r"in[- ]person (role|position|team|company|culture)|(this|it) is not a remote|not (a )?remote (role|position|job)|"
+                       r"no remote (work|option)|local candidates only|(within|in) commuting distance|able to commute)\b")
+# "Location: Atlanta, GA" in a post listed as remote (Himalayas does this): a city, no remote word next to it
+_LOC_LABEL = re.compile(r"(?i)\b(?:job |work |office |primary )?location\s*:\s*([^:]{0,80})")
+_LOC_CITY = re.compile(r"^[A-Z][A-Za-z.'-]+(?: [A-Z][A-Za-z.'-]+)*,\s*[A-Z]")
+_LOC_REMOTE = re.compile(r"(?i)remote|anywhere|virtual|home|distributed|flexible|worldwide|global|multiple|various")
+
+
+def office_location(text):
+    """The post's own "Location:" line names a city and no remote option -> that city, else ""."""
+    for m in _LOC_LABEL.finditer(text or ""):
+        val = re.split(r"\s{2,}|\s[A-Z][a-z]+(?: [A-Za-z]+)?\s*:|\.\s", m.group(1).strip())[0].strip()
+        if not _LOC_CITY.match(val) or _LOC_REMOTE.search(m.group(1)[:60]):
+            continue
+        first = val.split(",")[0]
+        if any(p.search(first) for p in COUNTRY.values()) or re.search(r"(?i)^(europe|emea|latam|apac|americas|north america)$", first):
+            continue                          # "United States, Canada": countries, not an office
+        return val
+    return ""
 FULL_REMOTE = re.compile(r"(?i)\b(fully remote|100% remote|remote[- ]first|remote[- ]friendly|work from anywhere|remote (or|/) hybrid|"
                          r"hybrid (or|/) remote|open to remote|can be (done|performed|worked) remotely)\b")
 WORLDWIDE = re.compile(r"(?i)\b(anywhere|worldwide|global|globally|any location|any country|work from anywhere|fully distributed|hire (from )?(anywhere|globally|internationally|worldwide)|international(ly)? remote)\b")

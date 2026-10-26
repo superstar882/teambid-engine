@@ -29,7 +29,8 @@ def himalayas(queries):
                 out.append({"company": j.get("companyName", ""), "title": j.get("title", ""),
                             "location": "Remote " + ", ".join(locs if isinstance(locs, list) else [str(locs)]),
                             "url": j.get("applicationLink") or j.get("guid"), "posted": iso(j.get("pubDate")),
-                            "source": "Himalayas", "ats": "feed"})
+                            # Himalayas lists on-site jobs too ("Location: Atlanta, GA"): the post is the only place it shows
+                            "description": _txt(j.get("description")), "source": "Himalayas", "ats": "feed"})
     return out
 
 

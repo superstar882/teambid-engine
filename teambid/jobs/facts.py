@@ -15,6 +15,8 @@ the text (330k descriptions would not fit in the cloud copy). Every member is sc
 import json
 import re
 
+VERSION = 2          # bump when analyze() learns something new: facts from older versions are rebuilt when the post comes back
+
 ENG_TITLE = re.compile(r"(?i)\b(engineer(ing)?|developer|programmer|architect|SRE|site reliability|devops|dev ?ops|"
                        r"data scientist|scientist|machine learning|ML|AI|analytics engineer|technical staff|tech lead|"
                        r"full[- ]?stack|back[- ]?end|front[- ]?end|software|platform|infrastructure|SDET|QA|test automation|"
@@ -37,9 +39,9 @@ def analyze(text, title=""):
     regions |= {f"{c}_tz" for c, pat in M.TZ_EVIDENCE.items() if pat.search(text)}
     return {"must": jd["required"][:20], "nice": jd["preferred"][:15], "years": jd["years"],
             "regions": sorted(regions), "restrict": [c for c, pat in M.RESTRICT.items() if pat.search(text)],
-            "us_only": bool(M.US_ONLY.search(text)), "in_office": bool(M.IN_OFFICE.search(text)),
+            "us_only": bool(M.US_ONLY.search(text)), "in_office": bool(M.IN_OFFICE.search(text) or M.office_location(text)),
             "full_remote": bool(M.FULL_REMOTE.search(text)), "no_sponsor": bool(M.NO_SPONSOR.search(text)),
-            "chars": len(text)}
+            "chars": len(text), "v": VERSION}
 
 
 def _ensure(con):
@@ -95,7 +97,12 @@ def build(con, jobs, day, log=print, processes=None):
         part = keys[i:i + 900]
         for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
             ids[r["url_key"]] = r["id"]
-    have = {r[0] for r in con.execute("SELECT job_id FROM job_facts")}
+    have, old = set(), {}
+    for job_id, v, form in con.execute("SELECT job_id, json_extract(data, '$.v'), json_extract(data, '$.form') FROM job_facts"):
+        if v == VERSION:
+            have.add(job_id)
+        elif form:
+            old[job_id] = json.loads(form)        # keep what the application form said
     args = [(ids[k], todo[k]["description"], todo[k].get("title", "")) for k in keys if k in ids and ids[k] not in have]
     kept = sum(1 for k in keys if k in ids and ids[k] in have)
     if not args:
@@ -107,5 +114,8 @@ def build(con, jobs, day, log=print, processes=None):
     except Exception as e:                      # e.g. no process support: do it in this process
         log(f"  (analysis in one process: {type(e).__name__})")
         rows = [r for r in map(_work, args) if r[1]]
+    for job_id, f in rows:
+        if job_id in old:
+            f["form"] = old[job_id]
     save(con, rows, day)
     return len(rows), kept

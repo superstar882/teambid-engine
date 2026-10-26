@@ -19,6 +19,18 @@ class RemoteOnlyTest(unittest.TestCase):
         for t in ("This is a fully remote role.", "Remote or hybrid, your choice.", "We are remote-first."):
             self.assertTrue(matcher.FULL_REMOTE.search(t), t)
 
+    def test_location_line_names_an_office(self):
+        # Himalayas lists this as "United States only"; only the post says where the work is
+        fox = ("Title: Software Engineer II Grade: P2 Location: Atlanta, GA Compensation: Salary USD $100,000 - $130,000/ Year "
+               "Relocation Eligibility: No Sponsorship availability: No")
+        self.assertTrue(matcher.office_location(fox))
+        self.assertTrue(matcher.office_location("Location: San Francisco, CA (Hybrid)"))
+        for t in ("Location: Remote (US)", "Location: Austin, TX or Remote", "Location: United States, Canada",
+                  "Location: Remote within the US. Our Austin, TX office is optional", "pay depends on geographic location."):
+            self.assertFalse(matcher.office_location(t), t)
+        from teambid.jobs import facts
+        self.assertTrue(facts.analyze(fox, "Software Engineer II")["in_office"])
+
 
 
 class CompanyOfficesTest(unittest.TestCase):
