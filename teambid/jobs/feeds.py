@@ -37,14 +37,15 @@ def himalayas(queries):
 def remoteok():
     d = get("https://remoteok.com/api") or []
     return [{"company": j.get("company", ""), "title": j.get("position", ""), "location": "Remote " + (j.get("location") or ""),
-             "url": j.get("url"), "posted": iso(j.get("date")), "source": "RemoteOK", "ats": "feed"}
+             "url": j.get("url"), "posted": iso(j.get("date")), "description": _txt(j.get("description")), "source": "RemoteOK", "ats": "feed"}
             for j in d if isinstance(j, dict) and j.get("position")]
 
 
 def remotive():
     d = _daily_cache("remotive", lambda: get("https://remotive.com/api/remote-jobs") or {})
     return [{"company": j.get("company_name", ""), "title": j.get("title", ""), "location": "Remote " + (j.get("candidate_required_location") or ""),
-             "url": j.get("url"), "posted": iso(j.get("publication_date")), "source": "Remotive", "ats": "feed"} for j in d.get("jobs", [])]
+             "url": j.get("url"), "posted": iso(j.get("publication_date")), "description": _txt(j.get("description")),
+             "source": "Remotive", "ats": "feed"} for j in d.get("jobs", [])]
 
 
 def hackernews():
@@ -62,7 +63,8 @@ def hackernews():
         parts = [p.strip() for p in first.split("|")]
         out.append({"company": parts[0][:60], "title": " | ".join(parts[1:])[:140],
                     "location": first if re.search(r"(?i)remote", first) else "", "posted": None,
-                    "url": f"https://news.ycombinator.com/item?id={c.get('id')}", "source": "HN Who is hiring", "ats": "feed"})
+                    "url": f"https://news.ycombinator.com/item?id={c.get('id')}", "description": text[:12000],
+                    "source": "HN Who is hiring", "ats": "feed"})
     return out
 
 

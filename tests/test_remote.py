@@ -11,6 +11,9 @@ class RemoteOnlyTest(unittest.TestCase):
         self.assertFalse(matcher.place_ok("San Mateo, CA / San Francisco, CA / [Hybrid]", "Software Engineer", US)[0])
         self.assertFalse(matcher.place_ok("Austin, TX / [On-site]", "Software Engineer", US)[0])
         self.assertTrue(matcher.place_ok("Remote - US", "Software Engineer", US)[0])
+        # HN-style location lines: "remote" appears, but as "no remote"
+        self.assertFalse(matcher.place_ok("Acme | Onsite, New York, NY | no remote", "Software Engineer", US)[0])
+        self.assertFalse(matcher.place_ok("Austin, TX (non-remote)", "Software Engineer", US)[0])
 
     def test_post_text_in_office(self):
         for t in ("We work in person in the San Francisco Bay Area.", "This role is hybrid, 3 days a week in the office.",

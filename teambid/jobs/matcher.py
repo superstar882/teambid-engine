@@ -58,6 +58,7 @@ CLEARANCE = re.compile(r"(?i)\b(TS/SCI|top secret|secret clearance|security clea
                        r"polygraph|public trust|DoD clearance)\b")
 REMOTE = re.compile(r"(?i)remote|anywhere|distributed|work from home|wfh|worldwide|global")
 NOT_REMOTE_TAG = re.compile(r"\[(Hybrid|On-site)\]")
+NOT_REMOTE_WORDS = re.compile(r"(?i)\b(no|not|non)[- ]remote\b|\bremote not (possible|available|an option)")   # "Onsite SF, no remote"
 # the job post itself says the work is in an office (checked for the top matches, whose posts are read anyway)
 IN_OFFICE = re.compile(r"(?i)\b(location type:?\s*(hybrid|on-?site)|hybrid (role|position|schedule|work|model|environment|setup)|"
                        r"this (role|position|job) is (a )?(hybrid|on-?site|in[- ]office|in[- ]person)|we work in[- ]person|"
@@ -211,7 +212,7 @@ def place_ok(loc, title, prefs):
     mentions = {c for c, p in COUNTRY.items() if p.search(text)}
     bad = mentions - set(allowed)
     good = mentions & set(allowed)
-    remote = bool(REMOTE.search(text)) and not NOT_REMOTE_TAG.search(loc or "")
+    remote = bool(REMOTE.search(text)) and not NOT_REMOTE_TAG.search(loc or "") and not NOT_REMOTE_WORDS.search(text)
     homes = [h for h in prefs.get("home_cities", []) if h]
     if prefs.get("onsite_ok") and homes and re.search("|".join(re.escape(h) for h in homes), text, re.I):
         return True, "home"
@@ -346,7 +347,7 @@ def score_job(job, member, lane_pats, today, facts=None):
     return max(0, min(100, s + 20)), reasons
 
 
-def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_check=400):
+def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_check=400, read_more=300):
     today = config.today()
     day = day or con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
     if not day:
@@ -378,8 +379,11 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     def unknown_place(job):          # "Remote" with no country, region or "worldwide"
         t = f"{job.get('location') or ''} {job['title']}"
         return not any(p.search(t) for p in COUNTRY.values()) and not WORLDWIDE.search(t)
-    # jobs whose description didn't come with the board list (Workday, SmartRecruiters, ...): read the top ones now
+    # jobs whose description didn't come with the board list (Workday, SmartRecruiters, ...): read every one that could
+    # make the list, so "remote" on the board is checked against the post itself (a hybrid job can carry a remote flag)
+    min_score = int(prefs.get("min_score", 40))
     need = [it for it in uniq[:enrich * 4] if it[2]["id"] not in known]
+    need += [it for it in uniq[enrich * 4:] if it[0] >= min_score and it[2]["id"] not in known][:read_more]
     if not us_ok:
         need += [it for it in uniq[enrich * 4:] if it[2]["id"] not in known and unknown_place(it[2])][:geo_check]
     fetched = _prefetch_jds(con, [it[2] for it in need])
@@ -489,8 +493,9 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
         log(f"  {member['name']}: read {fetched} job posts")
     stamp = str(today)
     new = best = 0
-    min_score = int(prefs.get("min_score", 40))
     for sc, why, job in uniq:
+        if job["id"] not in known and "remote" in place_ok(job.get("location") or "", job["title"], prefs)[1]:
+            why.append("post not read: open it to check it's really remote")
         if sc < min_score:
             reasons["low score"] += 1
             rejected.add(job["id"])
