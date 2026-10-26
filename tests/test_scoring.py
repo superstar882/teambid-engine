@@ -63,3 +63,19 @@ class PostedWindowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BoardDateTest(unittest.TestCase):
+    def test_newest_board_copy_per_role(self):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE jobs (company, title, source, posted, last_seen)")
+        con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?)", [
+            ("Dante", "Full Stack Engineer", "Company board", "2024-03-19", "d1"),       # old opening, relisted by a feed
+            ("Acme", "Software Engineer", "Company board", "2026-01-05", "d1"),
+            ("Acme", "Software Engineer", "Company board", "2026-10-24", "d1"),         # second, fresh opening
+            ("Dante", "Full Stack Engineer", "Himalayas", "2026-10-25", "d1")])
+        M._BOARD_DATES.clear()
+        got = M.board_dates(con, "d1")
+        self.assertEqual(got[M.dedupe_key("Dante", "Full Stack Engineer")], "2024-03-19")
+        self.assertEqual(got[M.dedupe_key("Acme", "Software Engineer")], "2026-10-24")

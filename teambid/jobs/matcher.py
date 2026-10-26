@@ -362,8 +362,13 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     hits, rejected = [], set()          # rejected: seen in this scan and failed a real test (not just the date window)
     from . import facts as F
     known = F.load(con)                  # description facts, computed once per scan for every engineering job
+    board = board_dates(con, day)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
+        if job.get("ats") == "feed" and job.get("posted"):
+            first = board.get(dedupe_key(job["company"], job["title"]))
+            if first and first < job["posted"][:10]:
+                job["posted"] = first           # feeds re-date jobs they list again: the company's own board knows the real date
         sc, why = score_job(job, member, lane_pats, today, known.get(job["id"]))
         if sc is None:
             reasons[why] += 1
@@ -550,6 +555,24 @@ def dedupe_key(company, title):
     c = re.sub(r"(careers?|jobs|hiring|hq|talent|recruiting|inc|ltd|gmbh|group)$", "", c) or c   # "bjakcareer" -> "bjak"
     t = re.sub(r"[^a-z0-9]", "", TITLE_NOISE.sub("", _drop_place_tail(title or "").lower())) or re.sub(r"[^a-z0-9]", "", (title or "").lower())
     return c[:12], t
+
+
+_BOARD_DATES = {}
+
+
+def board_dates(con, day):
+    """Company-board posting date per role (dedupe key) in this scan: the newest copy, so a fresh second opening with
+    the same title still counts as fresh. Computed once per scan day and shared by every member."""
+    if day not in _BOARD_DATES:
+        out = {}
+        for company, title, posted in con.execute("SELECT company, title, posted FROM jobs WHERE last_seen=? AND "
+                                                  "source='Company board' AND posted IS NOT NULL", (day,)):
+            k, p = dedupe_key(company, title), posted[:10]
+            if p > out.get(k, ""):
+                out[k] = p
+        _BOARD_DATES.clear()
+        _BOARD_DATES[day] = out
+    return _BOARD_DATES[day]
 
 
 def _dedupe(hits, reasons):
