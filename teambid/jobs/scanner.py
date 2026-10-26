@@ -14,7 +14,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, storage
-from . import ats, facts, feeds, matcher
+from . import ats, discover, facts, feeds, matcher
 
 LOCK = config.CACHE / "scan-running.txt"      # holds {"pid", "started"} while a scan runs
 MARK = config.CACHE / "last-scan.txt"
@@ -72,8 +72,12 @@ def load_boards(only=None, per_ats=None):
     if not config.BOARDS.exists():
         return []
     data = json.loads(config.BOARDS.read_text(encoding="utf-8"))
-    return [(a, s) for a, slugs in data.items() if a in ats.SYSTEMS and (not only or a in only)
-            for s in (slugs[:per_ats] if per_ats else slugs)]
+    out = [(a, s) for a, slugs in data.items() if a in ats.SYSTEMS and (not only or a in only)
+           for s in (slugs[:per_ats] if per_ats else slugs)]
+    if not (only or per_ats):                    # careers pages found through job feeds (see discover.py)
+        have = set(out)
+        out += [b for b in discover.boards() if b not in have]
+    return out
 
 
 def team_queries(con):
@@ -109,6 +113,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             run_id = storage.start_run(con, "scan")
             queries = team_queries(con)
         boards = load_boards(only, per_ats)
+        found_names = discover.boards()              # found boards carry the feed's company name, so copies compare
         if limit:
             boards = boards[:limit]
         saved = {}
@@ -132,6 +137,9 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
             start, js = time.monotonic(), []
             try:
                 js = _with_facts(ats.fetch(b[1], b[0], queries))
+                if b in found_names:
+                    for j in js:
+                        j["company"] = found_names[b]
                 return js
             except Exception:
                 return []
@@ -174,6 +182,15 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                 problems.append(f"{name}: returned 0 jobs")
             timing[name] = time.monotonic() - t1
             all_jobs += _with_facts(js)
+        if not (only or per_ats or limit):
+            t1 = time.monotonic()
+            try:
+                covered = {matcher.dedupe_key(j["company"], "")[0] for j in board_jobs}
+                found = discover.run([j for j in all_jobs if j.get("ats") == "feed"], covered, day, log=log)
+                all_jobs += _with_facts(found)
+            except Exception as e:                   # nice to have: never let it stop a scan
+                problems.append(f"careers page search: {type(e).__name__} {str(e)[:100]}")
+            timing["careers pages"] = time.monotonic() - t1
         problems += [f"{a}: {n} boards kept saying 'too many requests'" for a, n in ats.BLOCKED.items()]
         t1 = time.monotonic()
         with storage.connect() as con:
