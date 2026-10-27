@@ -102,7 +102,12 @@ class Tailoring(unittest.TestCase):
         spec = tailor.build_resume(self.p, self.jd)
         self.assertEqual(tailor.validate(spec, self.p), [])
         self.assertNotIn("GraphQL", [s for _, items in spec["skills"] for s in items])   # never adds a missing skill
-        self.assertEqual(spec["skills"][0][0], "Core for this role")
+        self.assertEqual(spec["skills"][0][0], "Languages")                                   # standard lines, Languages first
+        have = set(self.p["skills"]["proven"]) | set(self.p["skills"].get("listed_only", []))
+        self.assertEqual({s for _, items in spec["skills"] for s in items}, have)            # every listed skill is shown
+        for _, items in spec["skills"]:                                                      # the job's skills lead each line
+            asked = [i for i, s in enumerate(items) if s in self.jd["required"]]
+            self.assertEqual(asked, list(range(len(asked))))
 
     def test_validator_catches_invented_facts(self):
         spec = tailor.build_resume(self.p, self.jd)

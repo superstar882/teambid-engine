@@ -116,6 +116,12 @@ def _signature(profile, skill):
     return score
 
 
+# skill lines on the resume: label -> skill categories (skills.py)
+SKILL_LINES = (("Languages", ("language",)), ("Backend & APIs", ("backend",)), ("Data Engineering", ("data", "analytics")),
+               ("AI & LLMs", ("ai", "ml")), ("Databases & Cloud", ("database", "cloud", "devops")),
+               ("Frontend & Mobile", ("frontend", "mobile")))
+
+
 def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
     """-> resume spec dict (render.py turns it into DOCX/PDF)."""
     weights = Counter()
@@ -151,18 +157,21 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
             projects.append((sc, {"name": p["name"], "link": p.get("link", ""), "bullets": [b["text"] for b in ranked[:2]],
                                   "stack": p.get("stack", [])[:6]}))
     projects = [p for _, p in sorted(projects, key=lambda x: -x[0])[:2]]
-    # skills: the job's required ones first, then preferred, then each category ordered by how much the post mentions
-    # it. Skills only listed (no bullet shows them) stay when the post asks for them; the rest would take the space
-    # the bullets need. At most 5 lines; fit_one_page drops more from the end when the page is full.
-    proven_set = set(profile["skills"].get("proven", []))
-    core = list(dict.fromkeys(s for s in jd["required"] + jd["preferred"] if s in have))
-    rest = sorted((s for s in have if s not in core and (s in proven_set or weights.get(s, 0) > 0)),
-                  key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))
-    groups = [("Core for this role", core)] if core else []
-    cats = SK.group(rest)
-    for cat in sorted(cats, key=lambda c: (-max(weights.get(x, 0) for x in cats[c]), -len(cats[c]))):
-        groups.append((SK.CATEGORY_LABEL.get(cat, cat.title()), cats[cat]))
-    groups = groups[:5]
+    # skills: every skill the member lists, on a few standard lines (what a recruiter expects to scan). The lines most
+    # relevant to the job come first; inside a line the job's skills lead, then the ones the bullets prove.
+    groups = []
+    for label, cats in SKILL_LINES:
+        items = [x for x in have if SK.category(x) in cats]
+        if items:
+            items.sort(key=lambda x: (-weights.get(x, 0), -_signature(profile, x)))
+            groups.append((label, items, sum(weights.get(x, 0) for x in items)))
+    known = {c for _, cats in SKILL_LINES for c in cats}
+    other = [x for x in have if SK.category(x) not in known]
+    if other:
+        groups.append(("Tools & practices", sorted(other, key=lambda x: -weights.get(x, 0)), sum(weights.get(x, 0) for x in other)))
+    core = list(dict.fromkeys(x for x in jd["required"] + jd["preferred"] if x in have))   # the summary names these first
+    order = {g[0]: i for i, g in enumerate(groups)}
+    groups = [(lab, items) for lab, items, w in sorted(groups, key=lambda g: (g[0] != "Languages", -g[2], order[g[0]]))]
     # headline + summary from the member's own facts
     lane = (profile.get("lanes") or ["backend"])[0]
     headline = jd.get("title") if _title_fits(profile, jd.get("title", "")) else (profile.get("headline") or SK.LANES[lane][1][0])

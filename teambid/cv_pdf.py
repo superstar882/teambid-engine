@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-THEME = "engineeringresumes"
+THEME = "engineeringclassic"     # chosen by the team 2026-10-27 (compared with engineeringresumes, harvard, sb2nov)
 
 
 def available():
@@ -94,10 +94,13 @@ def to_rendercv(spec, paper="letter"):
     return {"cv": cv,
             "design": {"theme": THEME,
                        "page": {"size": "a4" if paper == "a4" else "us-letter", "show_footer": False, "show_top_note": False,
-                                "top_margin": "0.5in", "bottom_margin": "0.5in", "left_margin": "0.6in", "right_margin": "0.6in"},
+                                "top_margin": "0.45in", "bottom_margin": "0.45in", "left_margin": "0.5in", "right_margin": "0.5in"},
                        # the theme's gaps are made for long CVs: tighter (still easy to read) so a 1-page resume keeps
                        # 2-4 bullets per job instead of losing them to whitespace
-                       "typography": {"line_spacing": "0.5em", "font_size": {"name": "22pt", "section_titles": "1.15em"}},
+                       # Raleway (the theme's) for the name and section titles; Source Sans 3 for the text: narrower, so
+                       # skill lines and bullets wrap less
+                       "typography": {"line_spacing": "0.5em", "alignment": "left", "font_size": {"name": "22pt", "section_titles": "1.15em"},
+                                      "font_family": {"body": "Source Sans 3", "connections": "Source Sans 3"}},
                        "header": {"space_below_name": "0.25cm", "space_below_headline": "0.2cm", "space_below_connections": "0.3cm"},
                        "section_titles": {"space_above": "0.3cm", "space_below": "0.18cm"},
                        "sections": {"space_between_regular_entries": "0.22cm", "space_between_text_based_entries": "0.08cm"},
