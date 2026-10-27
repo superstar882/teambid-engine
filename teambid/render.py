@@ -205,24 +205,52 @@ def resume_docx(spec, path, paper="letter"):
     d.save(path)
 
 
+def _shrink(spec):
+    """Take one thing out to save space, least useful first. -> False when nothing is left to take.
+    A 4th bullet goes before a 5th skill line, a 3rd before a 4th, and every job keeps 2 bullets while anything else can go:
+    a resume with one line per job reads as if the member did little."""
+    roles, skills = spec["roles"], spec.get("skills") or []
+
+    def drop_bullet(keep):
+        """From the jobs with more than `keep` bullets, drop the least relevant last bullet (older job on ties)."""
+        cands = [i for i, r in enumerate(roles) if len(r["bullets"]) > keep]
+        if not cands:
+            return False
+        last = lambda i: (roles[i].get("scores") or [0] * len(roles[i]["bullets"]))[len(roles[i]["bullets"]) - 1]
+        r = roles[min(cands, key=lambda i: (last(i), -i))]
+        r["bullets"].pop()
+        if r.get("scores"):
+            r["scores"] = r["scores"][:len(r["bullets"])]
+        return True
+
+    if spec.get("projects"):
+        spec["projects"].pop()
+    elif drop_bullet(3):
+        pass
+    elif len(skills) > 4:
+        skills.pop()
+    elif drop_bullet(2):
+        pass
+    elif len(skills) > 3:
+        skills.pop()
+    elif any(r.get("stack") for r in roles):
+        next(r for r in reversed(roles) if r.get("stack"))["stack"] = []     # oldest job's tech line first
+    elif drop_bullet(1):
+        pass
+    else:
+        return False
+    return True
+
+
 def fit_one_page(spec, years=0, pdf_path=None, log=None, paper="letter", budget=None):
-    """Trim bullets (oldest roles first, then projects) until the PDF fits the page budget. Returns pages."""
+    """Take things out (see _shrink) until the PDF fits the page budget. Returns pages."""
     import tempfile
     budget = budget or (2 if years >= 8 else 1)
     tmp = Path(pdf_path) if pdf_path else Path(tempfile.mkstemp(suffix=".pdf")[1])
-    for _ in range(40):
+    for _ in range(60):
         pages = resume_pdf(spec, tmp, paper)
-        if pages <= budget:
+        if pages <= budget or not _shrink(spec):
             return pages
-        # drop one bullet: from the role (or project) with the most bullets, oldest first on ties
-        cands = [(len(r["bullets"]), i) for i, r in enumerate(spec["roles"]) if len(r["bullets"]) > 1]
-        if spec["projects"]:
-            spec["projects"].pop()
-            continue
-        if not cands:                            # skills are never dropped to save space
-            return pages
-        _, i = max(cands, key=lambda x: (x[0], x[1]))
-        spec["roles"][i]["bullets"].pop()
     return resume_pdf(spec, tmp, paper)
 
 
@@ -244,12 +272,7 @@ def fit_pages(spec, years, pdf_path, paper, budget):
         return pages
     trial = copy.deepcopy(spec)
     for _ in range(3):
-        cands = [(len(r["bullets"]), i) for i, r in enumerate(trial["roles"]) if len(r["bullets"]) > 1]
-        if trial["projects"]:
-            trial["projects"].pop()
-        elif cands:
-            trial["roles"][max(cands, key=lambda x: (x[0], x[1]))[1]]["bullets"].pop()
-        else:
+        if not _shrink(trial):
             break
         if resume_pdf(trial, pdf_path, paper) < pages:
             spec.clear()
