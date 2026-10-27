@@ -141,7 +141,8 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
         keep = ranked[:k] if ranked else []
         stack = [s for s in sorted(r.get("stack", []), key=lambda x: -weights.get(x, 0))][:8]
         roles.append({"company": r["company"], "title": r["title"], "location": r.get("location", ""), "start": r["start"],
-                      "end": r["end"], "bullets": [b["text"] for b in keep], "stack": stack})
+                      "end": r["end"], "bullets": [b["text"] for b in keep], "stack": stack,
+                      "scores": [round(_bullet_score(b["text"], weights, sem), 3) for b in keep]})   # page fitting drops the lowest
     projects = []
     for p in profile.get("projects", []):
         sc = sum(weights.get(s, 0) for s in p.get("stack", []))
@@ -150,14 +151,18 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
             projects.append((sc, {"name": p["name"], "link": p.get("link", ""), "bullets": [b["text"] for b in ranked[:2]],
                                   "stack": p.get("stack", [])[:6]}))
     projects = [p for _, p in sorted(projects, key=lambda x: -x[0])[:2]]
-    # skills: every skill the member has stays; the job's required ones come first, then preferred, then each
-    # category ordered by how much the post mentions it (categories with job skills first)
+    # skills: the job's required ones first, then preferred, then each category ordered by how much the post mentions
+    # it. Skills only listed (no bullet shows them) stay when the post asks for them; the rest would take the space
+    # the bullets need. At most 5 lines; fit_one_page drops more from the end when the page is full.
+    proven_set = set(profile["skills"].get("proven", []))
     core = list(dict.fromkeys(s for s in jd["required"] + jd["preferred"] if s in have))
-    rest = sorted((s for s in have if s not in core), key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))
+    rest = sorted((s for s in have if s not in core and (s in proven_set or weights.get(s, 0) > 0)),
+                  key=lambda s: (-weights.get(s, 0), -_signature(profile, s)))
     groups = [("Core for this role", core)] if core else []
     cats = SK.group(rest)
-    for cat in sorted(cats, key=lambda c: -max(weights.get(x, 0) for x in cats[c])):
+    for cat in sorted(cats, key=lambda c: (-max(weights.get(x, 0) for x in cats[c]), -len(cats[c]))):
         groups.append((SK.CATEGORY_LABEL.get(cat, cat.title()), cats[cat]))
+    groups = groups[:5]
     # headline + summary from the member's own facts
     lane = (profile.get("lanes") or ["backend"])[0]
     headline = jd.get("title") if _title_fits(profile, jd.get("title", "")) else (profile.get("headline") or SK.LANES[lane][1][0])
