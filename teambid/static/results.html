@@ -225,11 +225,26 @@ button.b2.danger { color:var(--bad); border-color:var(--bad2); } button.b2.dange
   </main>
 </div>
 <script>
-function fetchT(url, opts = {}, ms = 25000) {
+function fetchOnce(url, opts, ms) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), ms);
   return fetch(url, { ...opts, signal: ctl.signal }).finally(() => clearTimeout(timer))
     .catch(e => { throw new Error(e.name === "AbortError" ? `no answer from ${new URL(url, location.href).host} after ${ms / 1000} s (network or VPN?)` :
                                  `couldn't reach ${new URL(url, location.href).host} (${e.message})`); });
+}
+// Reads (GET) try again on a dropped or stalled connection or a 5xx: some networks lose the first TLS handshake to
+// GitHub Pages now and then ("Failed to fetch", or ~21 s of silence) while the next one works. Writes (POST) never
+// repeat, so a progress entry can't be stored twice.
+async function fetchT(url, opts = {}, ms = 25000, tries = 3) {
+  if ((opts.method || "GET").toUpperCase() !== "GET") tries = 1;
+  for (let i = 1; ; i++) {
+    try {
+      const r = await fetchOnce(url, opts, ms);
+      if (r.status < 500 || i >= tries) return r;
+    } catch (e) {
+      if (i >= tries) throw e;
+    }
+    await new Promise(res => setTimeout(res, 800 * i));
+  }
 }
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -517,7 +532,7 @@ function docsFor(slug) {
   return out;
 }
 async function docDownload(rid, key, meta) {
-  const r = await fetchT(`docs/${rid}/${key}.enc`, { cache: "no-store" });
+  const r = await fetchT(`docs/${rid}/${key}.enc`, { cache: "no-store" }, 12000);   // small files: a 12 s stall means retry
   if (!r.ok) throw new Error("The file isn't live yet. Try again in a minute.");
   const raw = new Uint8Array(await r.arrayBuffer());
   const plain = await crypto.subtle.decrypt({ name: "AES-GCM", iv: raw.slice(0, 12) }, PG.aes, raw.slice(12));
