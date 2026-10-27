@@ -207,7 +207,8 @@ def resume_docx(spec, path, paper="letter"):
 
 def _shrink(spec):
     """Take one thing out to save space, least useful first. -> False when nothing is left to take.
-    A 4th bullet goes before a 5th skill line, a 3rd before a 4th, and every job keeps 2 bullets while anything else can go:
+    4th bullets, then the per-job tech lines (the skills section has them), then 3rd bullets, then the least relevant
+    skill lines (5 always stay); every job keeps 2 bullets while anything else can go:
     a resume with one line per job reads as if the member did little."""
     roles, skills = spec["roles"], spec.get("skills") or []
 
@@ -227,14 +228,12 @@ def _shrink(spec):
         spec["projects"].pop()
     elif drop_bullet(3):
         pass
-    elif len(skills) > 4:
-        skills.pop()
+    elif any(r.get("stack") for r in roles):
+        next(r for r in reversed(roles) if r.get("stack"))["stack"] = []     # repeats the skills: oldest job's first
     elif drop_bullet(2):
         pass
-    elif len(skills) > 3:
-        skills.pop()
-    elif any(r.get("stack") for r in roles):
-        next(r for r in reversed(roles) if r.get("stack"))["stack"] = []     # oldest job's tech line first
+    elif len(skills) > 5:
+        skills.pop()                                                        # lines are ordered by relevance
     elif drop_bullet(1):
         pass
     else:
