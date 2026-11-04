@@ -365,6 +365,10 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     board = board_dates(con, day)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
+        if job.get("ats") == "feed" and is_reposter(job["company"]):
+            reasons["reposted"] += 1
+            rejected.add(job["id"])
+            continue
         if job.get("ats") == "feed" and job.get("posted"):
             first = board.get(dedupe_key(job["company"], job["title"]))
             if first and first < job["posted"][:10]:
@@ -555,6 +559,17 @@ def dedupe_key(company, title):
     c = re.sub(r"(careers?|jobs|hiring|hq|talent|recruiting|inc|ltd|gmbh|group)$", "", c) or c   # "bjakcareer" -> "bjak"
     t = re.sub(r"[^a-z0-9]", "", TITLE_NOISE.sub("", _drop_place_tail(title or "").lower())) or re.sub(r"[^a-z0-9]", "", (title or "").lower())
     return c[:12], t
+
+
+# Sites that copy other companies' jobs and list them under their own name (Lifelancer posted Veeva's "Senior Software
+# Engineer - Ostro" from July; Himalayas dated it 2026-11-03). The real employer and date are hidden, the role is often
+# closed on the employer's board, and the board copy is in the scan anyway when it is still open.
+REPOSTERS = ("lifelancer", "jobgether")
+
+
+def is_reposter(company):
+    c = re.sub(r"[^a-z0-9]", "", (company or "").lower())
+    return any(c.startswith(r) for r in REPOSTERS)
 
 
 _BOARD_DATES = {}

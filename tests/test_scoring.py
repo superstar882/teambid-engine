@@ -79,3 +79,11 @@ class BoardDateTest(unittest.TestCase):
         got = M.board_dates(con, "d1")
         self.assertEqual(got[M.dedupe_key("Dante", "Full Stack Engineer")], "2024-03-19")
         self.assertEqual(got[M.dedupe_key("Acme", "Software Engineer")], "2026-10-24")
+
+
+class ReposterTest(unittest.TestCase):
+    def test_repost_sites_are_known(self):
+        self.assertTrue(M.is_reposter("Lifelancer"))
+        self.assertTrue(M.is_reposter("Jobgether"))
+        self.assertFalse(M.is_reposter("Veeva"))
+        self.assertFalse(M.is_reposter(""))
