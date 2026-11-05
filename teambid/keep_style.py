@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path
 
-from . import config, llm, resume_parse, tailor
+from . import config, llm, resume_parse, style_tex, tailor
 from . import skills as SK
 from .style_text import key
 
@@ -191,15 +191,17 @@ def headline_ok(new, old, profile, job_title):
     return new.upper() if old.isupper() else new
 
 
-def default_plan(doc, jd):
+def default_plan(doc, jd, _jd_module=tailor):
     """What changes without Claude: bullets ordered by relevance to the job (tailor's score), skills by the job's
-    weights. Ties keep the original order."""
-    w = tailor.jd_weights(jd)
+    weights. Ties keep the original order.
+    _jd_module: the teambid.tailor module, bound here (default args are evaluated once, at def time) because
+    this file also defines a function named tailor() below, which would otherwise shadow the module import."""
+    w = _jd_module.jd_weights(jd)
     weight = lambda item: sum(w.get(s, 0) for s in SK.find(item, trusted=True))
     plan = {"headline": None, "summary": None, "text": {}, "order": {}, "skills": {}, "skill_lines": []}
     for j in doc["jobs"]:
         if j["reorder"]:
-            ranked = sorted(j["bullets"], key=lambda b: -tailor._bullet_score(b["text"].replace("**", ""), w))
+            ranked = sorted(j["bullets"], key=lambda b: -_jd_module._bullet_score(b["text"].replace("**", ""), w))
             plan["order"][j["id"]] = [b["id"] for b in ranked]
     for line in doc["skills"]:
         plan["skills"][line["id"]] = sorted(line["items"], key=lambda x: -weight(x))
@@ -246,3 +248,109 @@ def check(doc, reply, profile, jd):
     if doc.get("skills_move") and got and sorted(got) == sorted(l["id"] for l in doc["skills"]):
         plan["skill_lines"] = got
     return plan
+
+
+HANDLERS = {".tex": style_tex}        # .docx and PDF handlers come in parts 2 and 3
+
+
+def source_file(slug, member):
+    """The member's own resume file a handler can edit, or None (today's RenderCV resume is used then)."""
+    folder = config.member_dir(slug) / "resume"
+    stored = Path((member or {}).get("resume_file") or "")
+    if stored.suffix.lower() in HANDLERS and (folder / stored.name).exists():    # the stored path may be another PC's
+        return folder / stored.name
+    found = sorted(f for f in folder.iterdir() if f.suffix.lower() in HANDLERS)
+    return found[0] if found else None
+
+
+def pieces_for(slug, profile, src):
+    """The confirmed pieces of the member's file: the saved ones while the file is unchanged, else read again (Claude
+    when a key is set, the rule-based parse if not) and saved."""
+    saved = load_pieces(slug, src)
+    if saved:
+        return saved
+    text, _ = resume_parse.extract_text(src)
+    pieces = read(text)[0] if llm.available() else None
+    if not pieces:
+        pieces = confirm(pieces_from_profile(profile), text)[0]
+    if pieces:
+        save_pieces(slug, src, pieces)
+    return pieces
+
+
+def _build(handler, doc, plan, folder, base):
+    """Build the file. While it has more pages than the original, put back the original text of the piece that grew
+    the most (5 times at most). -> (files, how many were put back)."""
+    olds = {b["id"]: b["text"] for j in doc["jobs"] for b in j["bullets"]}
+    for reverted in range(6):
+        files = handler.build(doc, plan, folder, base)
+        if files["pages"] <= doc["pages"]:
+            return files, reverted
+        grown = [(len(t) - len(olds[i]), i) for i, t in plan["text"].items()]
+        if plan.get("summary") and doc.get("summary"):
+            grown.append((len(plan["summary"]) - len(doc["summary"]["text"]), "summary"))
+        grown = sorted(g for g in grown if g[0] > 0)
+        if not grown or reverted == 5:
+            break
+        worst = grown[-1][1]
+        if worst == "summary":
+            plan["summary"] = None
+        else:
+            del plan["text"][worst]
+    raise ValueError(f"the tailored file has {files['pages']} pages, the original {doc['pages']}")
+
+
+def report_spec(doc, plan):
+    """The tailored text in the shape tailor.validate / keyword_report read; spec.json keeps it with the plan."""
+    roles, rewritten = [], {}
+    for j in doc["jobs"]:
+        by_id = {b["id"]: b for b in j["bullets"]}
+        texts = []
+        for bid in plan["order"].get(j["id"]) or list(by_id):
+            t = (plan["text"].get(bid) or by_id[bid]["text"]).replace("**", "")
+            rewritten[t] = by_id[bid]["piece"]          # validate() traces every bullet back to the resume
+            texts.append(t)
+        roles.append({"company": j["company"], "title": j["title"], "bullets": texts})
+    lines = {l["id"]: l for l in doc["skills"]}
+    skills = [(lines[i]["label"], SK.find(", ".join(plan["skills"].get(i) or lines[i]["items"]), trusted=True))
+              for i in (plan["skill_lines"] or list(lines))]
+    head = plan.get("headline") or (doc.get("headline") or {}).get("text", "")
+    summary = (plan.get("summary") or (doc.get("summary") or {}).get("text", "")).replace("**", "")
+    return {"headline": head, "summary": summary, "skills": skills, "roles": roles, "projects": [],
+            "rewritten": rewritten, "style": {"source": doc["ext"], "plan": plan}}
+
+
+def tailor(slug, member, profile, jd, jd_text, model, folder, base):
+    """Tailor the member's own resume file for one job post. model None = no Claude: bullets and skills are only
+    reordered. -> {"files", "spec", "note"}; {"note": why} when it fell back; {} when there's no file to edit."""
+    src = source_file(slug, member) if (config.MEMBERS / slug / "resume").exists() else None   # never creates folders
+    if not src:
+        return {}
+    handler = HANDLERS[src.suffix.lower()]
+    try:
+        pieces = pieces_for(slug, profile, src)
+        if not pieces:
+            return {"note": "original style skipped: couldn't read the resume's parts"}
+        doc = handler.find(src, pieces)
+        if not doc["jobs"]:
+            return {"note": "original style skipped: couldn't find the job bullets in the file"}
+        plan, why, reply = default_plan(doc, jd), "no Claude: reordered only", None
+        if model:
+            reply, why = llm.tailor_in_place(doc, jd_text, model)
+            if reply:
+                plan, why = check(doc, reply, profile, jd), ""
+        files, reverted = _build(handler, doc, plan, Path(folder), base)
+    except Exception as e:                       # any failure: today's RenderCV resume is used instead
+        return {"note": f"original style skipped: {str(e)[:160]}"}
+    total = sum(len(j["bullets"]) for j in doc["jobs"])
+    moved = sum(1 for j in doc["jobs"] if plan["order"].get(j["id"], [b["id"] for b in j["bullets"]]) != [b["id"] for b in j["bullets"]])
+    note = (f"Resume style: original ({doc['ext']}). {len(plan['text'])} of {total} bullets reworded, "
+            f"{total - len(plan['text'])} kept as written, order changed in {moved} jobs, "
+            f"{files['pages']} page(s) (original {doc['pages']})")
+    if reverted:
+        note += f", put back {reverted} longer piece(s) to keep the page count"
+    if why:
+        note += f" ({why})"
+    spec = report_spec(doc, plan)
+    spec["style"]["claude_reply"] = reply        # spec.json shows what Claude sent next to what passed the checks
+    return {"files": files, "spec": spec, "note": note}

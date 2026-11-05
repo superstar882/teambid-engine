@@ -15,7 +15,8 @@ from pathlib import Path
 from . import config, export, progress, service
 
 REQ, PART, DONE = "docreq", "docpart", "docdone"
-MIME = {"pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}
+MIME = {"pdf": "application/pdf", "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "tex": "text/x-tex"}
 
 
 def queue(entries):
@@ -114,8 +115,11 @@ def run(limit=10, log=print):
             out_dir = export.SITE / page / "docs" / rid
             out_dir.mkdir(parents=True, exist_ok=True)
             files = {}
-            for key, path in (("resume_pdf", r["files"]["pdf"]), ("resume_docx", r["files"]["docx"]),
+            for key, path in (("resume_pdf", r["files"]["pdf"]), ("resume_docx", r["files"].get("docx")),
+                              ("resume_src", r["files"].get("source")),
                               ("letter_pdf", r["files"]["letter_pdf"]), ("letter_docx", r["files"]["letter_docx"])):
+                if not path:             # a member's own .tex has no DOCX; RenderCV resumes have no source file
+                    continue
                 (out_dir / f"{key}.enc").write_bytes(_encrypt_file(aes, path))
                 ext = Path(path).suffix.lstrip(".")
                 files[key] = {"name": Path(path).name, "type": MIME[ext]}
