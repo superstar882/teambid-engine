@@ -200,6 +200,15 @@ class Checks(unittest.TestCase):
         self.assertEqual(self.plan(summary=ok)["summary"], ok)
         self.assertIsNone(self.plan(summary="Backend engineer with 11+ years building Go and Python services for payments.")["summary"])
 
+    def test_malformed_list_fields_are_ignored(self):
+        ok = "Built a payments API in **Python** and **FastAPI** handling 2M requests a day."
+        p = self.plan(order={"r0": 5}, skills={"s0": 7}, skill_lines=True, bullets={"r0b0": ok})
+        default = keep_style.default_plan(self.doc, self.jd)
+        self.assertEqual(p["order"]["r0"], default["order"]["r0"])
+        self.assertEqual(p["skills"]["s0"], default["skills"]["s0"])
+        self.assertEqual(p["skill_lines"], default["skill_lines"])
+        self.assertEqual(p["text"]["r0b0"], ok)
+
 
 class TailorPrompt(unittest.TestCase):
     def test_sends_every_piece_with_its_id(self):
