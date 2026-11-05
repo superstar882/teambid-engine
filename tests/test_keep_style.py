@@ -130,5 +130,91 @@ class ReadPrompt(unittest.TestCase):
         self.assertEqual(call.call_args[1]["timeout"], 300)
 
 
+JD_TEXT = """Senior Python Engineer
+Acme builds backend services for freight.
+Requirements
+- Go backend services and Redis caching
+- PostgreSQL
+Benefits
+- Health insurance
+"""
+PROFILE = {"raw_text": S.SAMPLE_TEXT, "level": "senior",
+           "skills": {"all": ["Python", "Go", "SQL", "C#", "AWS", "Docker", "PostgreSQL", "Redis", "Airflow", "FastAPI",
+                              "Unit testing"]},
+           "roles": [{"title": "Senior Backend Engineer", "company": "Northwind Labs"},
+                     {"title": "Backend Engineer", "company": "Contoso Freight"}]}
+
+
+class Checks(unittest.TestCase):
+    def setUp(self):
+        self.doc = style_tex.locate(S.SAMPLE, S.PIECES)
+        self.jd = tailor.analyze_jd(JD_TEXT, "Senior Python Engineer", "Acme")
+
+    def plan(self, **reply):
+        return keep_style.check(self.doc, reply, PROFILE, self.jd)
+
+    def test_default_order_puts_what_the_job_needs_first(self):
+        p = keep_style.default_plan(self.doc, self.jd)
+        self.assertEqual(p["order"]["r0"], ["r0b1", "r0b0", "r0b2"])          # the Redis bullet first
+        self.assertEqual(p["order"]["r1"], ["r1b1", "r1b0"])                  # the Go bullet first
+        self.assertEqual(p["skills"]["s0"], ["Go", "Python", "SQL", "C#"])
+        self.assertEqual(p["skills"]["s1"], ["PostgreSQL", "Redis", "AWS", "Docker", "Airflow"])
+        self.assertEqual(p["skill_lines"], ["s1", "s0"])
+        self.assertEqual((p["text"], p["headline"], p["summary"]), ({}, None, None))
+
+    def test_an_order_must_hold_every_bullet_once(self):
+        default = keep_style.default_plan(self.doc, self.jd)["order"]["r0"]
+        for bad in (["r0b0", "r0b1"], ["r0b0", "r0b0", "r0b1"], ["r0b0", "r0b1", "r0b9"]):
+            self.assertEqual(self.plan(order={"r0": bad})["order"]["r0"], default, bad)
+        self.assertEqual(self.plan(order={"r0": ["r0b2", "r0b0", "r0b1"]})["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
+
+    def test_bullet_rewording_rules(self):
+        ok = "Built a payments API in **Python** and **FastAPI** handling 2M requests a day."
+        self.assertEqual(self.plan(bullets={"r0b0": ok})["text"]["r0b0"], ok)
+        for bad in ("Built a high-throughput payments API in Python and FastAPI that reliably handles 2M requests every day.",
+                    "Built a payments API in Python and FastAPI that handles 3M requests a day.",
+                    "Built a payments API in Python, FastAPI and Kafka that handles 2M requests a day."):
+            self.assertNotIn("r0b0", self.plan(bullets={"r0b0": bad})["text"], bad)
+        self.assertNotIn("r0b2", self.plan(bullets={"r0b2": "Wrote the public API docs for all 12 endpoints."})["text"])
+
+    def test_bold_only_on_tools_and_only_where_the_original_had_bold(self):
+        got = self.plan(bullets={"r0b0": "Built a **payments** API in **Python** and FastAPI handling 2M requests a day."})
+        self.assertEqual(got["text"]["r0b0"], "Built a payments API in **Python** and FastAPI handling 2M requests a day.")
+        got = self.plan(bullets={"r1b0": "Moved 30 cron jobs into **Airflow**, ending missed nightly runs."})
+        self.assertEqual(got["text"]["r1b0"], "Moved 30 cron jobs into Airflow, ending missed nightly runs.")
+
+    def test_headline_rules(self):
+        self.assertEqual(self.plan(headline="Senior Python Engineer")["headline"], "SENIOR PYTHON ENGINEER")
+        for bad in ("Staff Python Engineer", "Senior Rust Engineer", "Principal Engineer"):
+            self.assertIsNone(self.plan(headline=bad)["headline"], bad)
+
+    def test_skills_can_only_be_reordered(self):
+        p = self.plan(skills={"s0": ["SQL", "C#", "Python", "Go"], "s1": ["AWS", "Docker", "Kubernetes", "Redis", "Airflow"]},
+                      skill_lines=["s0", "s1"])
+        self.assertEqual(p["skills"]["s0"], ["SQL", "C#", "Python", "Go"])
+        self.assertEqual(p["skills"]["s1"], keep_style.default_plan(self.doc, self.jd)["skills"]["s1"])
+        self.assertEqual(p["skill_lines"], ["s0", "s1"])
+
+    def test_summary_keeps_its_facts_and_length(self):
+        ok = "Backend engineer with **7+ years** building Go and Python services for logistics and payments."
+        self.assertEqual(self.plan(summary=ok)["summary"], ok)
+        self.assertIsNone(self.plan(summary="Backend engineer with 11+ years building Go and Python services for payments.")["summary"])
+
+
+class TailorPrompt(unittest.TestCase):
+    def test_sends_every_piece_with_its_id(self):
+        doc = style_tex.locate(S.SAMPLE, S.PIECES)
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "_call", return_value='Sure: {"bullets": {}}') as call:
+            reply, _ = llm.tailor_in_place(doc, "We need Go.", "claude-haiku-5-5")
+        self.assertEqual(reply, {"bullets": {}})
+        system, user, max_tokens, model = call.call_args[0]
+        self.assertEqual((system, max_tokens, model), (llm.TAILOR_RULES, 8000, "claude-haiku-5-5"))
+        for needle in ("HEADLINE: SENIOR BACKEND ENGINEER", "r0: Senior Backend Engineer at Northwind Labs",
+                       "r0b0: Built a payments API in **Python**", "r0b2 (fixed): Wrote the public API docs",
+                       "s1 - Cloud & Data: AWS, Docker"):
+            self.assertIn(needle, user)
+
+
 if __name__ == "__main__":
     unittest.main()
