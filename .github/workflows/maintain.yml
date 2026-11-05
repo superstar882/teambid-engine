@@ -27,6 +27,7 @@ jobs:
       TEAMBID_CLOUD: "1"
       GH_TOKEN: ${{ github.token }}
       TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +60,10 @@ jobs:
       - name: Pull workspace
         id: pull
         run: python tb.py cloud pull --force
+
+      - name: Document tools (to read uploaded .tex resumes)
+        continue-on-error: true
+        uses: ./.github/actions/doc-tools
 
       - name: Team changes from the results page
         continue-on-error: true          # never let a bad request block the scan

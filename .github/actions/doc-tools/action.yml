@@ -1,0 +1,26 @@
+# TinyTeX (a small, real TeX Live: the same pdfLaTeX engine Overleaf uses) so members' own LaTeX resumes can be read
+# at upload and rebuilt for each job. The install is cached between runs; a package a resume needs that isn't in the
+# list below is installed by style_tex.compile_tex on first use.
+name: Document tools
+description: TinyTeX for building members' own LaTeX resumes
+runs:
+  using: composite
+  steps:
+    - name: Restore TinyTeX
+      id: cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.TinyTeX
+        key: tinytex-${{ runner.os }}-v1
+
+    - name: Install TinyTeX
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        curl -fsSL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
+        "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" install fontawesome fontawesome5 sectsty enumitem helvetic titlesec \
+          marvosym preprint babel-english fancyhdr || echo "some packages weren't found; builds install what they need"
+
+    - name: Put LaTeX on the PATH
+      shell: bash
+      run: echo "$HOME/.TinyTeX/bin/x86_64-linux" >> "$GITHUB_PATH"
