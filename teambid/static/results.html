@@ -474,7 +474,7 @@ async function appsView(m, body) {
 }
 // ---- Documents: tailored resume + cover letter, built in the cloud, encrypted files decrypted here ----
 let DOC_PREFILL = null, DOC_TIMER = null;
-const DOC_FILES = [["resume_pdf", "Resume PDF"], ["resume_docx", "Resume DOCX"], ["letter_pdf", "Cover letter PDF"], ["letter_docx", "Cover letter DOCX"]];
+const DOC_FILES = [["resume_pdf", "Resume PDF"], ["resume_docx", "Resume DOCX"], ["resume_src", "Resume source (.tex)"], ["letter_pdf", "Cover letter PDF"], ["letter_docx", "Cover letter DOCX"]];
 const MODEL_OPTS = [["haiku", "Claude Haiku 5.5 (fast, low cost)"], ["sonnet", "Claude Sonnet 5.5 (best writing)"], ["free", "Free template (no AI)"]];
 const MODEL_NAME = Object.fromEntries(MODEL_OPTS.map(([v, l]) => [v, l.split(" (")[0]]));
 function htmlText(h) {

@@ -354,7 +354,7 @@ async "Apply"(v) {
       const f = r.fit, k = r.keywords;
       $("#a_out").innerHTML = `<div class="grid">
         <div class="card"><h2>Verdict</h2><span class="pill ${f.verdict}" style="font-size:16px">${f.verdict}</span><div class="muted">covers ${f.coverage}% of the must-have skills</div>${f.notes.map(n=>`<p class="warn">${esc(n)}</p>`).join("")}</div>
-        <div class="card"><h2>Resume</h2><div>${fileLink(r.files.pdf,"Resume PDF")} · ${fileLink(r.files.docx,"DOCX")}</div><div class="muted">${r.files.pages} page(s), ${esc(r.files.paper||"Letter")} (${esc(r.doc_region||"")} format) · keyword coverage ${k.pct}%</div>
+        <div class="card"><h2>Resume</h2><div>${fileLink(r.files.pdf,"Resume PDF")}${r.files.docx ? " · " + fileLink(r.files.docx,"DOCX") : ""}${r.files.source ? " · " + fileLink(r.files.source,"Source (.tex)") : ""}</div><div class="muted">${r.files.pages} page(s), ${esc(r.files.paper||"Letter")} (${esc(r.doc_region||"")} format) · keyword coverage ${k.pct}%</div>
           <div class="${r.problems.length?"bad":"good"}">${r.problems.length?"Fact check: "+esc(r.problems.join("; ")):"Fact check passed: nothing invented"}</div>
           <div class="muted">Missing keywords (don't fake them): ${esc(k.missing.join(", ")||"none")}</div><div class="muted">Bullet ranking: ${esc(r.ranking||"keywords")}</div></div>
         <div class="card"><h2>Must-haves</h2><div class="good">You have: ${esc(f.have.join(", ")||"-")}</div><div class="bad">Missing: ${esc(f.missing.join(", ")||"-")}</div>

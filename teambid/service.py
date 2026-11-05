@@ -136,10 +136,6 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     use_claude = bool(model) and llm.available()
     if model and not llm.available():
         resume_note = "no Claude key set yet: built with the free template"
-    if use_claude:                    # reword the chosen bullets toward the post (numbers, facts and tools kept)
-        spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
-    problems = tailor.validate(spec, p)
-    kw = tailor.keyword_report(spec, jd)
     letter, letter_check = cover.draft_letter(p, jd, fit)
     polish_note = ""
     if use_claude:                    # Claude writes the letter; the fact-only draft is the fallback
@@ -163,7 +159,17 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     folder = config.member_dir(slug) / "applications" / f"{day}-{safe(company)}-{safe(title)}"
     folder.mkdir(parents=True, exist_ok=True)
     base = f"{safe(m['name']).replace('-', '_')}_Resume_{safe(company)}"
-    files = render.write_resume(spec, folder, base, p.get("years_experience", 0), reg)
+    # the member's own file (their look: icons, links, layout) when a handler can edit it; else today's RenderCV resume
+    style = keep_style.tailor(slug, m, p, jd, jd_text, model if use_claude else None, folder, base)
+    if style.get("files"):
+        files, spec, resume_note = style["files"], style["spec"], style["note"]
+    else:
+        if use_claude:                # reword the chosen bullets toward the post (numbers, facts and tools kept)
+            spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
+        files = render.write_resume(spec, folder, base, p.get("years_experience", 0), reg)
+        resume_note = "; ".join(n for n in (style.get("note"), resume_note) if n)
+    problems = tailor.validate(spec, p)
+    kw = tailor.keyword_report(spec, jd)
     lfiles = render.write_letter(p.get("name") or m["name"], p.get("contact", {}), letter, folder,
                                  f"{safe(m['name']).replace('-', '_')}_Cover_Letter_{safe(company)}", RG.letter_date(date_prefs),
                                  RG.paper(reg))
@@ -171,7 +177,8 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     (folder / "cover-letter.md").write_text(letter + "\n", encoding="utf-8")
     report = ["# Fit report", "", f"**{fit['verdict']}**: covers {fit['coverage']}% of the must-have skills.", ""] + \
              [f"- {n}" for n in fit["notes"]] + ["", f"Resume keyword coverage: {kw['pct']}% (missing: {', '.join(kw['missing']) or 'none'})",
-             f"Resume pages: {files['pages']}", f"Fact check: {'OK' if not problems else '; '.join(problems)}", "",
+             f"Resume pages: {files['pages']}", f"Resume: {resume_note or 'built from the template'}",
+             f"Fact check: {'OK' if not problems else '; '.join(problems)}", "",
              "## Answers", ""] + [f"### {q}\n\n{a['answer']}\n" for q, a in answers.items()]
     (folder / "report.md").write_text("\n".join(report), encoding="utf-8")
     (folder / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")

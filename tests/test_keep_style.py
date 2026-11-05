@@ -225,5 +225,83 @@ class TailorPrompt(unittest.TestCase):
             self.assertIn(needle, user)
 
 
+def fake_compile(src, out_dir, name):
+    """Stands in for pdflatex: a one-page A4 PDF holding the text of the source, line by line."""
+    lines = []
+    for line in src.split("\\begin{document}")[-1].splitlines():
+        try:
+            lines.append(style_tex.to_plain(line)[0].replace("**", ""))
+        except ValueError:
+            pass
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(36, 36, 560, 806), "\n".join(l for l in lines if l), fontsize=6)
+    pdf = Path(out_dir) / f"{name}.pdf"
+    doc.save(pdf)
+    return pdf, 1
+
+
+class PageGuard(unittest.TestCase):
+    def test_puts_back_the_bullet_that_grew_most(self):
+        doc = {"pages": 1, "summary": None,
+               "jobs": [{"id": "r0", "bullets": [{"id": "r0b0", "text": "short"}, {"id": "r0b1", "text": "also short"}]}]}
+        plan = {"text": {"r0b0": "a much much longer bullet", "r0b1": "also short!"}, "summary": None}
+        handler = mock.Mock()
+        handler.build.side_effect = lambda d, p, f, b: {"pages": 2 if "r0b0" in p["text"] else 1}
+        files, reverted = keep_style._build(handler, doc, plan, Path("."), "x")
+        self.assertEqual((files["pages"], reverted, list(plan["text"])), (1, 1, ["r0b1"]))
+
+    def test_gives_up_when_nothing_grew(self):
+        handler = mock.Mock()
+        handler.build.return_value = {"pages": 2}
+        with self.assertRaises(ValueError):
+            keep_style._build(handler, {"pages": 1, "jobs": [], "summary": None}, {"text": {}, "summary": None}, Path("."), "x")
+
+
+class ApplyWithTex(TempWorkspace):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.tex"
+        src.write_text(S.SAMPLE, encoding="utf-8")
+        with mock.patch.object(style_tex, "compile_tex", fake_compile), \
+             mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(reading(), "read")):
+            cls.slug = service.onboard("Dana Reyes", resume_path=src)["slug"]
+
+    def _apply(self, reply, compile_fn=fake_compile):
+        with mock.patch.object(style_tex, "compile_tex", compile_fn), \
+             mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            return service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+
+    def test_tailors_inside_the_members_own_file(self):
+        r = self._apply({"order": {"r1": ["r1b1", "r1b0"]},
+                         "bullets": {"r0b0": "Built a payments API in **Python** and **FastAPI** handling 2M requests a day."}})
+        tex = Path(r["files"]["source"]).read_text(encoding="utf-8")
+        self.assertIn(r"Built a payments API in \textbf{Python} and \textbf{FastAPI} handling 2M requests a day.", tex)
+        self.assertLess(tex.index("Go unit tests"), tex.index("cron jobs"))
+        self.assertTrue(tex.startswith(S.SAMPLE[:S.SAMPLE.index("\\section*{Profile}")]))      # header untouched
+        self.assertTrue(Path(r["files"]["pdf"]).exists())
+        self.assertNotIn("docx", r["files"])
+        self.assertTrue(Path(r["files"]["letter_pdf"]).exists())                              # the letter as before
+        self.assertIn("Resume style: original (.tex)", r["resume_ai"])
+        self.assertEqual(r["problems"], [])
+        report = (Path(r["folder"]) / "report.md").read_text(encoding="utf-8")
+        self.assertIn("Resume style: original (.tex)", report)
+
+    def test_falls_back_to_rendercv_when_latex_fails(self):
+        def broken(src, out_dir, name):
+            raise ValueError("LaTeX error: Undefined control sequence.")
+        r = self._apply({}, broken)
+        self.assertTrue(Path(r["files"]["docx"]).exists())
+        self.assertIn("original style skipped: LaTeX error", r["resume_ai"])
+
+    def test_members_without_a_tex_file_are_untouched(self):
+        self.assertEqual(keep_style.tailor("nobody-here", {"resume_file": "x.pdf"}, {}, {}, "", None, ".", "b"), {})
+
+
 if __name__ == "__main__":
     unittest.main()
