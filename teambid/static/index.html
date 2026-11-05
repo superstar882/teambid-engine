@@ -242,12 +242,12 @@ async "Team"(v) {
    <div class="card"><h2>Members</h2><table><tr><th>Name</th><th>Level</th><th>Lanes</th><th>Years</th><th>Resume score</th><th>New matches</th><th>Applications</th></tr>${rows||'<tr><td colspan=7 class="muted">No members yet. Use "Add member".</td></tr>'}</table></div>`;
 },
 async "Add member"(v) {
-  v.innerHTML = `<div class="card"><h2>Add a team member</h2><p class="muted">Upload a resume (PDF, DOCX or TXT). TeamBid reads it into facts, scores it, and builds a personal vault. Review the result on the Profile tab: parsing is automatic, so check jobs, dates and skills.</p>
+  v.innerHTML = `<div class="card"><h2>Add a team member</h2><p class="muted">Upload a resume (PDF, DOCX, TXT or a LaTeX .tex file). TeamBid reads it into facts, scores it, and builds a personal vault. Review the result on the Profile tab: parsing is automatic, so check jobs, dates and skills.</p>
    <div class="kv"><label>Full name</label><input id="n_name" placeholder="Jane Doe">
    <label>Email (optional)</label><input id="n_email">
-   <label>Resume file</label><input id="n_file" type="file" accept=".pdf,.docx,.txt,.md">
+   <label>Resume file</label><input id="n_file" type="file" accept=".pdf,.docx,.txt,.md,.tex">
    <label>Countries you can legally work from</label><input id="n_countries" placeholder="Leave empty to take it from the CV. Any names work: Denmark, US, UK, Germany, Canada...">
-   <label>Use Claude API to clean the parse</label><label><input id="n_llm" type="checkbox"> only if ANTHROPIC_API_KEY is set</label></div>
+   <label>Read the resume with Claude</label><label><input id="n_llm" type="checkbox" checked> when ANTHROPIC_API_KEY is set</label></div>
    <p><button class="b" id="n_go">Add member</button> <span id="n_msg" class="muted"></span></p></div>`;
   $("#n_go").onclick = async () => {
     const f = $("#n_file").files[0], name = $("#n_name").value.trim();

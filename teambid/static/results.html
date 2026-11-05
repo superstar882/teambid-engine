@@ -914,7 +914,7 @@ function addMemberView(body) {
       <label>Full name<input id="a_name" placeholder="Jane Doe"></label>
       <label>Email (optional)<input id="a_email" placeholder="jane@example.com"></label>
       <label>Countries they can legally work from (optional)<input id="a_countries" placeholder="Leave empty to take it from the resume"></label>
-      <label>Resume (PDF, DOCX or TXT, up to 1.5 MB)<input id="a_file" type="file" accept=".pdf,.docx,.txt,.md"></label></div>
+      <label>Resume (PDF, DOCX, TXT or LaTeX .tex, up to 1.5 MB)<input id="a_file" type="file" accept=".pdf,.docx,.txt,.md,.tex"></label></div>
     <div class="row" style="margin-top:14px"><button class="b" id="a_go">Add member</button><span id="a_msg" class="muted"></span></div></div>`;
   document.getElementById("a_go").onclick = async e => {
     const f = document.getElementById("a_file").files[0], name = val("a_name"), msg = document.getElementById("a_msg");
