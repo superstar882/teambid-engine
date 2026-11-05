@@ -1,7 +1,7 @@
 # Keep the original resume style when tailoring
 
 Date: 2026-11-05
-Status: design approved in chat, waiting for spec review
+Status: approved 2026-11-05
 
 ## Goal
 
@@ -315,12 +315,11 @@ The first implementation plan covers part 1.
 
 ## To check during planning
 
-- **Model IDs:** `llm.MODELS` (`llm.py:17`) uses `claude-sonnet-5-5` and `claude-haiku-5-5`. Check them against the
-  current API model list before building on them. If they're wrong, every Claude call fails and quietly falls back to
-  the free template.
 - **Cost:** check the TinyTeX cache size and how long the first package installs take on the runner.
-- **Omar's .tex:** its `mailto:` target (`omar_95tamimi@hotmail.com`) differs from the address shown
-  (`otamimi.career@gmail.com`). This mode never edits links, so it carries through as is. It's worth telling the owner.
+- **Omar's .tex:** upload the version that built his current PDF. The copy pasted in chat is older: its email link
+  still points to `omar_95tamimi@hotmail.com`.
+
+The model IDs in `llm.MODELS` (`claude-sonnet-5-5`, `claude-haiku-5-5`) are confirmed correct by the owner.
 
 ## Out of scope
 
