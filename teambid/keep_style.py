@@ -11,8 +11,9 @@ import json
 import re
 from pathlib import Path
 
-from . import config, llm, resume_parse, style_tex, tailor
+from . import config, llm, resume_parse, style_tex
 from . import skills as SK
+from . import tailor as TL
 from .style_text import key
 
 MAX_MISSED = 0.25            # more bullets than this not found word for word: don't trust the reading at all
@@ -191,17 +192,15 @@ def headline_ok(new, old, profile, job_title):
     return new.upper() if old.isupper() else new
 
 
-def default_plan(doc, jd, _jd_module=tailor):
+def default_plan(doc, jd):
     """What changes without Claude: bullets ordered by relevance to the job (tailor's score), skills by the job's
-    weights. Ties keep the original order.
-    _jd_module: the teambid.tailor module, bound here (default args are evaluated once, at def time) because
-    this file also defines a function named tailor() below, which would otherwise shadow the module import."""
-    w = _jd_module.jd_weights(jd)
+    weights. Ties keep the original order."""
+    w = TL.jd_weights(jd)
     weight = lambda item: sum(w.get(s, 0) for s in SK.find(item, trusted=True))
     plan = {"headline": None, "summary": None, "text": {}, "order": {}, "skills": {}, "skill_lines": []}
     for j in doc["jobs"]:
         if j["reorder"]:
-            ranked = sorted(j["bullets"], key=lambda b: -_jd_module._bullet_score(b["text"].replace("**", ""), w))
+            ranked = sorted(j["bullets"], key=lambda b: -TL._bullet_score(b["text"].replace("**", ""), w))
             plan["order"][j["id"]] = [b["id"] for b in ranked]
     for line in doc["skills"]:
         plan["skills"][line["id"]] = sorted(line["items"], key=lambda x: -weight(x))
