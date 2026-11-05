@@ -7,12 +7,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import analyze, config, cover, llm, render, resume_parse, storage, tailor, vault, writing
+from . import analyze, config, cover, keep_style, llm, render, resume_parse, storage, tailor, vault, writing
 from .jobs import jd as JD, matcher, scanner
 
 
 # ---------------------------------------------------------------- members
-def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, prefs=None, use_llm=False):
+def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, prefs=None, use_llm=True):
     """Parse a resume, audit it, save the member with default preferences, and build their vault."""
     config.ensure_dirs()
     slug = storage.slugify(name)
@@ -27,16 +27,11 @@ def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, 
             shutil.copy(src, dst)
     profile = resume_parse.parse_file(dst)
     note = ""
-    if use_llm and llm.available():
-        roles, note = llm.refine_profile(profile["raw_text"], profile)
-        if roles:
-            for r in roles:
-                r.setdefault("bullets", [])
-                r["bullets"] = [{"text": b} if isinstance(b, str) else b for b in r["bullets"]]
-                r.update({"current": r.get("end") == "Present", "months": 0, "stack_line": ""})
-                resume_parse.finish_role(r)
-            profile["roles"] = roles
-            resume_parse.derive(profile)
+    if use_llm and llm.available():      # Claude reads jobs, bullets, summary and skills; code keeps only exact copies
+        pieces, note = keep_style.read(profile["raw_text"])
+        if pieces:
+            keep_style.apply_to_profile(profile, pieces)
+            keep_style.save_pieces(slug, dst, pieces)
     if not profile.get("name"):
         profile["name"] = name
     base = matcher.default_prefs(profile)
@@ -304,10 +299,17 @@ def reparse(slug):
     if not m:
         raise KeyError(slug)
     # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder
-    files = sorted(f for f in (config.member_dir(slug) / "resume").iterdir() if f.suffix.lower() in (".pdf", ".docx", ".txt", ".md"))
+    files = sorted((f for f in (config.member_dir(slug) / "resume").iterdir()
+                    if f.suffix.lower() in (".tex", ".pdf", ".docx", ".txt", ".md")),
+                   key=lambda f: (f.suffix.lower() != ".tex", f.name))          # a .tex source wins over its PDF
     if not files:
         raise ValueError(f"no resume file for {slug}")
     profile = resume_parse.parse_file(files[0])
+    if llm.available():
+        pieces, _ = keep_style.read(profile["raw_text"])
+        if pieces:
+            keep_style.apply_to_profile(profile, pieces)
+            keep_style.save_pieces(slug, files[0], pieces)
     if not profile.get("name"):
         profile["name"] = m["name"]
     with storage.connect() as con:

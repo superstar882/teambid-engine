@@ -103,7 +103,7 @@ class Handler(BaseHTTPRequestHandler):
             if not b.get("name") or not b.get("file_b64"):
                 raise ValueError("Name and resume file are required")
             r = service.onboard(b["name"], resume_b64=b["file_b64"], filename=b.get("filename"), email=b.get("email"),
-                                prefs=b.get("prefs"), use_llm=bool(b.get("use_llm")))
+                                prefs=b.get("prefs"), use_llm=bool(b.get("use_llm", True)))
             return {"slug": r["slug"], "audit": r["vault"]["audit"], "notes": r["profile"].get("parse_notes", []), "llm": r["llm"],
                     "matched": r.get("matched")}
         if (g := m(r"^/api/member/([\w-]+)$", path)):

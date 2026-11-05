@@ -30,9 +30,9 @@ def provider(prefer="auto"):
     return None
 
 
-def _call(system, user, max_tokens=1500, model=None):
-    r = requests.post(API, timeout=120, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
-                                                 "content-type": "application/json"},
+def _call(system, user, max_tokens=1500, model=None, timeout=120):
+    r = requests.post(API, timeout=timeout, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                                                     "content-type": "application/json"},
                       json={"model": model or config.MODEL, "max_tokens": max_tokens, "system": system,
                             "messages": [{"role": "user", "content": user}]})
     r.raise_for_status()
@@ -118,23 +118,31 @@ def guard(new, draft, profile, company="", jd_text=""):
     return problems
 
 
-def refine_profile(raw_text, profile):
-    """Ask Claude to fix company/title/date/bullet splits. -> (roles or None, message). Only structure changes are accepted."""
+READ_RULES = (
+    "You read one resume and return its structure as JSON. Copy every string EXACTLY as it appears in the resume text: "
+    "same words, punctuation, capitals and numbers. Join words that a line break split, but never reword, shorten, merge, "
+    "split, add or drop anything.\n"
+    "headline: the title line under the name (\"\" if there is none). summary: the whole profile or summary paragraph "
+    "(\"\" if none). jobs: every work-experience entry (full-time, part-time, contract, consulting), in the order they "
+    "appear, each with title, company, location (\"\" if none), start and end as YYYY-MM (end \"Present\" for a current "
+    "job, YYYY-01 when only the year is given) and bullets: every bullet under that job, in order. skills: each labeled "
+    "line of the skills section as {label, items} with the items split at the commas ([] when the skills aren't labeled "
+    "lines).\n"
+    "Return ONLY JSON: {\"headline\": \"...\", \"summary\": \"...\", \"jobs\": [{\"title\": \"...\", \"company\": \"...\", "
+    "\"location\": \"...\", \"start\": \"YYYY-MM\", \"end\": \"YYYY-MM or Present\", \"bullets\": [\"...\"]}], "
+    "\"skills\": [{\"label\": \"...\", \"items\": [\"...\"]}]}")
+
+
+def read_resume(text, model=None):
+    """Claude reads the whole resume once (at upload) and returns its structure. -> (dict or None, note).
+    keep_style.confirm() then keeps only the strings that really are in the text."""
     if not available():
-        return None, "no API key"
-    system = ("You fix resume parsing. Return ONLY JSON with key 'roles': a list of {company, title, location, start (YYYY-MM), "
-              "end (YYYY-MM or Present), bullets: [exact bullet text]}. Copy text exactly from the resume. Never add or reword facts.")
+        return None, "no Claude API key"
     try:
-        out = _call(system, f"RESUME TEXT:\n{raw_text[:15000]}\n\nCURRENT PARSE:\n{json.dumps(profile.get('roles', []))[:8000]}", 4000)
-        data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))
-        roles = data.get("roles", [])
-        src = re.sub(r"\s+", " ", raw_text)
-        ok = all(re.sub(r"\s+", " ", b)[:40] in src for r in roles for b in r.get("bullets", []))
-        if not roles or not ok:
-            return None, "model output changed bullet text; kept the original parse"
-        return roles, "refined"
+        out = _call(READ_RULES, f"RESUME TEXT:\n{text[:60000]}", 16000, model or MODELS["sonnet"][0], timeout=300)
+        return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "read by Claude"
     except Exception as e:
-        return None, f"API error: {e}"
+        return None, f"Claude reading skipped: {e}"
 
 
 LETTER_RULES = ("You edit cover letters. Rules: 150-250 words, 3-4 short paragraphs, plain US English, contractions OK. "
