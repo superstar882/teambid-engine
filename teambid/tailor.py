@@ -122,8 +122,8 @@ SKILL_LINES = (("Languages", ("language",)), ("Backend & APIs", ("backend",)), (
                ("Frontend & Mobile", ("frontend", "mobile")))
 
 
-def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
-    """-> resume spec dict (render.py turns it into DOCX/PDF)."""
+def jd_weights(jd):
+    """How much each skill matters to this job: must-haves 3, nice-to-haves 1.5, plus 0.5 per mention (3 at most)."""
     weights = Counter()
     for s in jd["required"]:
         weights[s] += 3
@@ -131,6 +131,12 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
         weights[s] += 1.5
     for s, n in jd["all"].items():
         weights[s] += min(n, 3) * 0.5
+    return weights
+
+
+def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
+    """-> resume spec dict (render.py turns it into DOCX/PDF)."""
+    weights = jd_weights(jd)
     have = list(dict.fromkeys(profile["skills"].get("proven", []) + profile["skills"].get("listed_only", [])))
     texts = [b["text"] for r in profile.get("roles", []) for b in r["bullets"]] + \
             [b["text"] for p in profile.get("projects", []) for b in p["bullets"]]

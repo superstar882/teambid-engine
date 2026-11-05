@@ -11,7 +11,8 @@ import json
 import re
 from pathlib import Path
 
-from . import config, llm, resume_parse
+from . import config, llm, resume_parse, tailor
+from . import skills as SK
 from .style_text import key
 
 MAX_MISSED = 0.25            # more bullets than this not found word for word: don't trust the reading at all
@@ -143,3 +144,100 @@ def load_pieces(slug, src):
     except (OSError, ValueError):
         return None
     return data if data.get("sha") == _sha(src) else None
+
+
+LENGTH = (0.75, 1.10)        # a reworded bullet or summary: at most 25% shorter, at most 10% longer
+LEVEL = r"lead|staff|principal|manager|architect|head|director|vp|chief"
+
+
+def clean_bold(new, old):
+    """Strip any markup but **bold**. Bold stays only around tool/skill names or words the original had in bold, and
+    only when the original used bold at all."""
+    new = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", str(new or ""))         # markdown links -> their text
+    new = re.sub(r"\s+", " ", re.sub(r"[\\`<>{}]", "", new)).strip()
+    if "**" not in old or new.count("**") % 2:
+        return new.replace("**", "")
+    was_bold = {key(x) for x in old.split("**")[1::2]}
+    return "".join(f"**{p}**" if i % 2 and p.strip() and (key(p) in was_bold or SK.find(p, trusted=True)) else p
+                   for i, p in enumerate(new.split("**")))
+
+
+def _bullet_new(new, old, have):
+    """Claude's rewording of one bullet if it passes the fact checks and the length limits, else None."""
+    new = clean_bold(new, old)
+    n, o = new.replace("**", ""), old.replace("**", "")
+    ok = llm._bullet_ok(n, o, have) and LENGTH[0] <= len(n) / max(1, len(o)) <= LENGTH[1]
+    return new if ok else None
+
+
+def headline_ok(new, old, profile, job_title):
+    """The new headline in the original's capital-letter style, or None. Its words must come from titles the member
+    held or the job's title, with no level above one they held and no tool they don't list."""
+    new = re.sub(r"\s+", " ", re.sub(r"[\\`<>{}*]", "", str(new or ""))).strip()
+    if not new or key(new) == key(old) or len(new) > max(60, 1.5 * len(old)):
+        return None
+    held = " ".join(r.get("title", "") for r in profile.get("roles", [])) + " " + old
+    pool = set(re.findall(r"[a-z0-9.+#]+", (held + " " + job_title).lower()))
+    if any(w not in pool for w in re.findall(r"[a-z0-9.+#]+", new.lower())):
+        return None
+    for lvl in re.findall(rf"(?i)\b({LEVEL})\b", new):
+        if not re.search(rf"(?i)\b{lvl}\b", held):
+            return None
+    if re.search(r"(?i)\b(senior|sr)\b", new) and not re.search(rf"(?i)\b(senior|sr|{LEVEL})\b", held):
+        return None
+    have = set(profile.get("skills", {}).get("all", []))
+    if [s for s in SK.find(new) if s not in have]:
+        return None
+    return new.upper() if old.isupper() else new
+
+
+def default_plan(doc, jd):
+    """What changes without Claude: bullets ordered by relevance to the job (tailor's score), skills by the job's
+    weights. Ties keep the original order."""
+    w = tailor.jd_weights(jd)
+    weight = lambda item: sum(w.get(s, 0) for s in SK.find(item, trusted=True))
+    plan = {"headline": None, "summary": None, "text": {}, "order": {}, "skills": {}, "skill_lines": []}
+    for j in doc["jobs"]:
+        if j["reorder"]:
+            ranked = sorted(j["bullets"], key=lambda b: -tailor._bullet_score(b["text"].replace("**", ""), w))
+            plan["order"][j["id"]] = [b["id"] for b in ranked]
+    for line in doc["skills"]:
+        plan["skills"][line["id"]] = sorted(line["items"], key=lambda x: -weight(x))
+    if doc.get("skills_move"):
+        plan["skill_lines"] = [l["id"] for l in sorted(doc["skills"], key=lambda l: -sum(weight(x) for x in l["items"]))]
+    return plan
+
+
+def check(doc, reply, profile, jd):
+    """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
+    that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
+    plan = default_plan(doc, jd)
+    reply = reply if isinstance(reply, dict) else {}
+    texts = reply.get("bullets") if isinstance(reply.get("bullets"), dict) else {}
+    orders = reply.get("order") if isinstance(reply.get("order"), dict) else {}
+    have = set(profile.get("skills", {}).get("all", []))
+    for j in doc["jobs"]:
+        got = [str(x) for x in orders.get(j["id"]) or []]
+        if j["reorder"] and sorted(got) == sorted(b["id"] for b in j["bullets"]):
+            plan["order"][j["id"]] = got
+        for b in j["bullets"]:
+            new = _bullet_new(texts.get(b["id"]), b["text"], have)
+            if new and not b["fixed"]:
+                plan["text"][b["id"]] = new
+    s = doc.get("summary")
+    if s and not s["fixed"]:
+        new = clean_bold(reply.get("summary"), s["text"])
+        if llm._summary_ok(new.replace("**", ""), s["text"].replace("**", ""), profile, *LENGTH):
+            plan["summary"] = new
+    h = doc.get("headline")
+    if h and not h["fixed"]:
+        plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, jd.get("title", ""))
+    lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
+    for line in doc["skills"]:
+        got = [str(x).strip() for x in lines.get(line["id"]) or []]
+        if got and sorted(map(key, got)) == sorted(map(key, line["items"])):
+            plan["skills"][line["id"]] = got
+    got = [str(x) for x in reply.get("skill_lines") or []]
+    if doc.get("skills_move") and got and sorted(got) == sorted(l["id"] for l in doc["skills"]):
+        plan["skill_lines"] = got
+    return plan
