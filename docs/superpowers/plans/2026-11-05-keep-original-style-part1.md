@@ -892,7 +892,7 @@ git commit -m "Keep style: find a .tex resume's bullets, summary, headline and s
 
 - [ ] **Step 1: Write the failing tests**
 
-Add `import fitz` and `from teambid import resume_parse` to the imports in `tests/test_style_tex.py` (next to `from teambid import style_tex`). Then append:
+Add `import fitz`, `from teambid import resume_parse`, `import subprocess`, and `from unittest import mock` to the imports in `tests/test_style_tex.py`. Then append:
 
 ```python
 @unittest.skipUnless(style_tex.available(), "pdflatex isn't installed here (the online Tests workflow has it)")
@@ -939,6 +939,44 @@ class Build(unittest.TestCase):
         self.assertEqual((meta["source"], meta["file"]), ("tex", "dana.tex"))
         for b in [b for j in S.PIECES["jobs"] for b in j["bullets"]]:
             self.assertIn(key(b), key(text))        # what Claude copies from this text is found in the .tex
+
+
+class BuildErrors(unittest.TestCase):
+    def test_timeout(self):
+        with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
+            with mock.patch("teambid.style_tex.subprocess.run", side_effect=subprocess.TimeoutExpired("pdflatex", 60)):
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                    self.assertIn("longer than 60 s", str(ctx.exception))
+
+    def test_retries_run_out(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
+                call_count = [0]
+                def mock_run(*args, **kwargs):
+                    if "pdflatex" in args[0]:
+                        call_count[0] += 1
+                        log_file = Path(kwargs["cwd"]) / "x.log"
+                        log_file.write_text(f"! LaTeX Error: File `pkg{call_count[0]}.sty' not found.", encoding="utf-8")
+                        return subprocess.CompletedProcess(args[0], 1, "", "")
+                    else:
+                        return subprocess.CompletedProcess(args[0], 0, "", "")
+                with mock.patch("teambid.style_tex.subprocess.run", side_effect=mock_run):
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                    self.assertTrue(str(ctx.exception).startswith("LaTeX error:"))
+                    self.assertIn("not found", str(ctx.exception))
+                    self.assertNotIn("made no PDF", str(ctx.exception))
+
+    def test_relabel(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            src = Path(tmp) / "test.tex"
+            src.write_text(S.SAMPLE, encoding="utf-8")
+            with mock.patch("teambid.style_tex.compile_tex", side_effect=ValueError("LaTeX error: boom")):
+                with self.assertRaises(ValueError) as ctx:
+                    resume_parse.extract_text(src)
+                self.assertIn("upload its PDF instead", str(ctx.exception))
 ```
 
 - [ ] **Step 2: Run the tests to see them fail (or skip)**
@@ -957,6 +995,12 @@ def available():
     return bool(shutil.which("pdflatex"))
 
 
+def _latex_error(log):
+    """Extract LaTeX error from log."""
+    err = re.search(r"^! (.+)$", log, re.M)
+    return f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}"
+
+
 def compile_tex(src, out_dir, name):
     """Build src into out_dir/<name>.pdf. -> (pdf path, pages). Raises ValueError with LaTeX's own error line.
     Safe for a file someone uploaded: no shell commands, no reading or writing outside out_dir (openin_any/openout_any
@@ -972,20 +1016,30 @@ def compile_tex(src, out_dir, name):
     cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
     tried, log_file = set(), out_dir / f"{name}.log"
     for _ in range(5):
-        r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+        try:
+            r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"LaTeX took longer than {TIMEOUT} s") from None
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else r.stdout
         missing = re.search(r"File `([\w-]+)\.(?:sty|cls)' not found", log)
         if r.returncode and missing and missing.group(1) not in tried and shutil.which("tlmgr"):
             tried.add(missing.group(1))
-            subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+            try:
+                subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+            except subprocess.TimeoutExpired:
+                pass
             continue
         if r.returncode:
-            err = re.search(r"^! (.+)$", log, re.M)
-            raise ValueError(f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}")
+            if "rerun" not in tried and "Rerun to get" in log:
+                tried.add("rerun")
+                continue
+            raise ValueError(_latex_error(log))
         if "Rerun to get" in log and "rerun" not in tried:
             tried.add("rerun")
             continue
         break
+    if r.returncode:
+        raise ValueError(_latex_error(log))
     pdf = out_dir / f"{name}.pdf"
     if not pdf.exists():
         raise ValueError("LaTeX made no PDF")
@@ -1031,12 +1085,12 @@ In `extract_text`, insert this just before the last line, `return p.read_text(en
     if ext == ".tex":                    # a LaTeX resume: read the text of the PDF it builds
         import tempfile
         from . import style_tex
-        try:
-            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            try:
                 pdf, _ = style_tex.compile_tex(p.read_text(encoding="utf-8", errors="replace"), Path(tmp), "resume")
-                text, meta = extract_text(pdf)
-        except ValueError as e:          # e.g. it needs a .cls or image that wasn't uploaded with it
-            raise ValueError(f"couldn't build this .tex file ({e}); upload its PDF instead") from e
+            except ValueError as e:          # e.g. it needs a .cls or image that wasn't uploaded with it
+                raise ValueError(f"couldn't build this .tex file ({e}); upload its PDF instead") from e
+            text, meta = extract_text(pdf)
         meta.update(file=p.name, source="tex")
         return text, meta
 ```

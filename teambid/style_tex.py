@@ -387,6 +387,12 @@ def available():
     return bool(shutil.which("pdflatex"))
 
 
+def _latex_error(log):
+    """Extract LaTeX error from log."""
+    err = re.search(r"^! (.+)$", log, re.M)
+    return f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}"
+
+
 def compile_tex(src, out_dir, name):
     """Build src into out_dir/<name>.pdf. -> (pdf path, pages). Raises ValueError with LaTeX's own error line.
     Safe for a file someone uploaded: no shell commands, no reading or writing outside out_dir (openin_any/openout_any
@@ -402,20 +408,30 @@ def compile_tex(src, out_dir, name):
     cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
     tried, log_file = set(), out_dir / f"{name}.log"
     for _ in range(5):
-        r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+        try:
+            r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+        except subprocess.TimeoutExpired:
+            raise ValueError(f"LaTeX took longer than {TIMEOUT} s") from None
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else r.stdout
         missing = re.search(r"File `([\w-]+)\.(?:sty|cls)' not found", log)
         if r.returncode and missing and missing.group(1) not in tried and shutil.which("tlmgr"):
             tried.add(missing.group(1))
-            subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+            try:
+                subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+            except subprocess.TimeoutExpired:
+                pass
             continue
         if r.returncode:
-            err = re.search(r"^! (.+)$", log, re.M)
-            raise ValueError(f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}")
+            if "rerun" not in tried and "Rerun to get" in log:
+                tried.add("rerun")
+                continue
+            raise ValueError(_latex_error(log))
         if "Rerun to get" in log and "rerun" not in tried:
             tried.add("rerun")
             continue
         break
+    if r.returncode:
+        raise ValueError(_latex_error(log))
     pdf = out_dir / f"{name}.pdf"
     if not pdf.exists():
         raise ValueError("LaTeX made no PDF")

@@ -135,12 +135,12 @@ def extract_text(path):
     if ext == ".tex":                    # a LaTeX resume: read the text of the PDF it builds
         import tempfile
         from . import style_tex
-        try:
-            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            try:
                 pdf, _ = style_tex.compile_tex(p.read_text(encoding="utf-8", errors="replace"), Path(tmp), "resume")
-                text, meta = extract_text(pdf)
-        except ValueError as e:          # e.g. it needs a .cls or image that wasn't uploaded with it
-            raise ValueError(f"couldn't build this .tex file ({e}); upload its PDF instead") from e
+            except ValueError as e:          # e.g. it needs a .cls or image that wasn't uploaded with it
+                raise ValueError(f"couldn't build this .tex file ({e}); upload its PDF instead") from e
+            text, meta = extract_text(pdf)
         meta.update(file=p.name, source="tex")
         return text, meta
     return p.read_text(encoding="utf-8", errors="replace"), meta

@@ -1,10 +1,12 @@
 """Keep-original-style, LaTeX handler (stdlib unittest). Tests that build PDFs skip without pdflatex;
 the online "Tests" workflow installs TinyTeX so they run there."""
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -168,6 +170,44 @@ class Build(unittest.TestCase):
         self.assertEqual((meta["source"], meta["file"]), ("tex", "dana.tex"))
         for b in [b for j in S.PIECES["jobs"] for b in j["bullets"]]:
             self.assertIn(key(b), key(text))        # what Claude copies from this text is found in the .tex
+
+
+class BuildErrors(unittest.TestCase):
+    def test_timeout(self):
+        with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
+            with mock.patch("teambid.style_tex.subprocess.run", side_effect=subprocess.TimeoutExpired("pdflatex", 60)):
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                    self.assertIn("longer than 60 s", str(ctx.exception))
+
+    def test_retries_run_out(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
+                call_count = [0]
+                def mock_run(*args, **kwargs):
+                    if "pdflatex" in args[0]:
+                        call_count[0] += 1
+                        log_file = Path(kwargs["cwd"]) / "x.log"
+                        log_file.write_text(f"! LaTeX Error: File `pkg{call_count[0]}.sty' not found.", encoding="utf-8")
+                        return subprocess.CompletedProcess(args[0], 1, "", "")
+                    else:
+                        return subprocess.CompletedProcess(args[0], 0, "", "")
+                with mock.patch("teambid.style_tex.subprocess.run", side_effect=mock_run):
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                    self.assertTrue(str(ctx.exception).startswith("LaTeX error:"))
+                    self.assertIn("not found", str(ctx.exception))
+                    self.assertNotIn("made no PDF", str(ctx.exception))
+
+    def test_relabel(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            src = Path(tmp) / "test.tex"
+            src.write_text(S.SAMPLE, encoding="utf-8")
+            with mock.patch("teambid.style_tex.compile_tex", side_effect=ValueError("LaTeX error: boom")):
+                with self.assertRaises(ValueError) as ctx:
+                    resume_parse.extract_text(src)
+                self.assertIn("upload its PDF instead", str(ctx.exception))
 
 
 if __name__ == "__main__":
