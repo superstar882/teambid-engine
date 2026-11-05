@@ -377,3 +377,77 @@ def render_source(doc, plan):
             raise ValueError("two edits overlap in the .tex file")
         out, last = out[:a] + text + out[b:], a
     return out
+
+
+TIMEOUT = 60                             # seconds per LaTeX run
+FONTSPEC = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\bfontspec\b")
+
+
+def available():
+    return bool(shutil.which("pdflatex"))
+
+
+def compile_tex(src, out_dir, name):
+    """Build src into out_dir/<name>.pdf. -> (pdf path, pages). Raises ValueError with LaTeX's own error line.
+    Safe for a file someone uploaded: no shell commands, no reading or writing outside out_dir (openin_any/openout_any
+    = paranoid), 60 s per run. A missing package is installed once with TinyTeX's tlmgr."""
+    engine = "xelatex" if FONTSPEC.search(_mask(src)) else "pdflatex"
+    exe = shutil.which(engine)
+    if not exe:
+        raise ValueError(f"{engine} isn't installed here, so a .tex resume can't be built")
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / f"{name}.tex").write_text(src, encoding="utf-8")
+    env = dict(os.environ, openin_any="p", openout_any="p", shell_escape="f")
+    cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
+    tried, log_file = set(), out_dir / f"{name}.log"
+    for _ in range(5):
+        r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+        log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else r.stdout
+        missing = re.search(r"File `([\w-]+)\.(?:sty|cls)' not found", log)
+        if r.returncode and missing and missing.group(1) not in tried and shutil.which("tlmgr"):
+            tried.add(missing.group(1))
+            subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+            continue
+        if r.returncode:
+            err = re.search(r"^! (.+)$", log, re.M)
+            raise ValueError(f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}")
+        if "Rerun to get" in log and "rerun" not in tried:
+            tried.add("rerun")
+            continue
+        break
+    pdf = out_dir / f"{name}.pdf"
+    if not pdf.exists():
+        raise ValueError("LaTeX made no PDF")
+    import fitz
+    with fitz.open(pdf) as d:
+        return pdf, d.page_count
+
+
+def _paper(pdf):
+    import fitz
+    with fitz.open(pdf) as d:
+        return "A4" if abs(d[0].rect.width - 595) < 6 else "Letter"
+
+
+def find(path, pieces):
+    """Locate the pieces in the member's .tex, and build it once as it is: that gives the page count to keep, and a
+    file that doesn't build here fails before anything is spent on Claude."""
+    src = Path(path).read_text(encoding="utf-8", errors="replace")
+    doc = locate(src, pieces)
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        doc["pages"] = compile_tex(src, Path(tmp), "original")[1]
+    return doc
+
+
+def build(doc, plan, folder, base):
+    """Write the tailored .tex and its PDF into folder. -> {"pdf", "source", "pages", "paper"}."""
+    src = render_source(doc, plan)
+    folder = Path(folder)
+    folder.mkdir(parents=True, exist_ok=True)
+    pdf, tex = folder / f"{base}.pdf", folder / f"{base}.tex"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+        built, pages = compile_tex(src, Path(tmp), "resume")
+        shutil.copy(built, pdf)
+    tex.write_text(src, encoding="utf-8")
+    return {"pdf": str(pdf), "source": str(tex), "pages": pages, "paper": _paper(pdf)}
