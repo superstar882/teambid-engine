@@ -208,6 +208,11 @@ def default_plan(doc, jd):
     return plan
 
 
+def _list(v):
+    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
+    return v if isinstance(v, list) else []
+
+
 def check(doc, reply, profile, jd):
     """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
     that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
@@ -217,7 +222,7 @@ def check(doc, reply, profile, jd):
     orders = reply.get("order") if isinstance(reply.get("order"), dict) else {}
     have = set(profile.get("skills", {}).get("all", []))
     for j in doc["jobs"]:
-        got = [str(x) for x in orders.get(j["id"]) or []]
+        got = [str(x) for x in _list(orders.get(j["id"]))]
         if j["reorder"] and sorted(got) == sorted(b["id"] for b in j["bullets"]):
             plan["order"][j["id"]] = got
         for b in j["bullets"]:
@@ -234,10 +239,10 @@ def check(doc, reply, profile, jd):
         plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, jd.get("title", ""))
     lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
     for line in doc["skills"]:
-        got = [str(x).strip() for x in lines.get(line["id"]) or []]
+        got = [str(x).strip() for x in _list(lines.get(line["id"]))]
         if got and sorted(map(key, got)) == sorted(map(key, line["items"])):
             plan["skills"][line["id"]] = got
-    got = [str(x) for x in reply.get("skill_lines") or []]
+    got = [str(x) for x in _list(reply.get("skill_lines"))]
     if doc.get("skills_move") and got and sorted(got) == sorted(l["id"] for l in doc["skills"]):
         plan["skill_lines"] = got
     return plan

@@ -1676,6 +1676,15 @@ class Checks(unittest.TestCase):
         self.assertEqual(self.plan(summary=ok)["summary"], ok)
         self.assertIsNone(self.plan(summary="Backend engineer with 11+ years building Go and Python services for payments.")["summary"])
 
+    def test_malformed_list_fields_are_ignored(self):
+        ok = "Built a payments API in **Python** and **FastAPI** handling 2M requests a day."
+        p = self.plan(order={"r0": 5}, skills={"s0": 7}, skill_lines=True, bullets={"r0b0": ok})
+        default = keep_style.default_plan(self.doc, self.jd)
+        self.assertEqual(p["order"]["r0"], default["order"]["r0"])
+        self.assertEqual(p["skills"]["s0"], default["skills"]["s0"])
+        self.assertEqual(p["skill_lines"], default["skill_lines"])
+        self.assertEqual(p["text"]["r0b0"], ok)
+
 
 class TailorPrompt(unittest.TestCase):
     def test_sends_every_piece_with_its_id(self):
@@ -1696,6 +1705,8 @@ class TailorPrompt(unittest.TestCase):
 
 Run: `python -m unittest tests.test_keep_style -v`
 Expected: the new tests ERROR, `AttributeError: module 'teambid.keep_style' has no attribute 'check'` (and `default_plan`, `tailor_in_place`).
+
+**Fix round 1 (post-review):** `check()`'s three list-shaped reply fields (`order[j["id"]]`, `skills[line["id"]]`, `skill_lines`) assumed "falsy or iterable" (`x or []`), so a malformed reply value that is truthy but not iterable (e.g. an int or `True`) raised `TypeError` and threw away the whole tailored resume. Fixed with a small `_list(v)` helper (`v if isinstance(v, list) else []`) used for those three fields only; see the updated `check()` body below and the added `test_malformed_list_fields_are_ignored` test above. Commit: "Keep style: a malformed list in Claude's reply is ignored, not fatal".
 
 - [ ] **Step 3: Take `jd_weights` out of `tailor.build_resume`**
 
@@ -1868,6 +1879,11 @@ def default_plan(doc, jd):
     return plan
 
 
+def _list(v):
+    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
+    return v if isinstance(v, list) else []
+
+
 def check(doc, reply, profile, jd):
     """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
     that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
@@ -1877,7 +1893,7 @@ def check(doc, reply, profile, jd):
     orders = reply.get("order") if isinstance(reply.get("order"), dict) else {}
     have = set(profile.get("skills", {}).get("all", []))
     for j in doc["jobs"]:
-        got = [str(x) for x in orders.get(j["id"]) or []]
+        got = [str(x) for x in _list(orders.get(j["id"]))]
         if j["reorder"] and sorted(got) == sorted(b["id"] for b in j["bullets"]):
             plan["order"][j["id"]] = got
         for b in j["bullets"]:
@@ -1894,10 +1910,10 @@ def check(doc, reply, profile, jd):
         plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, jd.get("title", ""))
     lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
     for line in doc["skills"]:
-        got = [str(x).strip() for x in lines.get(line["id"]) or []]
+        got = [str(x).strip() for x in _list(lines.get(line["id"]))]
         if got and sorted(map(key, got)) == sorted(map(key, line["items"])):
             plan["skills"][line["id"]] = got
-    got = [str(x) for x in reply.get("skill_lines") or []]
+    got = [str(x) for x in _list(reply.get("skill_lines"))]
     if doc.get("skills_move") and got and sorted(got) == sorted(l["id"] for l in doc["skills"]):
         plan["skill_lines"] = got
     return plan
@@ -1906,7 +1922,7 @@ def check(doc, reply, profile, jd):
 - [ ] **Step 6: Run the tests**
 
 Run: `python -m unittest tests.test_keep_style -v`
-Expected: all tests PASS (17).
+Expected: all tests PASS (17, now 19 after the post-review fix adds `test_malformed_list_fields_are_ignored` to `Checks` and `_list` to `check()`).
 
 Run: `python -m unittest tests.test_docs tests.test_teambid -v`
 Expected: PASS. The existing `rewrite_resume` summary check and `build_resume` behave exactly as before.
