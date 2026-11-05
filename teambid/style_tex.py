@@ -97,3 +97,283 @@ def to_tex(text):
         esc = "".join(TEX_ESC.get(c, c) for c in part)
         out.append(f"\\textbf{{{esc}}}" if i % 2 and part else esc)
     return "".join(out)
+
+
+KINDS = (("experience", re.compile(r"(?i)experience|employment|work history|career")),
+         ("summary", re.compile(r"(?i)profile|summary|about|objective")),
+         ("skills", re.compile(r"(?i)skill")))
+
+
+def _sections(mask):
+    """-> ([{kind, title, start, end}], (header start, header end)). The header is the body before the first section."""
+    found = mask.find("\\begin{document}")
+    body = found + len("\\begin{document}") if found >= 0 else 0
+    end = mask.find("\\end{document}")
+    end = end if end >= 0 else len(mask)
+    heads = []
+    for m in re.finditer(r"\\section\*?\s*\{", mask[body:end]):
+        a = body + m.end() - 1
+        b = _close(mask, a)
+        heads.append((body + m.start(), b + 1, to_plain(mask[a + 1:b])[0]))
+    out = []
+    for n, (s, e, title) in enumerate(heads):
+        stop = heads[n + 1][0] if n + 1 < len(heads) else end
+        kind = next((k for k, rx in KINDS if title and rx.search(title)), "")
+        out.append({"kind": kind, "title": title, "start": e, "end": stop})
+    return out, (body, heads[0][0] if heads else end)
+
+
+def _macros(mask):
+    """-> (one-argument macros that make a list item, like Jake's \\resumeItem; macros that open, close or head a list).
+    Both end a plain \\item's text."""
+    defs = {}
+    for m in re.finditer(r"\\(?:re)?newcommand\*?\s*\{?\\([A-Za-z]+)\}?\s*(?:\[(\d)\])?\s*\{", mask):
+        defs[m.group(1)] = (m.group(2), mask[m.end():_close(mask, m.end() - 1)])
+    items = {n for n, (argc, body) in defs.items() if argc == "1" and re.search(r"\\item\b", body)}
+    grew = True
+    while grew:                          # \resumeSubItem{#1} = \resumeItem{#1}...
+        new = {n for n, (argc, body) in defs.items() if n not in items and argc == "1"
+               and any(re.search(rf"\\{x}\b", body) for x in items)}
+        items |= new
+        grew = bool(new)
+    lists = {n for n, (_, body) in defs.items() if n not in items and re.search(r"\\(begin|end)\s*\{|\\item\b", body)}
+    return items, lists
+
+
+def _items(mask, start, end, macros, lists):
+    """List items between start and end -> [(token start, text start, text end)] in order."""
+    names = "|".join(sorted(macros | lists, key=len, reverse=True))
+    stop = re.compile(r"\\(item\b|end\s*\{|begin\s*\{|section|subsection" + (f"|(?:{names})\\b" if names else "") + ")")
+    call = re.compile(r"\\item\b(?:\s*\[[^\]]*\])?" +
+                      (f"|\\\\({'|'.join(sorted(macros, key=len, reverse=True))})\\s*\\{{" if macros else ""))
+    out, i = [], start
+    while True:
+        m = call.search(mask, i, end)
+        if not m:
+            return out
+        tok = m.start()
+        if m.group(0).startswith("\\item"):
+            a = m.end()
+            n = stop.search(mask, a, end)
+            b = n.start() if n else end
+            i = b
+        else:                            # \resumeItem{...}: the text is the argument
+            a = m.end()
+            b = _close(mask, a - 1)
+            i = b + 1
+        while a < b and mask[a].isspace():
+            a += 1
+        while b > a and mask[b - 1].isspace():
+            b -= 1
+        if b > a:
+            out.append((tok, a, b))
+
+
+def _groups(mask, items):
+    """Items with nothing but whitespace between them are one job's list."""
+    groups = []
+    for tok, a, b in items:
+        if groups and not mask[groups[-1][-1][1]:tok].strip(" \t\r\n}"):
+            groups[-1].append((a, b))
+        else:
+            groups.append([(a, b)])
+    return groups
+
+
+def _trim(mask, a, b):
+    """Whitespace, and braces that open or close outside the span (\\item{ ... } around several lines)."""
+    while True:
+        while a < b and mask[a].isspace():
+            a += 1
+        while b > a and mask[b - 1].isspace():
+            b -= 1
+        if a < b and mask[a] == "{":
+            try:
+                inside = _close(mask, a) < b
+            except ValueError:
+                inside = False
+            if not inside:
+                a += 1
+                continue
+        depth, j = 0, a
+        while j < b:
+            if mask[j] == "\\":
+                j += 2
+                continue
+            depth += {"{": 1, "}": -1}.get(mask[j], 0)
+            j += 1
+        if depth < 0 and mask[b - 1] == "}":
+            b -= 1
+            continue
+        return a, b
+
+
+def _skill_line(src, mask, a, b):
+    """'{Label:} a, b, c.' or '\\textbf{Label}{: a, b}' -> {label, items: [(start, end)], span, frame} or None."""
+    a, b = _trim(mask, a, b)
+    colon = mask.find(":", a, b)
+    if colon < 0:
+        return None
+    label = to_plain(src[a:colon])[0].replace("**", "").strip(" {}")
+    i = colon + 1
+    while i < b and mask[i] in "} \t\n":     # the label's own closing brace
+        i += 1
+    spans, depth, start, j = [], 0, i, i
+    while j < b:
+        c = mask[j]
+        if c == "\\":
+            if mask.startswith("\\\\", j):
+                break
+            j += 2
+            continue
+        if c in "{(":
+            depth += 1
+        elif c in "})":
+            depth -= 1
+            if depth < 0:
+                break
+        elif c == "," and depth == 0:
+            spans.append((start, j))
+            start = j + 1
+        j += 1
+    spans.append((start, j))
+    out = []
+    for n, (x, y) in enumerate(spans):
+        while x < y and mask[x].isspace():
+            x += 1
+        while y > x and mask[y - 1].isspace():
+            y -= 1
+        if n == len(spans) - 1 and y > x and mask[y - 1] == ".":
+            y -= 1
+        if y > x:
+            out.append((x, y))
+    if not label or len(out) < 2:
+        return None
+    # the markup around the label and items: lines may only swap places when theirs is the same
+    frame = (re.sub(r"[^\\{}]+", "", re.sub(r"\\[^A-Za-z]", "", src[a:colon])), src[colon + 1:out[0][0]].strip(),
+             src[out[-1][1]:b].strip())
+    return {"label": label, "items": out, "span": (a, b), "frame": frame}
+
+
+def locate(src, pieces):
+    """Find the confirmed pieces (keep_style.confirm) in the .tex source. -> doc (shape: see the plan's File Map),
+    each piece's position in src kept under "_span". Pieces that can't be found aren't in the doc: they stay as written."""
+    mask = _mask(src)
+    sections, (head_a, head_b) = _sections(mask)
+    macros, lists = _macros(mask)
+    doc = {"ext": ".tex", "_src": src, "headline": None, "summary": None, "jobs": [], "skills": [], "skills_move": False}
+    # headline: a run of plain text in the header that reads exactly like the confirmed headline
+    want = key(pieces.get("headline", ""))
+    if want:
+        cmd = re.sub(r"\\[A-Za-z]+\*?", lambda m: " " * len(m.group(0)), mask[head_a:head_b])
+        for m in re.finditer(r"[^{}\\\n]+", cmd):
+            run = m.group(0)
+            a = head_a + m.start() + (len(run) - len(run.lstrip()))
+            b = head_a + m.end() - (len(run) - len(run.rstrip()))
+            if b > a and key(src[a:b]) == want:
+                doc["headline"] = {"text": to_plain(src[a:b])[0], "fixed": False, "_span": (a, b)}
+                break
+    # summary: the body of the profile / summary section
+    want = key(pieces.get("summary", ""))
+    for s in sections:
+        if s["kind"] == "summary" and want:
+            a, b = s["start"], s["end"]
+            while a < b and mask[a].isspace():
+                a += 1
+            while b > a and mask[b - 1].isspace():
+                b -= 1
+            text, simple = to_plain(src[a:b])
+            if key(text) == want:
+                doc["summary"] = {"text": text, "fixed": not simple, "_span": (a, b)}
+                break
+    # jobs: each run of list items in the experience section(s), matched to a confirmed job by its bullets
+    index = {}
+    for ji, job in enumerate(pieces.get("jobs", [])):
+        for bi, text in enumerate(job.get("bullets", [])):
+            index.setdefault(key(text), (ji, bi))
+    used = set()
+    for s in sections:
+        if s["kind"] != "experience":
+            continue
+        for group in _groups(mask, _items(mask, s["start"], s["end"], macros, lists)):
+            found = []
+            for a, b in group:
+                text, simple = to_plain(src[a:b])
+                found.append((index.get(key(text)), text, simple, (a, b)))
+            hits = Counter(f[0][0] for f in found if f[0])
+            if not hits:
+                continue
+            ji = hits.most_common(1)[0][0]
+            if ji in used:
+                continue
+            used.add(ji)
+            job = pieces["jobs"][ji]
+            bullets = [{"id": f"r{ji}b{f[0][1]}", "text": f[1], "fixed": not f[2], "piece": job["bullets"][f[0][1]],
+                        "_span": f[3]} for f in found if f[0] and f[0][0] == ji]
+            doc["jobs"].append({"id": f"r{ji}", "title": job.get("title", ""), "company": job.get("company", ""),
+                                "start": job.get("start", ""), "end": job.get("end", ""), "bullets": bullets,
+                                "reorder": len(bullets) == len(found) and len({b["id"] for b in bullets}) == len(bullets)})
+    # skills: "Label: a, b, c" lines in the skills section, one per \item or per \\-separated line
+    want = {key(l.get("label", "")): l for l in pieces.get("skills", [])}
+    for s in sections:
+        if s["kind"] != "skills":
+            continue
+        for _, a, b in _items(mask, s["start"], s["end"], macros, lists):
+            breaks = list(re.finditer(r"\\\\", mask[a:b]))
+            for x, y in zip([a] + [a + m.end() for m in breaks], [a + m.start() for m in breaks] + [b]):
+                line = _skill_line(src, mask, x, y)
+                if not line or key(line["label"]) not in want:
+                    continue
+                items = [to_plain(src[i:j])[0] for i, j in line["items"]]
+                if sorted(map(key, items)) != sorted(map(key, want[key(line["label"])].get("items", []))):
+                    continue
+                doc["skills"].append({"id": f"s{len(doc['skills'])}", "label": line["label"], "items": items,
+                                      "_span": line["span"], "_items": line["items"], "_frame": line["frame"]})
+    doc["skills_move"] = len({l["_frame"] for l in doc["skills"]}) == 1
+    return doc
+
+
+def render_source(doc, plan):
+    """The .tex source with the plan applied. Reordering swaps the texts between the original slots, so every \\item,
+    blank line and comment stays where it was; an order that isn't exactly the original IDs is ignored."""
+    src = doc["_src"]
+    edits = []
+    for part in ("headline", "summary"):
+        p, new = doc.get(part), plan.get(part)
+        if p and new and not p["fixed"]:
+            edits.append((*p["_span"], to_tex(new)))
+    for job in doc["jobs"]:
+        by_id = {b["id"]: b for b in job["bullets"]}
+        order = plan.get("order", {}).get(job["id"]) if job["reorder"] else None
+        if not order or sorted(order) != sorted(by_id):
+            order = list(by_id)
+        for slot, bid in zip(job["bullets"], order):
+            b = by_id[bid]
+            new = plan.get("text", {}).get(bid)
+            content = to_tex(new) if new and not b["fixed"] else src[b["_span"][0]:b["_span"][1]]
+            if content != src[slot["_span"][0]:slot["_span"][1]]:
+                edits.append((*slot["_span"], content))
+    lines = {}
+    for line in doc["skills"]:
+        a, b = line["_span"]
+        order = plan.get("skills", {}).get(line["id"]) or line["items"]
+        pos = {key(t): n for n, t in enumerate(line["items"])}
+        if sorted(map(key, order)) != sorted(pos):
+            order = line["items"]
+        text = src[a:b]
+        for (i, j), name in sorted(zip(line["_items"], order), reverse=True):
+            x, y = line["_items"][pos[key(name)]]
+            text = text[:i - a] + src[x:y] + text[j - a:]
+        lines[line["id"]] = text
+    line_order = plan.get("skill_lines") or list(lines)
+    if not doc["skills_move"] or sorted(line_order) != sorted(lines):
+        line_order = list(lines)
+    for slot, lid in zip(doc["skills"], line_order):
+        if lines[lid] != src[slot["_span"][0]:slot["_span"][1]]:
+            edits.append((*slot["_span"], lines[lid]))
+    out, last = src, len(src) + 1
+    for a, b, text in sorted(edits, reverse=True):       # from the end, so earlier positions stay right
+        if b > last:
+            raise ValueError("two edits overlap in the .tex file")
+        out, last = out[:a] + text + out[b:], a
+    return out

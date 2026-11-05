@@ -51,5 +51,76 @@ class PlainText(unittest.TestCase):
             self.assertEqual(to_plain(to_tex(s))[0], s)
 
 
+class Locate(unittest.TestCase):
+    def setUp(self):
+        self.doc = style_tex.locate(S.SAMPLE, S.PIECES)
+
+    def test_finds_every_piece(self):
+        d = self.doc
+        self.assertEqual(d["headline"]["text"], "SENIOR BACKEND ENGINEER")
+        self.assertIn("**7+ years**", d["summary"]["text"])
+        self.assertFalse(d["summary"]["fixed"])
+        self.assertEqual([j["id"] for j in d["jobs"]], ["r0", "r1"])
+        self.assertEqual([b["id"] for b in d["jobs"][0]["bullets"]], ["r0b0", "r0b1", "r0b2"])
+        self.assertEqual([b["fixed"] for b in d["jobs"][0]["bullets"]], [False, False, True])      # r0b2 has a link
+        self.assertTrue(all(j["reorder"] for j in d["jobs"]))
+        self.assertEqual([(l["label"], l["items"]) for l in d["skills"]],
+                         [("Languages", ["Python", "Go", "SQL", "C#"]),
+                          ("Cloud & Data", ["AWS", "Docker", "PostgreSQL", "Redis", "Airflow"])])
+        self.assertTrue(d["skills_move"])
+
+    def test_no_plan_gives_back_the_same_file(self):
+        self.assertEqual(style_tex.render_source(self.doc, {}), S.SAMPLE)
+
+    def test_reorder_keeps_every_bullet_exactly_once(self):
+        out = style_tex.render_source(self.doc, {"order": {"r0": ["r0b2", "r0b0", "r0b1"]}})
+        for b in self.doc["jobs"][0]["bullets"]:
+            a, z = b["_span"]
+            self.assertEqual(out.count(S.SAMPLE[a:z]), 1)
+        self.assertLess(out.index("public API docs"), out.index("payments API"))
+        self.assertEqual(len(out), len(S.SAMPLE))
+
+    def test_rewording_changes_only_that_bullet(self):
+        new = "Cut p95 latency 40% with **Redis** caching & fewer reads."
+        out = style_tex.render_source(self.doc, {"text": {"r0b1": new}})
+        tex = r"Cut p95 latency 40\% with \textbf{Redis} caching \& fewer reads."
+        self.assertIn(tex, out)
+        a, z = self.doc["jobs"][0]["bullets"][1]["_span"]
+        self.assertEqual(out.replace(tex, S.SAMPLE[a:z]), S.SAMPLE)
+
+    def test_fixed_bullet_keeps_its_text(self):
+        self.assertEqual(style_tex.render_source(self.doc, {"text": {"r0b2": "Wrote docs for 12 endpoints."}}), S.SAMPLE)
+
+    def test_skills_reorder_inside_and_between_lines(self):
+        out = style_tex.render_source(self.doc, {"skills": {"s0": ["C#", "SQL", "Go", "Python"]}, "skill_lines": ["s1", "s0"]})
+        self.assertIn(r"{Languages:} C\#, SQL, Go, Python.", out)
+        self.assertLess(out.index(r"Cloud \& Data"), out.index("{Languages:}"))
+
+    def test_bad_orders_are_ignored(self):
+        out = style_tex.render_source(self.doc, {"order": {"r0": ["r0b0", "r0b0", "r0b1"]}, "skill_lines": ["s0"],
+                                                 "skills": {"s0": ["Python", "Rust", "SQL", "C#"]}})
+        self.assertEqual(out, S.SAMPLE)
+
+    def test_headline_and_summary(self):
+        out = style_tex.render_source(self.doc, {"headline": "SENIOR PYTHON ENGINEER",
+                                                 "summary": "Python engineer with **7+ years** on payments."})
+        self.assertIn(r"{\LARGE SENIOR PYTHON ENGINEER}", out)
+        self.assertIn(r"Python engineer with \textbf{7+ years} on payments.", out)
+
+
+class JakeTemplate(unittest.TestCase):
+    def test_resume_item_macros_and_multi_line_skills(self):
+        doc = style_tex.locate(S.JAKE, S.JAKE_PIECES)
+        self.assertEqual([[b["id"] for b in j["bullets"]] for j in doc["jobs"]], [["r0b0", "r0b1", "r0b2"], ["r1b0", "r1b1"]])
+        self.assertTrue(doc["jobs"][0]["bullets"][2]["fixed"])
+        self.assertEqual([l["label"] for l in doc["skills"]], ["Languages", "Frameworks"])
+        self.assertTrue(doc["skills_move"])
+        out = style_tex.render_source(doc, {"order": {"r0": ["r0b1", "r0b0", "r0b2"]}, "skill_lines": ["s1", "s0"]})
+        self.assertIn(r"\resumeItem{Cut p95 latency 40\% by moving hot reads to Redis} % comment, here", out)
+        self.assertLess(out.index(r"\textbf{Frameworks}"), out.index(r"\textbf{Languages}"))
+        self.assertIn(r"\small{\item{", out)                 # the braces around both skill lines stayed put
+        self.assertEqual((out.count("{"), out.count("}")), (S.JAKE.count("{"), S.JAKE.count("}")))
+
+
 if __name__ == "__main__":
     unittest.main()
