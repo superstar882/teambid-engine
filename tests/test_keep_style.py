@@ -67,6 +67,14 @@ class Confirm(unittest.TestCase):
         r["headline"] = "STAFF ENGINEER"
         self.assertEqual(keep_style.confirm(r, S.SAMPLE_TEXT)[0]["headline"], "")
 
+    def test_a_skill_must_sit_in_its_own_line(self):
+        r = reading()
+        r["skills"][1]["items"].append("R")      # a short invented item: a substring-only check would find "R" in "Reyes"
+        self.assertEqual([l["label"] for l in keep_style.confirm(r, S.SAMPLE_TEXT)[0]["skills"]], ["Languages"])
+        r2 = reading()
+        r2["skills"][0]["items"] = ["Go", "Python", "SQL", "C#"]      # same items, wrong order: not really that line
+        self.assertEqual([l["label"] for l in keep_style.confirm(r2, S.SAMPLE_TEXT)[0]["skills"]], ["Cloud & Data"])
+
 
 class ApplyToProfile(unittest.TestCase):
     def test_replaces_jobs_and_works_out_years_again(self):

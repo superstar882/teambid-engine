@@ -1231,6 +1231,14 @@ class Confirm(unittest.TestCase):
         r["headline"] = "STAFF ENGINEER"
         self.assertEqual(keep_style.confirm(r, S.SAMPLE_TEXT)[0]["headline"], "")
 
+    def test_a_skill_must_sit_in_its_own_line(self):
+        r = reading()
+        r["skills"][1]["items"].append("R")      # a short invented item: a substring-only check would find "R" in "Reyes"
+        self.assertEqual([l["label"] for l in keep_style.confirm(r, S.SAMPLE_TEXT)[0]["skills"]], ["Languages"])
+        r2 = reading()
+        r2["skills"][0]["items"] = ["Go", "Python", "SQL", "C#"]      # same items, wrong order: not really that line
+        self.assertEqual([l["label"] for l in keep_style.confirm(r2, S.SAMPLE_TEXT)[0]["skills"]], ["Cloud & Data"])
+
 
 class ApplyToProfile(unittest.TestCase):
     def test_replaces_jobs_and_works_out_years_again(self):
@@ -1362,6 +1370,20 @@ MAX_MISSED = 0.25            # more bullets than this not found word for word: d
 YM = re.compile(r"\d{4}-\d{2}")
 
 
+def _follows(hay, keys, start, gap=3):
+    """True if every key in keys is found in order, each starting at most `gap` characters after the previous one
+    ends (the gap leaves room for punctuation key() keeps, like ":" "," "." "("). Empty keys fail."""
+    pos = start
+    for k in keys:
+        if not k:
+            return False
+        i = hay.find(k, pos, pos + gap + len(k))
+        if i < 0:
+            return False
+        pos = i + len(k)
+    return True
+
+
 def confirm(reading, text):
     """Keep only what was copied word for word from the resume text (line breaks, hyphen splits, dash and quote styles
     ignored); bullets must also come in reading order. -> (pieces or None, note)."""
@@ -1398,7 +1420,12 @@ def confirm(reading, text):
             continue
         label = str(line.get("label") or "").strip()
         items = [str(x).strip() for x in line.get("items") or [] if str(x).strip()]
-        if label and len(items) >= 2 and at(label, shortest=2) >= 0 and all(at(x, shortest=1) >= 0 for x in items):
+        lk, item_keys = key(label), [key(x) for x in items]
+        # the label's own key can also show up earlier (e.g. in the summary), so try every occurrence; a line only
+        # counts when, right after one of them, its items chain in order (a short invented item can't just be a
+        # substring of some unrelated word elsewhere in the resume)
+        if (label and len(items) >= 2 and lk
+                and any(_follows(hay, item_keys, m.end()) for m in re.finditer(re.escape(lk), hay))):
             skills.append({"label": label, "items": items})
     head, summ = (str(reading.get(k) or "").strip() for k in ("headline", "summary"))
     pieces = {"headline": head if at(head) >= 0 else "", "summary": summ if at(summ) >= 0 else "",
