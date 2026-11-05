@@ -15,6 +15,8 @@ from teambid import style_tex  # noqa: E402
 from teambid.style_tex import to_plain, to_tex  # noqa: E402
 from teambid.style_text import key  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
+import fitz  # noqa: E402
+from teambid import resume_parse  # noqa: E402
 
 
 class Key(unittest.TestCase):
@@ -120,6 +122,52 @@ class JakeTemplate(unittest.TestCase):
         self.assertLess(out.index(r"\textbf{Frameworks}"), out.index(r"\textbf{Languages}"))
         self.assertIn(r"\small{\item{", out)                 # the braces around both skill lines stayed put
         self.assertEqual((out.count("{"), out.count("}")), (S.JAKE.count("{"), S.JAKE.count("}")))
+
+
+@unittest.skipUnless(style_tex.available(), "pdflatex isn't installed here (the online Tests workflow has it)")
+class Build(unittest.TestCase):
+    def test_builds_the_sample(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            pdf, pages = style_tex.compile_tex(S.SAMPLE, Path(tmp), "resume")
+            self.assertTrue(pdf.exists())
+            self.assertEqual(pages, 1)
+
+    def test_latex_errors_are_reported(self):
+        with self.assertRaises(ValueError):
+            style_tex.compile_tex(S.SAMPLE.replace("\\end{itemize}", "", 1), Path(tempfile.mkdtemp()), "broken")
+
+    def test_no_shell_commands_and_no_reading_outside_the_folder(self):
+        tmp = Path(tempfile.mkdtemp())
+        evil = S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\immediate\\write18{touch pwned}", 1)
+        try:
+            style_tex.compile_tex(evil, tmp, "evil")
+        except ValueError:
+            pass
+        self.assertFalse((tmp / "pwned").exists())
+        with self.assertRaises(ValueError):
+            style_tex.compile_tex(S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\input{/etc/hostname}", 1), tmp, "read")
+
+    def test_find_then_build(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            src = Path(tmp) / "dana.tex"
+            src.write_text(S.SAMPLE, encoding="utf-8")
+            doc = style_tex.find(src, S.PIECES)
+            self.assertEqual(doc["pages"], 1)
+            files = style_tex.build(doc, {"order": {"r1": ["r1b1", "r1b0"]}}, Path(tmp), "out")
+            self.assertEqual((files["pages"], files["paper"]), (1, "A4"))
+            with fitz.open(files["pdf"]) as d:
+                text = d[0].get_text()
+            self.assertLess(text.index("Go unit tests"), text.index("cron jobs"))
+            self.assertTrue(Path(files["source"]).read_text(encoding="utf-8").startswith("\\documentclass"))
+
+    def test_extract_text_reads_a_tex_upload(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            src = Path(tmp) / "dana.tex"
+            src.write_text(S.SAMPLE, encoding="utf-8")
+            text, meta = resume_parse.extract_text(src)
+        self.assertEqual((meta["source"], meta["file"]), ("tex", "dana.tex"))
+        for b in [b for j in S.PIECES["jobs"] for b in j["bullets"]]:
+            self.assertIn(key(b), key(text))        # what Claude copies from this text is found in the .tex
 
 
 if __name__ == "__main__":
