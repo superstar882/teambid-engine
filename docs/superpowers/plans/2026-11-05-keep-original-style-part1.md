@@ -977,6 +977,28 @@ class BuildErrors(unittest.TestCase):
                 with self.assertRaises(ValueError) as ctx:
                     resume_parse.extract_text(src)
                 self.assertIn("upload its PDF instead", str(ctx.exception))
+
+    def test_extract_text_pdf_outside_try(self):
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            src = Path(tmp) / "test.tex"
+            src.write_text(S.SAMPLE, encoding="utf-8")
+            # Mock compile_tex to return a real PDF
+            def mock_compile(*args, **kwargs):
+                out_dir = args[1]
+                d = fitz.open()
+                d.new_page()
+                pdf_path = Path(out_dir) / f"{args[2]}.pdf"
+                d.save(pdf_path)
+                d.close()
+                return pdf_path, 1
+            # Mock _columns to raise an error during PDF processing
+            with mock.patch("teambid.style_tex.compile_tex", side_effect=mock_compile):
+                with mock.patch("teambid.resume_parse._columns", side_effect=ValueError("bad page")):
+                    with self.assertRaises(ValueError) as ctx:
+                        resume_parse.extract_text(src)
+                    # The error should be from _columns, not wrapped in "upload its PDF instead"
+                    self.assertEqual(str(ctx.exception), "bad page")
+                    self.assertNotIn("upload its PDF instead", str(ctx.exception))
 ```
 
 - [ ] **Step 2: Run the tests to see them fail (or skip)**
@@ -1030,9 +1052,6 @@ def compile_tex(src, out_dir, name):
                 pass
             continue
         if r.returncode:
-            if "rerun" not in tried and "Rerun to get" in log:
-                tried.add("rerun")
-                continue
             raise ValueError(_latex_error(log))
         if "Rerun to get" in log and "rerun" not in tried:
             tried.add("rerun")

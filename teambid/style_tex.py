@@ -422,9 +422,6 @@ def compile_tex(src, out_dir, name):
                 pass
             continue
         if r.returncode:
-            if "rerun" not in tried and "Rerun to get" in log:
-                tried.add("rerun")
-                continue
             raise ValueError(_latex_error(log))
         if "Rerun to get" in log and "rerun" not in tried:
             tried.add("rerun")
