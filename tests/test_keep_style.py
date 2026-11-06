@@ -133,19 +133,35 @@ class Onboard(TempWorkspace):
         f.write_text(S.SAMPLE_TEXT + "\nchanged", encoding="utf-8")
         self.assertIsNone(keep_style.load_pieces(r["slug"], f))
 
+    def saved(self, slug):
+        return json.loads((config.member_dir(slug) / "resume" / "pieces.json").read_text(encoding="utf-8"))
+
     def test_without_claude_the_rule_based_parse_stays(self):
         with mock.patch.object(llm, "available", return_value=False):
             r = service.onboard("Dana Three", resume_path=self._src())
-        self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
+        self.assertEqual(self.saved(r["slug"])["by"], "rules")       # saved, so tailoring doesn't read it every time
+        self.assertEqual(keep_style.load_pieces(r["slug"], config.member_dir(r["slug"]) / "resume" / "dana.txt")["by"],
+                         "rules")
 
     def test_a_malformed_reading_keeps_the_rule_based_parse(self):
         with mock.patch.object(llm, "available", return_value=True), \
              mock.patch.object(llm, "read_resume", return_value=({"jobs": [{"bullets": 5}], "skills": 7}, "read")):
             r = service.onboard("Dana Four", resume_path=self._src())
-        self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
         rule_based = resume_parse.parse_file(self._src())["roles"]
         self.assertEqual([x["company"] for x in r["profile"]["roles"]], [x["company"] for x in rule_based])
         self.assertEqual(r["llm"], "no job bullets found in the resume")
+        pieces = self.saved(r["slug"])                               # the rejected reading's stand-in is saved
+        self.assertEqual(pieces["by"], "rules")
+        self.assertEqual([j["company"] for j in pieces["jobs"]], [x["company"] for x in rule_based])
+
+    def test_claude_reading_is_marked_and_not_replaced_by_rules(self):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(reading(), "read")):
+            slug = service.onboard("Dana Five", resume_path=self._src())["slug"]
+        self.assertEqual(self.saved(slug)["by"], "claude")
+        with mock.patch.object(llm, "available", return_value=False):      # a reparse without a key keeps it
+            service.reparse(slug)
+        self.assertEqual(self.saved(slug)["by"], "claude")
 
     def test_a_tex_that_wont_build_leaves_nothing_behind(self):
         src = Path(tempfile.mkdtemp()) / "dana.tex"
@@ -161,7 +177,8 @@ class Onboard(TempWorkspace):
         with boom(), mock.patch.object(llm, "available", return_value=False):
             with self.assertRaises(ValueError):
                 service.onboard("Dana Kept", resume_path=src)
-        self.assertEqual([f.name for f in (config.member_dir(slug) / "resume").iterdir()], ["dana.txt"])
+        self.assertEqual([f.name for f in (config.member_dir(slug) / "resume").iterdir() if f.name != "pieces.json"],
+                         ["dana.txt"])
 
 
 class LeftoverFiles(TempWorkspace):
@@ -450,6 +467,38 @@ class ApplyWithPdf(TempWorkspace):
             r = self._apply({"bullets": {"r0b1": long}})
         self.assertIn("1 reworded bullet(s) kept their original text to fit", r["resume_ai"])
         self.assertIn("0 of 5 bullets reworded", r["resume_ai"])
+
+
+class ApplyWithRulePieces(TempWorkspace):
+    """Pieces Claude didn't read (the rule-based parse, or saved before pieces said who read them) are only reordered
+    in a PDF: a rule-based "bullet" can be half of one, and Claude isn't asked to reword it."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src))
+        with mock.patch.object(llm, "available", return_value=False):
+            cls.slug = service.onboard("Dana Rules", resume_path=src)["slug"]
+
+    def _apply(self, by, title):
+        pieces = dict(json.loads(json.dumps(pdf_samples.PIECES)), **({"by": by} if by else {}))
+        keep_style.save_pieces(self.slug, config.member_dir(self.slug) / "resume" / "dana.pdf", pieces)
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=({"bullets": {"r1b0": new}}, "ok")) as ask, \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            r = service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title=title, ai="haiku")
+        self.assertFalse(ask.called, by)
+        self.assertIn("Resume style: original (.pdf). 0 of 5 bullets reworded", r["resume_ai"])
+        self.assertIn("order changed in 2 jobs", r["resume_ai"])
+        self.assertIn("(read without Claude: reordered only)", r["resume_ai"])
+
+    def test_rule_based_pieces_are_only_reordered(self):
+        self._apply("rules", "Senior Python Engineer")
+
+    def test_pieces_saved_before_they_said_who_read_them_too(self):
+        self._apply(None, "Python Engineer")
 
 
 if __name__ == "__main__":

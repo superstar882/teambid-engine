@@ -37,12 +37,14 @@ def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, 
         if new_member:
             shutil.rmtree(folder, ignore_errors=True)
         raise
-    note = ""
+    note, pieces = "", None
     if use_llm and llm.available():      # Claude reads jobs, bullets, summary and skills; code keeps only exact copies
         pieces, note = keep_style.read(profile["raw_text"])
         if pieces:
             keep_style.apply_to_profile(profile, pieces)
             keep_style.save_pieces(slug, dst, pieces)
+    if not pieces:                       # rejected or no Claude: the rule-based pieces, so tailoring needn't re-read
+        keep_style.save_rule_pieces(slug, dst, profile)
     if not profile.get("name"):
         profile["name"] = name
     base = matcher.default_prefs(profile)
@@ -326,11 +328,12 @@ def reparse(slug):
     if not files:
         raise ValueError(f"no resume file for {slug}")
     profile = resume_parse.parse_file(files[0])
-    if llm.available():
-        pieces, _ = keep_style.read(profile["raw_text"])
-        if pieces:
-            keep_style.apply_to_profile(profile, pieces)
-            keep_style.save_pieces(slug, files[0], pieces)
+    pieces = keep_style.read(profile["raw_text"])[0] if llm.available() else None
+    if pieces:
+        keep_style.apply_to_profile(profile, pieces)
+        keep_style.save_pieces(slug, files[0], pieces)
+    else:                                # rejected or no Claude: the rule-based pieces, so tailoring needn't re-read
+        keep_style.save_rule_pieces(slug, files[0], profile)
     if not profile.get("name"):
         profile["name"] = m["name"]
     with storage.connect() as con:
