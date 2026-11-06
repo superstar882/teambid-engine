@@ -1006,6 +1006,8 @@ Added by the final review (see `tests/test_style_tex.py`): `BuildErrors.test_lat
 
 Added with the Docker sandbox: that test is split into `test_no_shell_commands` and `test_no_reading_outside_the_folder` (sandbox only; `\input`, `\pdffiledump` and `\pdfmdfivesum file` of a random secret file outside the build folder never reach the PDF; Docker gives each container its own `/etc/hostname`, so that file proved nothing). `BuildErrors.setUp` pins the direct run, and `test_the_sandbox_sees_only_tex_and_the_build_folder` / `test_no_docker_no_build` check the exact `docker run` command and the missing-Docker error.
 
+Added so the sandbox fails closed: `_latex_cmd` raises `ValueError` instead of running LaTeX directly when `GITHUB_ACTIONS=true` and the sandbox flag isn't `docker` (a `doc-tools` step failed before arming it); `BuildErrors.setUp` now also clears `GITHUB_ACTIONS` for its mocked direct-mode tests, and `test_github_actions_refuses_direct_mode` checks the new raise with `subprocess.run` never called.
+
 - [ ] **Step 2: Run the tests to see them fail (or skip)**
 
 Run: `python -m unittest tests.test_style_tex -v`
@@ -2400,6 +2402,8 @@ runs:
         docker pull -q ubuntu:24.04
         echo "TEAMBID_LATEX_SANDBOX=docker" >> "$GITHUB_ENV"
 ```
+
+Fixed by review: arming `TEAMBID_LATEX_SANDBOX=docker` was the *last* step, so a failed `tlmgr update`/`docker pull` upstream stopped the composite before it ran and left the flag unset with `continue-on-error` swallowing it; it's now its own first step, before anything that can fail, and the image pre-pull stays last but best-effort (`docker pull -q ubuntu:24.04 || echo "image pull failed; the first build pulls it"`).
 
 - [ ] **Step 2: Create the online test workflow**
 

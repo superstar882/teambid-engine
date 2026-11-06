@@ -196,10 +196,13 @@ class Build(unittest.TestCase):
 
 class BuildErrors(unittest.TestCase):
     def setUp(self):
-        # these fake today's direct run unless they say otherwise: the online Tests job turns the sandbox on for all steps
+        # these fake today's direct run unless they say otherwise: the online Tests job turns the sandbox on for all
+        # steps, and sets GITHUB_ACTIONS=true; both must be undone for these mocked direct-mode tests, which still
+        # run under that same job (compile_tex now refuses direct mode when GITHUB_ACTIONS=true)
         direct = mock.patch.dict(os.environ, {"TEAMBID_LATEX_SANDBOX": ""})
         direct.start()
         self.addCleanup(direct.stop)
+        os.environ.pop("GITHUB_ACTIONS", None)
 
     def test_timeout(self):
         with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
@@ -312,6 +315,19 @@ class BuildErrors(unittest.TestCase):
                     style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
         self.assertEqual(str(ctx.exception), "Docker isn't available here for the LaTeX sandbox")
         run.assert_not_called()                  # never falls back to building the upload outside the sandbox
+
+    def test_github_actions_refuses_direct_mode(self):
+        # doc-tools/action.yml arms TEAMBID_LATEX_SANDBOX=docker as its first step; if a GitHub Actions run ever gets
+        # here without it (a later step failed first), compile_tex must fail closed rather than build on the bare runner
+        with mock.patch.dict(os.environ, {"GITHUB_ACTIONS": "true"}), mock.patch.dict(os.environ):
+            os.environ.pop("TEAMBID_LATEX_SANDBOX", None)
+            with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"), \
+                 mock.patch("teambid.style_tex.subprocess.run") as run:
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                self.assertIn("sandbox", str(ctx.exception))
+        run.assert_not_called()
 
     def test_docker_error_shows_stderr(self):
         """When LaTeX fails before writing a log (e.g., Docker error), show the last lines of stderr."""

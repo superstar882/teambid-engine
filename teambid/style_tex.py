@@ -397,6 +397,10 @@ def _latex_cmd(exe, engine, name, out_dir):
     \\input of an absolute path, so an upload could otherwise put the runner's files (members' data, ~/.ssh) in its PDF."""
     args = ["-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
     if os.environ.get("TEAMBID_LATEX_SANDBOX") != "docker":
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            # doc-tools/action.yml arms the sandbox before anything that can fail; if it's still off here, something
+            # upstream (tlmgr, docker pull) broke, and a GitHub Actions runner must never build a member's upload directly
+            raise ValueError("LaTeX only runs inside the Docker sandbox on GitHub Actions, and it isn't on")
         return [exe, *args], TIMEOUT
     if not shutil.which("docker"):
         raise ValueError("Docker isn't available here for the LaTeX sandbox")

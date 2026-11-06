@@ -203,7 +203,9 @@ may be dropped.
   - `openout_any=p` keeps it from writing outside that folder. `openin_any=p` is set too, but it doesn't stop
     `\input` of an absolute path (the online test showed it), so in the cloud LaTeX runs in a throwaway Docker
     container that sees only TeX (read-only) and the build folder, with no network (`TEAMBID_LATEX_SANDBOX=docker`,
-    set by the shared tool setup). Without Docker there, the build fails and the resume falls back to RenderCV.
+    set by the shared tool setup). Without Docker there, the build fails and the resume falls back to RenderCV. On a
+    GitHub Actions runner, `compile_tex` refuses to build directly at all when that flag isn't set, so a setup step
+    that fails before arming it can't leave a member's upload compiled unsandboxed.
   - The time limit is 60 s. It runs a second time if the log asks for it.
   - TinyTeX installs a missing package and retries once (`tlmgr install`, run outside the container).
 
