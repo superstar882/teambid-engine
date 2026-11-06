@@ -1001,6 +1001,8 @@ class BuildErrors(unittest.TestCase):
                     self.assertNotIn("upload its PDF instead", str(ctx.exception))
 ```
 
+Added by the final review (see `tests/test_style_tex.py`): `BuildErrors.test_latex_never_sees_the_runs_secrets` (no pdflatex needed: fakes `shutil.which` / `subprocess.run`, checks the `env` LaTeX and tlmgr get), and the end of `test_no_shell_commands_and_no_reading_outside_the_folder` (`\pdffiledump` / `\pdfmdfivesum file` on `/etc/hostname` never reach the PDF).
+
 - [ ] **Step 2: Run the tests to see them fail (or skip)**
 
 Run: `python -m unittest tests.test_style_tex -v`
@@ -1011,6 +1013,14 @@ Expected: `AttributeError: module 'teambid.style_tex' has no attribute 'availabl
 ```python
 TIMEOUT = 60                             # seconds per LaTeX run
 FONTSPEC = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\bfontspec\b")
+ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT")     # SYSTEMROOT: Windows needs it
+
+
+def _env():
+    """The environment LaTeX and tlmgr run with: only what they need to find themselves and their packages, never the
+    run's secrets (Claude key, GitHub token, site password), since the file being built is someone's upload."""
+    env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith("TEXMF")}
+    return dict(env, openin_any="p", openout_any="p", shell_escape="f")
 
 
 def available():
@@ -1034,7 +1044,7 @@ def compile_tex(src, out_dir, name):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.tex").write_text(src, encoding="utf-8")
-    env = dict(os.environ, openin_any="p", openout_any="p", shell_escape="f")
+    env = _env()
     cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
     tried, log_file = set(), out_dir / f"{name}.log"
     for _ in range(5):
@@ -1047,7 +1057,7 @@ def compile_tex(src, out_dir, name):
         if r.returncode and missing and missing.group(1) not in tried and shutil.which("tlmgr"):
             tried.add(missing.group(1))
             try:
-                subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+                subprocess.run(["tlmgr", "install", missing.group(1)], env=env, capture_output=True, timeout=300)
             except subprocess.TimeoutExpired:
                 pass
             continue
@@ -1361,7 +1371,7 @@ import datetime as dt
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from . import config, llm, resume_parse
 from .style_text import key
@@ -1384,6 +1394,11 @@ def _follows(hay, keys, start, gap=3):
     return True
 
 
+def _list(v):
+    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
+    return v if isinstance(v, list) else []
+
+
 def confirm(reading, text):
     """Keep only what was copied word for word from the resume text (line breaks, hyphen splits, dash and quote styles
     ignored); bullets must also come in reading order. -> (pieces or None, note)."""
@@ -1395,11 +1410,11 @@ def confirm(reading, text):
         return hay.find(k, start) if len(k) >= shortest else -1
 
     jobs, total, missed, pos = [], 0, 0, 0
-    for j in reading.get("jobs") or []:
+    for j in _list(reading.get("jobs")):
         if not isinstance(j, dict):
             continue
         kept = []
-        for b in j.get("bullets") or []:
+        for b in _list(j.get("bullets")):
             b = str(b).strip()
             total += 1
             i = at(b, pos)
@@ -1415,11 +1430,11 @@ def confirm(reading, text):
     if missed > MAX_MISSED * total:
         return None, f"{missed} of {total} bullets weren't word for word in the resume"
     skills = []
-    for line in reading.get("skills") or []:
+    for line in _list(reading.get("skills")):
         if not isinstance(line, dict):
             continue
         label = str(line.get("label") or "").strip()
-        items = [str(x).strip() for x in line.get("items") or [] if str(x).strip()]
+        items = [str(x).strip() for x in _list(line.get("items")) if str(x).strip()]
         lk, item_keys = key(label), [key(x) for x in items]
         # the label's own key can also show up earlier (e.g. in the summary), so try every occurrence; a line only
         # counts when, right after one of them, its items chain in order (a short invented item can't just be a
@@ -1434,11 +1449,15 @@ def confirm(reading, text):
 
 
 def read(text):
-    """Claude reads the resume text -> (confirmed pieces or None, note)."""
-    data, note = llm.read_resume(text)
-    if not data:
-        return None, note
-    return confirm(data, text)
+    """Claude reads the resume text -> (confirmed pieces or None, note). Any failure here only skips the reading: the
+    upload goes on with the rule-based parse."""
+    try:
+        data, note = llm.read_resume(text)
+        if not data:
+            return None, note
+        return confirm(data, text)
+    except Exception as e:
+        return None, f"Claude reading skipped: {e}"
 
 
 def pieces_from_profile(profile):
@@ -1449,14 +1468,24 @@ def pieces_from_profile(profile):
                       "bullets": [b["text"] for b in r.get("bullets", [])]} for r in profile.get("roles", [])]}
 
 
+def _ym(value, end=False):
+    """A date as the resume writes it ('2022-04', 'June 2023', '04/2022', '2022') -> 'YYYY-MM', else '' (like
+    admin._ym). Without this a job ending 'June 2023' would count as running to today."""
+    v = str(value or "").strip()
+    if YM.fullmatch(v):
+        return v
+    d = None if re.fullmatch(resume_parse.NOW, v, re.I) else resume_parse.parse_date(v, end=end)
+    return f"{d[0]:04d}-{d[1]:02d}" if d else ""
+
+
 def apply_to_profile(profile, pieces):
     """Claude's confirmed reading replaces the rule-based jobs, headline and summary; years, level and lanes are worked
     out again from it."""
     today = dt.date.today()
     roles = []
     for j in pieces.get("jobs", []):
-        start = j["start"] if YM.fullmatch(j["start"]) else ""
-        end = "Present" if re.fullmatch(r"(?i)present|current|now", j["end"]) else (j["end"] if YM.fullmatch(j["end"]) else "")
+        start = _ym(j["start"])
+        end = "Present" if re.fullmatch(resume_parse.NOW, j["end"], re.I) else _ym(j["end"], end=True)
         a = tuple(int(x) for x in start.split("-")) if start else None
         b = (today.year, today.month) if end == "Present" else (tuple(int(x) for x in end.split("-")) if end else None)
         r = {"company": j["company"], "title": j["title"], "location": j["location"], "start": start, "end": end,
@@ -1518,6 +1547,20 @@ In `onboard`:
             keep_style.save_pieces(slug, dst, pieces)
 ```
 
+Final review: a file that fails to parse (e.g. a .tex that won't build) leaves nothing behind. `onboard` notes `new_member = not (config.MEMBERS / slug).exists()` before `config.member_dir(slug)` and `wrote` (False only when `resume_path` already is `dst`), and wraps the parse:
+
+```python
+    try:
+        profile = resume_parse.parse_file(dst)
+    except Exception:
+        # e.g. a .tex that doesn't build: leave nothing behind, or a later reparse or tailoring could pick that file up
+        if wrote:
+            dst.unlink(missing_ok=True)
+        if new_member:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
+```
+
 In `reparse`, replace these two lines:
 
 ```python
@@ -1530,10 +1573,15 @@ In `reparse`, replace these two lines:
 with:
 
 ```python
-    files = sorted((f for f in (config.member_dir(slug) / "resume").iterdir()
-                    if f.suffix.lower() in (".tex", ".pdf", ".docx", ".txt", ".md")),
-                   key=lambda f: (f.suffix.lower() != ".tex", f.name))          # a .tex source wins over its PDF
+    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder, for the file
+    # they uploaded last (by name, split at either slash); else a .tex source wins over its PDF
+    folder, kinds = config.member_dir(slug) / "resume", (".tex", ".pdf", ".docx", ".txt", ".md")
+    stored = folder / PureWindowsPath(str(m.get("resume_file") or "")).name
+    files = [stored] if stored.suffix.lower() in kinds and stored.is_file() else \
+        sorted((f for f in folder.iterdir() if f.suffix.lower() in kinds),
+               key=lambda f: (f.suffix.lower() != ".tex", f.name))
 ```
+(`from pathlib import Path, PureWindowsPath` at the top of `service.py`.)
 ```python
     profile = resume_parse.parse_file(files[0])
     if llm.available():
@@ -1551,6 +1599,7 @@ with:
 - Line 4: change `[--llm]` to `[--no-llm]`.
 - Line 92: change `s.add_argument("--llm", action="store_true")` to `s.add_argument("--no-llm", action="store_true")`.
 - Line 145: change `use_llm=a.llm` to `use_llm=not a.no_llm`.
+- `reparse all` (final review): wrap each `print(service.reparse(sl))` in `try` / `except Exception as e: print(f"{sl}: failed: {e}")`, so one unreadable file doesn't stop the rest.
 
 `teambid/static/index.html`:
 - Line 246: change `Upload a resume (PDF, DOCX or TXT).` to `Upload a resume (PDF, DOCX, TXT or a LaTeX .tex file).`
@@ -1834,11 +1883,17 @@ def clean_bold(new, old):
                    for i, p in enumerate(new.split("**")))
 
 
+def _chars_ok(new, old):
+    """Every character is printable ASCII or one the original already has. pdflatex can fail on one it doesn't know
+    (an arrow, an emoji, a zero-width space), and that would send the whole resume to RenderCV."""
+    return all(" " <= c <= "~" or c in old for c in new)
+
+
 def _bullet_new(new, old, have):
     """Claude's rewording of one bullet if it passes the fact checks and the length limits, else None."""
     new = clean_bold(new, old)
     n, o = new.replace("**", ""), old.replace("**", "")
-    ok = llm._bullet_ok(n, o, have) and LENGTH[0] <= len(n) / max(1, len(o)) <= LENGTH[1]
+    ok = _chars_ok(n, o) and llm._bullet_ok(n, o, have) and LENGTH[0] <= len(n) / max(1, len(o)) <= LENGTH[1]
     return new if ok else None
 
 
@@ -1846,7 +1901,7 @@ def headline_ok(new, old, profile, job_title):
     """The new headline in the original's capital-letter style, or None. Its words must come from titles the member
     held or the job's title, with no level above one they held and no tool they don't list."""
     new = re.sub(r"\s+", " ", re.sub(r"[\\`<>{}*]", "", str(new or ""))).strip()
-    if not new or key(new) == key(old) or len(new) > max(60, 1.5 * len(old)):
+    if not new or key(new) == key(old) or len(new) > max(60, 1.5 * len(old)) or not _chars_ok(new, old):
         return None
     held = " ".join(r.get("title", "") for r in profile.get("roles", [])) + " " + old
     pool = set(re.findall(r"[a-z0-9.+#]+", (held + " " + job_title).lower()))
@@ -1880,12 +1935,7 @@ def default_plan(doc, jd):
     return plan
 
 
-def _list(v):
-    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
-    return v if isinstance(v, list) else []
-
-
-def check(doc, reply, profile, jd):
+def check(doc, reply, profile, jd):                  # _list() is defined above confirm() (Task 4)
     """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
     that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
     plan = default_plan(doc, jd)
@@ -1904,7 +1954,8 @@ def check(doc, reply, profile, jd):
     s = doc.get("summary")
     if s and not s["fixed"]:
         new = clean_bold(reply.get("summary"), s["text"])
-        if llm._summary_ok(new.replace("**", ""), s["text"].replace("**", ""), profile, *LENGTH):
+        n, o = new.replace("**", ""), s["text"].replace("**", "")
+        if _chars_ok(n, o) and llm._summary_ok(n, o, profile, *LENGTH):
             plan["summary"] = new
     h = doc.get("headline")
     if h and not h["fixed"]:
@@ -2046,6 +2097,8 @@ class ApplyWithTex(TempWorkspace):
         self.assertEqual(keep_style.tailor("nobody-here", {"resume_file": "x.pdf"}, {}, {}, "", None, ".", "b"), {})
 ```
 
+Added by the final review (see `tests/test_keep_style.py`): `Confirm.test_malformed_fields_are_skipped_not_fatal` / `test_a_failing_reading_is_skipped`, `ApplyToProfile.test_written_out_dates_are_read`, `Onboard.test_a_malformed_reading_keeps_the_rule_based_parse` / `test_a_tex_that_wont_build_leaves_nothing_behind`, `Checks.test_characters_latex_may_not_know_keep_the_original`, `PageGuard.test_a_fallback_leaves_no_tailored_file_behind`, and the classes `LeftoverFiles` (a leftover `.tex` never beats the stored file, in `tailor` and `reparse`) and `ReparseAll` (`tb.py reparse all` goes on after a failing member).
+
 - [ ] **Step 2: Run the tests to see them fail**
 
 Run: `python -m unittest tests.test_keep_style -v`
@@ -2071,13 +2124,11 @@ HANDLERS = {".tex": style_tex}        # .docx and PDF handlers come in parts 2 a
 
 
 def source_file(slug, member):
-    """The member's own resume file a handler can edit, or None (today's RenderCV resume is used then)."""
-    folder = config.member_dir(slug) / "resume"
-    stored = Path((member or {}).get("resume_file") or "")
-    if stored.suffix.lower() in HANDLERS and (folder / stored.name).exists():    # the stored path may be another PC's
-        return folder / stored.name
-    found = sorted(f for f in folder.iterdir() if f.suffix.lower() in HANDLERS)
-    return found[0] if found else None
+    """The member's own resume file a handler can edit, or None (today's RenderCV resume is used then). Only the file
+    they uploaded last: a .tex left from an earlier upload must never beat their current resume."""
+    # the stored path may be another computer's (PC vs cloud): only its name counts, split at either slash
+    f = config.member_dir(slug) / "resume" / PureWindowsPath(str((member or {}).get("resume_file") or "")).name
+    return f if f.suffix.lower() in HANDLERS and f.is_file() else None
 
 
 def pieces_for(slug, profile, src):
@@ -2114,6 +2165,9 @@ def _build(handler, doc, plan, folder, base):
             plan["summary"] = None
         else:
             del plan["text"][worst]
+    for k in ("pdf", "source"):          # the RenderCV resume is used instead: no stale tailored file next to it
+        if files.get(k):
+            Path(files[k]).unlink(missing_ok=True)
     raise ValueError(f"the tailored file has {files['pages']} pages, the original {doc['pages']}")
 
 
@@ -2286,12 +2340,18 @@ description: TinyTeX for building members' own LaTeX resumes
 runs:
   using: composite
   steps:
+    - name: This month
+      id: month
+      shell: bash
+      run: echo "ym=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+
     - name: Restore TinyTeX
       id: cache
       uses: actions/cache@v4
       with:
         path: ~/.TinyTeX
-        key: tinytex-${{ runner.os }}-v1
+        # a fresh install at most once a month: tlmgr install fails against an old cached TeX Live after its yearly release
+        key: tinytex-${{ runner.os }}-${{ steps.month.outputs.ym }}
 
     - name: Install TinyTeX
       if: steps.cache.outputs.cache-hit != 'true'
@@ -2356,7 +2416,7 @@ Note: the spec says "on every push to main". `push:` with no branch filter also 
 ```
 
 `.github/workflows/maintain.yml`:
-- In the `env:` block of the `maintain` job, add `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}` under `TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}`.
+- Give the steps `Team changes from the results page` and `Run task` (reparse-all) a step-level `env:` with `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}` (final review: only the steps that read resumes get the key, not the whole job).
 - Insert just above the step `Team changes from the results page`:
 
 ```yaml
@@ -2366,12 +2426,13 @@ Note: the spec says "on every push to main". `push:` with no branch filter also 
 ```
 
 `.github/workflows/scan.yml`:
-- In the `env:` block of the `scan` job (the one with `timeout-minutes: 330`), add `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}` under `TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}`.
+- Give the step `Team changes from the results page` a step-level `env:` with `ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}` (only that step reads resumes).
 - Insert just above the step `Team changes from the results page`:
 
 ```yaml
       - name: Team changes waiting?
         id: adm
+        continue-on-error: true          # a Supabase hiccup must not stop the scan (no output: TeX is installed anyway)
         run: python tb.py admin check
 
       - name: Document tools (to read uploaded .tex resumes)
@@ -2380,7 +2441,7 @@ Note: the spec says "on every push to main". `push:` with no branch filter also 
         uses: ./.github/actions/doc-tools
 ```
 
-Why the key is added: `maintain.yml` and `scan.yml` run `tb.py admin apply` ("+ Add member"). Without `ANTHROPIC_API_KEY` there, Claude's reading at upload could never run online.
+Why the key is added: `maintain.yml` and `scan.yml` run `tb.py admin apply` ("+ Add member"). Without `ANTHROPIC_API_KEY` there, Claude's reading at upload could never run online. It is set on those steps only, so the scan, publish and push steps never hold it.
 
 - [ ] **Step 4: Check the YAML**
 
