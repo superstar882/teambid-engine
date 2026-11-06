@@ -200,9 +200,12 @@ may be dropped.
 - **Build:**
   - `pdflatex` (or `xelatex` when the file loads `fontspec`) runs in a temporary folder, with
     `-no-shell-escape -interaction=nonstopmode -halt-on-error`.
-  - `openin_any=p` and `openout_any=p` keep it from reading or writing files outside that folder.
+  - `openout_any=p` keeps it from writing outside that folder. `openin_any=p` is set too, but it doesn't stop
+    `\input` of an absolute path (the online test showed it), so in the cloud LaTeX runs in a throwaway Docker
+    container that sees only TeX (read-only) and the build folder, with no network (`TEAMBID_LATEX_SANDBOX=docker`,
+    set by the shared tool setup). Without Docker there, the build fails and the resume falls back to RenderCV.
   - The time limit is 60 s. It runs a second time if the log asks for it.
-  - TinyTeX installs a missing package and retries once (`tlmgr install`).
+  - TinyTeX installs a missing package and retries once (`tlmgr install`, run outside the container).
 
 ### .docx (`style_docx.py`)
 
