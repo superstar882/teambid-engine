@@ -403,7 +403,7 @@ def _latex_cmd(exe, engine, name, out_dir):
     bindir = Path(os.path.realpath(exe)).parent       # TinyTeX's own bin dir, past the ~/bin links its installer makes
     return ["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{bindir.parents[1]}:/opt/tex:ro", "-v", f"{out_dir.absolute()}:/work", "-w", "/work",
-            "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var",
+            "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var", "-e", f"PATH=/opt/tex/bin/{bindir.name}:/usr/bin:/bin",
             "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
             os.environ.get("TEAMBID_LATEX_IMAGE", "ubuntu:24.04"), "timeout", "-s", "KILL", str(TIMEOUT),
             # by name: pdflatex is a link to pdftex, and pdftex under its own name starts plain TeX, not LaTeX

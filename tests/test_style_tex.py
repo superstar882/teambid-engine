@@ -291,7 +291,7 @@ class BuildErrors(unittest.TestCase):
                 self.assertEqual(style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")[1], 1)
             want = ["docker", "run", "--rm", "--network", "none", "--user", "1001:118",
                     "-v", f"{Path('/home/u/.TinyTeX')}:/opt/tex:ro", "-v", f"{Path(tmp).absolute()}:/work", "-w", "/work",
-                    "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var",
+                    "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var", "-e", "PATH=/opt/tex/bin/x86_64-linux:/usr/bin:/bin",
                     "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
                     "ubuntu:24.04", "timeout", "-s", "KILL", "60",
                     "/opt/tex/bin/x86_64-linux/pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error",
