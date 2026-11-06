@@ -1,5 +1,6 @@
 """Keep-original-style, PDF handler (stdlib unittest). The fixture PDFs come from tests/pdf_samples.py and use
 PyMuPDF's built-in fonts, so these run anywhere; tests that need fontconfig or the online fonts skip elsewhere."""
+import contextlib
 import os
 import re
 import sys
@@ -371,6 +372,38 @@ class Build(unittest.TestCase):
         self.assertEqual(third(f["pdf"]), third(src))
         self.assertIn("Helvetica-Oblique", {s[1] for s in third(src)})
 
+    def probe(self, **patch):
+        """A job that opens with a paragraph without a sign at x=50 (so it's pinned), then bullets whose signs are at
+        52 and text at 62; the second bullet reworded in place."""
+        tmp = Path(tempfile.mkdtemp())
+        doc = style_pdf.find(PS.make(str(tmp / "in.pdf"), intro=True), PS.PIECES)
+        new = "Cut p95 latency 40% by moving hot reads to **Redis** and adding a write-through ledger cache."
+        with contextlib.ExitStack() as stack:
+            for name, value in patch.items():
+                stack.enter_context(mock.patch.object(style_pdf, name, value))
+            return style_pdf.build(doc, {"order": {}, "text": {"r0b1": new}}, tmp, "out")
+
+    def test_a_rewording_in_a_pinned_job_starts_where_its_own_text_does(self):
+        f = self.probe()
+        self.assertEqual(f["kept"], [])
+        with fitz.open(f["pdf"]) as d:
+            ws = d[0].get_text("words")
+        cut = [w for w in ws if w[4].endswith("Cut")]
+        self.assertEqual([w[4] for w in cut], ["Cut"])                   # not "·Cut": the sign isn't glued on
+        self.assertAlmostEqual(cut[0][0], PS.X_TEXT, delta=0.6)
+        sign = [w for w in ws if w[4] == "·" and abs(w[3] - cut[0][3]) < 1]
+        self.assertEqual(len(sign), 1)
+        self.assertLess(sign[0][2], cut[0][0])
+        self.assertEqual(f["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
+
+    def test_text_drawn_over_a_sign_fails_the_build(self):
+        real = style_pdf._new_lines
+        # the old layout: the rewording set from the job's first text x (the paragraph's 50), over its own sign
+        old = lambda text, st, fonts, bullet=None: real(text, dict(st, x_first=50.0), fonts)
+        with self.assertRaises(ValueError) as ctx:
+            self.probe(_new_lines=old)
+        self.assertIn("text over the sign of r0b1", str(ctx.exception))
+
     # --- signs
     def test_typed_signs_move_with_their_bullets(self):
         new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
@@ -439,6 +472,25 @@ class Parts(unittest.TestCase):
         self.assertIn(b"<0010> <0012> <00AD>", got)                  # a run's start stays where it is
         self.assertIn(b"<0013> <002D>", got)
         self.assertIn(b"<0014> <0020>", got)
+
+    def test_a_line_drawn_over_a_sign_counts(self):
+        with fitz.open() as d:
+            d.new_page()
+            sign = style_pdf._glyph_box(52, 56.6, 100, 10)
+            signs = lambda: {"r0": (["r0b0", "r0b1"], [(0, sign, "r0b1", False)])}
+            check = lambda rect: style_pdf._wrong(d, [], [], {"r0b1": [(0, rect)]}, {}, 0, {}, signs())
+            self.assertEqual(check(fitz.Rect(49.5, 92.5, 200, 102.5)), ["text over the sign of r0b1"])
+            self.assertEqual(check(fitz.Rect(61.5, 92.5, 200, 102.5)), [])           # starts after the sign
+            self.assertEqual(check(fitz.Rect(49.5, 103.4, 200, 113.4)), [])          # the next line down
+
+    def test_a_drawn_dot_left_alone_must_still_be_there(self):
+        with fitz.open() as d:
+            pg = d.new_page()
+            dot = fitz.Rect(52, 95, 55.2, 98.2)
+            signs = {"r0": (["r0b0"], [(0, dot, "r0b0", True)])}
+            self.assertEqual(style_pdf._wrong(d, [], [], {}, {}, 0, {}, signs), ["lost the sign of r0b0"])
+            pg.draw_circle((53.6, 96.6), 1.6, color=None, fill=(0, 0, 0))
+            self.assertEqual(style_pdf._wrong(d, [], [], {}, {}, 0, {}, signs), [])
 
     def test_fontconfig_is_asked_once_per_font(self):
         style_pdf.system_font.cache_clear()
