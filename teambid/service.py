@@ -5,7 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from . import analyze, config, cover, keep_style, llm, render, resume_parse, storage, tailor, vault, writing
 from .jobs import jd as JD, matcher, scanner
@@ -16,16 +16,27 @@ def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, 
     """Parse a resume, audit it, save the member with default preferences, and build their vault."""
     config.ensure_dirs()
     slug = storage.slugify(name)
+    new_member = not (config.MEMBERS / slug).exists()
     folder = config.member_dir(slug)
+    wrote = True
     if resume_b64 is not None:
         dst = folder / "resume" / Path(filename or "resume.pdf").name
         dst.write_bytes(base64.b64decode(resume_b64.split(",")[-1]))
     else:
         src = Path(resume_path)
         dst = folder / "resume" / src.name
-        if src.resolve() != dst.resolve():
+        wrote = src.resolve() != dst.resolve()
+        if wrote:
             shutil.copy(src, dst)
-    profile = resume_parse.parse_file(dst)
+    try:
+        profile = resume_parse.parse_file(dst)
+    except Exception:
+        # e.g. a .tex that doesn't build: leave nothing behind, or a later reparse or tailoring could pick that file up
+        if wrote:
+            dst.unlink(missing_ok=True)
+        if new_member:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
     note = ""
     if use_llm and llm.available():      # Claude reads jobs, bullets, summary and skills; code keeps only exact copies
         pieces, note = keep_style.read(profile["raw_text"])
@@ -305,10 +316,13 @@ def reparse(slug):
         m = storage.member(con, slug)
     if not m:
         raise KeyError(slug)
-    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder
-    files = sorted((f for f in (config.member_dir(slug) / "resume").iterdir()
-                    if f.suffix.lower() in (".tex", ".pdf", ".docx", ".txt", ".md")),
-                   key=lambda f: (f.suffix.lower() != ".tex", f.name))          # a .tex source wins over its PDF
+    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder, for the file
+    # they uploaded last (by name, split at either slash); else a .tex source wins over its PDF
+    folder, kinds = config.member_dir(slug) / "resume", (".tex", ".pdf", ".docx", ".txt", ".md")
+    stored = folder / PureWindowsPath(str(m.get("resume_file") or "")).name
+    files = [stored] if stored.suffix.lower() in kinds and stored.is_file() else \
+        sorted((f for f in folder.iterdir() if f.suffix.lower() in kinds),
+               key=lambda f: (f.suffix.lower() != ".tex", f.name))
     if not files:
         raise ValueError(f"no resume file for {slug}")
     profile = resume_parse.parse_file(files[0])
