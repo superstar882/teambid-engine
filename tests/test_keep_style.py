@@ -15,6 +15,7 @@ os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 import fitz  # noqa: E402
 
 from teambid import config, keep_style, llm, local_ai, resume_parse, service, storage, style_tex, tailor  # noqa: E402
+from teambid import style_pdf  # noqa: E402
 from teambid.style_text import key  # noqa: E402
 from tests import pdf_samples  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
@@ -467,6 +468,24 @@ class ApplyWithPdf(TempWorkspace):
             r = self._apply({"bullets": {"r0b1": long}})
         self.assertIn("1 reworded bullet(s) kept their original text to fit", r["resume_ai"])
         self.assertIn("0 of 5 bullets reworded", r["resume_ai"])
+
+    def test_nothing_tailorable_gets_the_tailored_template(self):
+        r = self._apply({"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})    # nothing changes
+        self.assertIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
+        self.assertTrue(Path(r["files"]["docx"]).exists())                                  # the RenderCV resume
+
+    def test_the_note_says_the_order_really_drawn(self):
+        real = style_pdf.build
+
+        def build(doc, plan, folder, base):              # the first job can't be redrawn in this PDF
+            return real(doc, dict(plan, order={k: v for k, v in plan["order"].items() if k != "r0"}), folder, base)
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        with mock.patch.object(style_pdf, "build", build):
+            r = self._apply({"order": {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]}, "bullets": {"r1b0": new}})
+        self.assertIn("1 of 5 bullets reworded", r["resume_ai"])
+        self.assertIn("order changed in 1 jobs", r["resume_ai"])
+        self.assertEqual(r["spec"]["style"]["plan"]["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
+        self.assertEqual(r["spec"]["roles"][0]["bullets"][0], pdf_samples.PIECES["jobs"][0]["bullets"][0])
 
 
 class ApplyWithRulePieces(TempWorkspace):
