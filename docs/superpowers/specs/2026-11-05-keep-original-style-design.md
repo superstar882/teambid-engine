@@ -118,7 +118,9 @@ resume can be returned in full. one member's is about 5,000 tokens.
   Handlers use the same rule when they match pieces to their file.
 - A string that doesn't match is dropped, and that piece stays in the file as written.
 - If more than 25% of the bullets fail to match, the whole result is rejected and today's rule-based parser
-  (`resume_parse.parse`) is used.
+  (`resume_parse.parse`) is used. Its pieces are saved to `pieces.json` too (when they match), so tailoring doesn't
+  read the file again for every application. `pieces.json` says who read the pieces (`"by": "claude"` or
+  `"rules"`), and a reading of the same file by Claude is never replaced by the rule-based one.
 - Claude's `jobs` replace the rule-based `roles` in the member's profile (as `refine_profile` does today), so the fact
   checks compare against a cleaner list. The old opt-in checkbox is no longer needed. The step runs whenever an API key
   is set.
@@ -230,21 +232,31 @@ owner chose bullets first). A PDF member's application gets the edited PDF only,
 
 - **Find:**
   - Text lines come from `get_text("rawdict")`, so every letter's position is known.
-  - Each confirmed bullet must start and end exactly on line boundaries, or it isn't found and stays as written.
-  - The bullet sign can be inside the line ("• text"), a separate one-character line on the same baseline (one member's
-    PDF), or a small drawn dot (one member's pdfmake PDF). Signs are matched to a bullet's first line by position.
-  - A job is **reordered** only when every bullet was found whole with its own sign and none holds a link. A bullet
-    with a link, italics, or mixed sizes or colors is **fixed**: its text is never reworded.
+  - Each confirmed bullet must start and end exactly on line boundaries, over lines no other bullet claimed, or it
+    isn't found and stays as written.
+  - The bullet sign can be inside the line ("• text"), typed into the line's text ("- text", as Word's typed bullets
+    and HTML-to-PDF write it), a separate one-character line on the same baseline (one member's PDF), or a small drawn dot
+    (one member's pdfmake PDF). Signs are matched to a bullet's first line by position.
+  - A bullet with a link, italics, mixed sizes or colors, or no sign of its own is **fixed**: it's never reworded,
+    erased or redrawn. A job is **reordered** only when none of its bullets is fixed.
 - **Lay out:**
+  - A job nothing changes in (its order and every bullet's text as they were) is left alone: not erased, not redrawn.
   - A bullet that only **moves** keeps its own line breaks. Each word is redrawn at its original x, and letter by
     letter where the font advances differently.
-  - A **reworded** bullet wraps anew in the job's width. Justified jobs may squeeze spaces to 70%, as LaTeX does, and
-    bold stays on tool names.
+  - A **reworded** bullet wraps anew in the job's width, in the job's most common text style (so a bold or colored
+    lead-in doesn't spread). Justified jobs may squeeze spaces to 70%, as LaTeX does, and bold stays on tool names. A
+    single word wider than the column means the rewording isn't used.
   - Each job flows through its own lines and page breaks. Line spacing and bullet gaps are measured per page, because
     LaTeX stretches them per page. A page's last line may sit up to one bullet gap lower when nothing else is printed
-    below it there. The job's last page never grows. If a rewording doesn't fit, that bullet keeps its text, and the
-    handler reports it so the note and report are right.
-  - A job with a linked bullet stays where it is. A rewording there is used only if it keeps exactly the same lines.
+    below it there. The job's last page never grows. If the rewordings don't fit, they go back to their own text one
+    at a time, the one that grew most first. If nothing fits, the job stays as it is.
+  - The handler reports the rewordings that kept their text and the order each job really got, so the note and the
+    report say only what happened. When nothing in the PDF could be tailored, the member gets the tailored RenderCV
+    resume, with a note saying why (owner, 2026-11-06).
+  - A job with a fixed bullet stays where it is. A rewording of another bullet there is used only if it keeps exactly
+    the same number of lines.
+  - Pieces that weren't read by Claude (the rule-based parse, or pieces saved before they said who read them) are only
+    reordered in a PDF: a rule-based "bullet" can be half of one.
 - **Fonts:** three are tried in order.
   1. The PDF's own embedded font, when it measures the letters as the PDF placed them (90% of letter advances within
      0.35 pt), draws and reads back each needed character, and the word holds no ligature.
@@ -253,20 +265,29 @@ owner chose bullets first). A PDF member's application gets the edited PDF only,
      DejaVu are the real fonts.
   3. DejaVu Sans, which has wide coverage, then a base-14 font of the same kind.
   - In a font other than the PDF's own, ligatures are spelled out and each moved word is fitted to its original
-    width, by a horizontal scale of 0.85–1.15.
-  - Bullet signs use the PDF's own font, or the Symbol font's bullet.
+    width: squeezed as needed, stretched by 15% at most, never wider than its own space. A word that would need less
+    than 60% means that font can't stand in, and the job isn't redrawn.
+  - Bullet signs keep their own glyph: the PDF's own font when it draws and reads back the sign (no letter-spacing
+    test for a sign; the standard Symbol font a PDF needn't embed counts as its own), else DejaVu Sans if it has the
+    glyph, else a drawn dot for a round sign (• ●), else the Symbol font's bullet. A typed sign is drawn like the
+    rest of its line.
 - **Erase and draw:**
-  - Text is erased by redaction only inside the bullet lines, plus the sign. Images and other drawings stay, except
-    drawn dots that are being moved.
+  - Text is erased by redaction in a thin band per bullet line, the x-height band (0.62 to 0.08 of the size above
+    the baseline), so a neighbor line's letters are never touched even when the leading is tight. Drawn dot signs
+    are erased first, taking only the line art they cover whole; the text pass leaves all line art, so underlines and
+    rules in bullet lines survive. Images stay.
   - Links deleted by erasing are put back.
 - **Text layer:** PyMuPDF writes a re-embedded font's glyph-to-character table from the font's cmap. There, the hyphen
   also stands for the soft hyphen and the space for the no-break space, and PyMuPDF picks those. So "end-to-end" would
   read back as "end\xadto\xadend". The handler rewrites those target characters in the fonts it inserted.
 - **Check:**
-  - Every redrawn bullet must read back as exactly its text from the lines where it was drawn, using clip rects so the
-    check is independent of reading order and works with two columns.
+  - Every redrawn bullet must read back as exactly its text's words from the lines where it was drawn (word lists,
+    so two words glued together or one split apart fail), using clip rects so the check is independent of reading
+    order and works with two columns.
   - The link count must not change.
-  - If either check fails, the handler renders again without the PDF's own fonts. If that fails too, it raises, and
+  - Every other word of the PDF must still be there, same text, its box within 1 pt, and no drawn line may lie on it
+    (0.3 pt allowed). Word boxes here are the letters' own outlines, not the font's line height.
+  - If any check fails, the handler renders again without the PDF's own fonts. If that fails too, it raises, and
     RenderCV is used.
 - **Known limits:**
   - A reworded line may break at a different word than the original tool would, and there's no hyphenation.
