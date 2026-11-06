@@ -238,8 +238,13 @@ def _marks(doc, lines, drawings):
 def _art_in(line, drawings):
     """Whether a drawing that isn't a dot sits inside this line: an underscore LaTeX draws as a rule, an underline,
     a strike-through. It would stay put while the line's words moved or changed. Drawings bigger than the line (a
-    background, a table's border) aren't the line's, and stay put rightly."""
+    background, a table's border) aren't the line's, and stay put rightly. The line's box reaches only about a
+    quarter of its size under the baseline and an underline can sit lower, so the line counts down to 0.45 of its size
+    (pinning a bullet too many is safe; one too few leaves its underline behind)."""
+    fitz = _fitz()
     lb = line["bbox"]
+    size = max(s["size"] for s in line["spans"])
+    lb = fitz.Rect(lb.x0, lb.y0, lb.x1, max(lb.y1, line["spans"][0]["origin"][1] + 0.45 * size))
     return any(not _is_dot(dr) and r.width <= lb.width + 2 and r.height <= lb.height + 2
                and r.x0 < lb.x1 - 0.5 and r.x1 > lb.x0 + 0.5 and r.y0 < lb.y1 - 0.5 and r.y1 > lb.y0 + 0.5
                for dr in drawings[line["page"]] for r in [dr["rect"]])
@@ -416,9 +421,10 @@ def _words(text):
 
 
 def _new_lines(text, st, fonts, bullet=None):
-    """A reworded bullet wrapped into the job's width: lines of (x, text, font, size, color, x-scale). It starts where
-    its own bullet's text starts (bullet given), so it stays clear of its own sign. None when one word alone is wider
-    than the column (it would run past the right edge)."""
+    """A reworded bullet wrapped into the job's width: lines of (x, text, font, size, color, x-scale, joins), joins
+    when the run goes on the word before it (no space between). It starts where its own bullet's text starts (bullet
+    given), so it stays clear of its own sign. None when one word alone is wider than the column (it would run past
+    the right edge)."""
     size, words = st["size"], _words(text)
     x_first = _text_x(bullet, 0) if bullet else st["x_first"]
     x_next = median(_text_x(bullet, n) for n in range(1, len(bullet["lines"]))) \
@@ -451,8 +457,8 @@ def _new_lines(text, st, fonts, bullet=None):
         items, x = [], x0
         for word, wwid in zip(line, ws):
             rx = x
-            for t, b in word:
-                items.append((rx, t, fp[b], size, st["color"], 1.0))
+            for k, (t, b) in enumerate(word):
+                items.append((rx, t, fp[b], size, st["color"], 1.0, k > 0))
                 rx += width((t, b))
             x += wwid + gap
         out.append(items)
@@ -466,13 +472,17 @@ def _old_lines(bullet, fonts):
     None when a word would have to be squeezed below 60%: that font can't stand in for this one."""
     out = []
     for n, l in enumerate(bullet["lines"]):
-        items = []
+        # joins: no space before this word in the PDF ("C#" then "," in two spans; a word's letters set one by one)
+        items, spaced, joins = [], False, False
         for s, cs in _body(bullet["lines"], bullet["mark"], n):
             word = []
             for c in cs + [None]:
                 if c is not None and not c["c"].isspace():
+                    if not word:
+                        joins, spaced = bool(items) and not spaced, False
                     word.append(c)
                     continue
+                spaced = spaced or c is not None
                 if word:
                     t = "".join(ch["c"] for ch in word)
                     adv = [b["origin"][0] - a["origin"][0] for a, b in zip(word, word[1:])]
@@ -484,16 +494,17 @@ def _old_lines(bullet, fonts):
                     if f[3]:
                         mine = [f[0].text_length(ch["c"], fontsize=size) for ch in word[:-1]]
                         if all(abs(a - m) <= 0.35 for a, m in zip(adv, mine)):
-                            items.append((x0, t, f, size, s["color"], 1.0))
+                            items.append((x0, t, f, size, s["color"], 1.0, joins))
                         else:
-                            items += [(ch["origin"][0], ch["c"], f, size, s["color"], 1.0) for ch in word]
+                            items += [(ch["origin"][0], ch["c"], f, size, s["color"], 1.0, joins or k > 0)
+                                      for k, ch in enumerate(word)]
                     else:
                         t = _plain(t)
                         want = word[-1]["bbox"][2] - x0
                         got = f[0].text_length(t, fontsize=size)
                         if got and want / got < 0.6:
                             return None
-                        items.append((x0, t, f, size, s["color"], min(want / got, 1.15) if got else 1.0))
+                        items.append((x0, t, f, size, s["color"], min(want / got, 1.15) if got else 1.0, joins))
                 word = []
         out.append(items)
     return out
@@ -787,14 +798,21 @@ def _draw(doc, todo, fonts, signs):
         morph = (fitz.Point(x, y), fitz.Matrix(sx, 1)) if abs(sx - 1) > 0.002 else None
         page.insert_text((x, y), t, fontname=f[2], fontsize=size, color=fitz.sRGB_to_pdf(color), morph=morph)
 
-    helv = (fitz.Font("helv"), None, "helv", False)
+    space_fonts = {}
 
     def space(page, x, y, width, size, color):
         """A real space in the gap between two words drawn apart. Readers (ATS parsers too) otherwise guess spaces
-        from the gaps, and MuPDF never guesses one after "→" or "≈". Helvetica's space: every reader has it, and
-        it's squeezed to the gap so it never reaches the next word."""
-        sx = min(width / helv[0].text_length(" ", fontsize=size), 1.0)
-        put(page, x, y, " ", helv, size, color, max(sx, 0.05))
+        from the gaps, and MuPDF never guesses one after "→" or "≈". A base-14 font's space: every reader has it,
+        and it's squeezed to the gap so it never reaches the next word. Not under a name the PDF already uses for
+        another font (insert_text would take that one)."""
+        if page.number not in space_fonts:
+            used = {f[4]: f[3] for f in page.get_fonts()}
+            name = next((n for n, base in (("helv", "Helvetica"), ("tiro", "Times-Roman"), ("cour", "Courier"))
+                         if used.get(n, base) == base), None)
+            space_fonts[page.number] = name and (fitz.Font(name), None, name, False)
+        f = space_fonts[page.number]
+        if f:
+            put(page, x, y, " ", f, size, color, max(min(width / f[0].text_length(" ", fontsize=size), 1.0), 0.05))
 
     for bullets, flow in todo:
         current = None
@@ -810,8 +828,8 @@ def _draw(doc, todo, fonts, signs):
                 box = _sign(page, b, y - b["lines"][0]["spans"][0]["origin"][1], fonts, put)
                 signs[job_of[b["id"]]][1].append((pno, box, b["id"], False))
             end = None
-            for x, t, f, size, color, sx in items:
-                if end is not None and x - end > 0.1 * size:
+            for x, t, f, size, color, sx, joins in items:
+                if end is not None and not joins and x - end > 0.02 * size:
                     space(page, end, y, x - end, size, color)
                 put(page, x, y, t, f, size, color, sx)
                 end = x + f[0].text_length(t, fontsize=size) * sx
