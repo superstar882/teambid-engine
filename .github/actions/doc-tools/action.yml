@@ -17,16 +17,20 @@ runs:
       with:
         path: ~/.TinyTeX
         # a fresh install at most once a month: tlmgr install fails against an old cached TeX Live after its yearly release
-        key: tinytex-${{ runner.os }}-${{ steps.month.outputs.ym }}
+        key: tinytex-${{ runner.os }}-${{ steps.month.outputs.ym }}-v2
 
     - name: Install TinyTeX
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      run: |
-        curl -fsSL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
-        "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" install fontawesome fontawesome5 sectsty enumitem helvetic titlesec \
-          marvosym preprint babel-english fancyhdr || echo "some packages weren't found; builds install what they need"
+      run: curl -fsSL "https://yihui.org/tinytex/install-bin-unix.sh" | sh
 
     - name: Put LaTeX on the PATH
       shell: bash
       run: echo "$HOME/.TinyTeX/bin/x86_64-linux" >> "$GITHUB_PATH"
+
+    - name: LaTeX packages for members' resumes
+      shell: bash
+      run: |
+        # the installer's tlmgr can be older than the package repository, and then it refuses to install anything
+        "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" update --self
+        "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" install fontawesome fontawesome5 sectsty enumitem helvetic titlesec marvosym preprint babel-english fancyhdr
