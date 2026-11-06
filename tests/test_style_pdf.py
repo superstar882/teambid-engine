@@ -107,8 +107,11 @@ class Read(unittest.TestCase):
         self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
 
     def test_a_page_number_or_header_doesnt_stop_a_whole_bullet_moving(self):
+        # and a bullet split by the page break is found whole past the page number between its halves
         for kw in ({"footer": True}, {"header": True}):
-            self.assertTrue(all(j["reorder"] for j in self.jobs(break_page=True, **kw)), kw)
+            jobs = self.jobs(break_page=True, **kw)
+            self.assertTrue(all(j["reorder"] for j in jobs), kw)
+        self.assertEqual([b["id"] for b in self.jobs(break_page=True, footer=True)[0]["bullets"]], ["r0b0", "r0b1", "r0b2"])
 
     def test_the_next_bullets_drawn_dot_says_it_isnt_the_rest_of_this_one(self):
         # tight lines, the second bullet not in the reading: its first line sits a pitch below the first bullet, but
@@ -307,16 +310,17 @@ class Build(unittest.TestCase):
             self.assertLess(first(ws, a), first(ws, b))
 
     def test_a_label_beside_a_bullet_keeps_its_run(self):
-        # "Ledger" beside the first bullet, "Docs" beside the third: the third stays by its label
+        # "Ledger" beside the first bullet, "Docs" beside the third: both stay by their labels (a bullet with text
+        # beside it is a run of its own), and nothing else in the job can move
         f = self.build({"order": {"r0": ["r0b2", "r0b1", "r0b0"]}, "text": {}}, labels=True)
-        self.assertEqual(f["order"]["r0"], ["r0b1", "r0b0", "r0b2"])
+        self.assertEqual(f["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
         ws = words(f["pdf"])
         self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
-        self.assertAlmostEqual(first(ws, "Ledger")[1], first(ws, "Cut")[1], delta=2.5)
+        self.assertAlmostEqual(first(ws, "Ledger")[1], first(ws, "Built")[1], delta=2.5)
 
     def test_a_label_with_its_dates_under_it_keeps_its_run(self):
         f = self.build({"order": {"r0": ["r0b2", "r0b1", "r0b0"]}, "text": {}}, labels="two")
-        self.assertEqual(f["order"]["r0"], ["r0b1", "r0b0", "r0b2"])
+        self.assertEqual(f["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
         ws = words(f["pdf"])
         self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
 
