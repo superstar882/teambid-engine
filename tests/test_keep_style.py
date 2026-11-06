@@ -15,6 +15,8 @@ os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 import fitz  # noqa: E402
 
 from teambid import config, keep_style, llm, local_ai, resume_parse, service, storage, style_tex, tailor  # noqa: E402
+from teambid.style_text import key  # noqa: E402
+from tests import pdf_samples  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
 
 local_ai.DISABLED = True
@@ -166,9 +168,9 @@ class LeftoverFiles(TempWorkspace):
     """A .tex left from an earlier upload never beats the resume the member uploaded last."""
     def test_only_the_stored_file_is_tailored(self):
         folder = config.member_dir("dana-left") / "resume"
-        (folder / "new.pdf").write_bytes(b"%PDF-1.4")
+        (folder / "new.docx").write_bytes(b"PK\x03\x04")          # .docx isn't a handled extension yet
         (folder / "old.tex").write_text(S.SAMPLE, encoding="utf-8")
-        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.pdf"}
+        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.docx"}
         with mock.patch.object(llm, "available", return_value=False), \
              mock.patch.object(llm, "read_resume", return_value=(None, "no")):
             self.assertIsNone(keep_style.source_file("dana-left", member))
@@ -410,6 +412,44 @@ class ApplyWithTex(TempWorkspace):
 
     def test_members_without_a_tex_file_are_untouched(self):
         self.assertEqual(keep_style.tailor("nobody-here", {"resume_file": "x.pdf"}, {}, {}, "", None, ".", "b"), {})
+
+
+class ApplyWithPdf(TempWorkspace):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src))
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(json.loads(json.dumps(pdf_samples.PIECES)), "read")):
+            cls.slug = service.onboard("Dana Pdf", resume_path=src)["slug"]
+
+    def _apply(self, reply):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            return service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+
+    def test_tailors_inside_the_members_own_pdf(self):
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        r = self._apply({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "bullets": {"r1b0": new}})
+        self.assertIn("Resume style: original (.pdf)", r["resume_ai"])
+        self.assertEqual(set(r["files"]) - {"letter_pdf", "letter_docx"}, {"pdf", "pages", "paper"})
+        import fitz
+        with fitz.open(r["files"]["pdf"]) as d:
+            text = key("".join(p.get_text() for p in d))
+            self.assertEqual(sum(len(p.get_links()) for p in d), 1)
+        self.assertIn(key(new), text)
+        self.assertEqual(r["problems"], [])
+
+    def test_a_rewording_that_doesnt_fit_is_reported_and_left_out(self):
+        long = " ".join([pdf_samples.PIECES["jobs"][0]["bullets"][1]] * 3)
+        with mock.patch.object(keep_style, "check", side_effect=lambda doc, reply, profile, jd: dict(
+                keep_style.default_plan(doc, jd), text={"r0b1": long})):
+            r = self._apply({"bullets": {"r0b1": long}})
+        self.assertIn("1 reworded bullet(s) kept their original text to fit", r["resume_ai"])
+        self.assertIn("0 of 5 bullets reworded", r["resume_ai"])
 
 
 if __name__ == "__main__":
