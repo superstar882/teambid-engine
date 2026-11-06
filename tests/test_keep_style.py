@@ -490,6 +490,11 @@ class ApplyWithPdf(TempWorkspace):
              mock.patch.object(service.JD, "fetch", side_effect=RuntimeError("403 Forbidden")):
             r = service.apply(self.slug, url=job["url"], ai="haiku")
         self.assertEqual((r["jd"]["company"], r["jd"]["title"]), ("Acme Freight", "Senior Python Engineer"))
+        # a page that only says it needs JavaScript is no post either
+        stub = {"text": "You need to enable JavaScript to run this app.", "company": "", "title": ""}
+        with mock.patch.object(llm, "available", return_value=False), mock.patch.object(service.JD, "fetch", return_value=stub):
+            r = service.apply(self.slug, url=job["url"], ai="free")
+        self.assertIn("Airflow", " ".join(r["jd"].get("required", []) + r["jd"].get("preferred", [])) + str(r["keywords"]))
         with storage.connect() as con:                   # the scanned job is used, not added again by hand
             self.assertEqual(con.execute("SELECT count(*) n FROM jobs WHERE url LIKE '%acme/jobs%'").fetchone()["n"], 1)
             self.assertEqual(storage.job_for_url(con, job["url"])["location"], "Remote US")

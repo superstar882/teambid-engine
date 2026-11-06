@@ -96,6 +96,20 @@ class Read(unittest.TestCase):
         jobs = self.jobs(pieces=self.cut_short(0, 0), bold_start=True)
         self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
 
+    def test_a_piece_cut_short_past_a_page_number_or_a_header_pins_its_job(self):
+        # the rest of the sentence is on page 2, past "Page 1 of 2" at page 1's foot, or under page 2's header
+        for kw in ({"footer": True}, {"header": True}):
+            b = self.jobs(pieces=self.cut_short(0, 2), break_page=True, **kw)[0]["bullets"][2]
+            self.assertTrue(b["fixed"], kw)
+
+    def test_a_piece_cut_short_before_a_mostly_bold_line_pins_its_job(self):
+        jobs = self.jobs(pieces=self.cut_short(0, 0), bold_start="most")
+        self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
+
+    def test_a_page_number_or_header_doesnt_stop_a_whole_bullet_moving(self):
+        for kw in ({"footer": True}, {"header": True}):
+            self.assertTrue(all(j["reorder"] for j in self.jobs(break_page=True, **kw)), kw)
+
     def test_the_next_bullets_drawn_dot_says_it_isnt_the_rest_of_this_one(self):
         # tight lines, the second bullet not in the reading: its first line sits a pitch below the first bullet, but
         # its dot says it starts a bullet of its own
@@ -300,7 +314,13 @@ class Build(unittest.TestCase):
         self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
         self.assertAlmostEqual(first(ws, "Ledger")[1], first(ws, "Cut")[1], delta=2.5)
 
-    def test_a_sidebar_beside_every_line_isnt_a_label(self):
+    def test_a_label_with_its_dates_under_it_keeps_its_run(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b1", "r0b0"]}, "text": {}}, labels="two")
+        self.assertEqual(f["order"]["r0"], ["r0b1", "r0b0", "r0b2"])
+        ws = words(f["pdf"])
+        self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
+
+    def test_a_sidebar_isnt_a_label(self):
         f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}}, sidebar=True)
         self.assertEqual(f["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
 
@@ -362,10 +382,12 @@ class Build(unittest.TestCase):
         src = Path(tempfile.mkdtemp()) / "links.pdf"
         with fitz.open() as d:
             pg = d.new_page()
-            for y, text in ((100, "Mdana@example.com"), (130, "dana@example.com"), (160, "Email me"), (171, "jo@agency.com")):
+            for y, text in ((100, "Mdana@example.com"), (130, "dana@example.com"), (160, "Email me"), (171, "jo@agency.com"),
+                            (220, "dana@example.comin"), (260, "Write to"), (272, "jo@agency.com")):
                 pg.insert_text((50, y), text, fontname="helv", fontsize=10)
             for rect, uri in (((48, 90, 160, 103), "mailto:dana@example.com"), ((48, 120, 160, 133), "mailto:dana+cv@example.com"),
-                              ((48, 150, 160, 167), "mailto:x@example.com")):
+                              ((48, 150, 160, 167), "mailto:x@example.com"), ((48, 210, 160, 223), "mailto:dana@example.com"),
+                              ((48, 250, 160, 276), "mailto:x@example.com")):         # the last box holds both lines
                 pg.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(rect), "uri": uri})
             d.save(src)
         with fitz.open(src) as d:
@@ -671,7 +693,7 @@ class Parts(unittest.TestCase):
             pg = d.new_page()
             dot = fitz.Rect(52, 95, 55.2, 98.2)
             signs = {"r0": (["r0b0"], [(0, dot, "r0b0", True)])}
-            self.assertEqual(style_pdf._wrong(d, [], [], {}, {}, 0, {}, signs), ["lost the sign of r0b0"])
+            self.assertEqual(style_pdf._wrong(d, [], [], {}, {}, 0, {}, signs), ["lost the sign of r0b0 (r0b0)"])
             pg.draw_circle((53.6, 96.6), 1.6, color=None, fill=(0, 0, 0))
             self.assertEqual(style_pdf._wrong(d, [], [], {}, {}, 0, {}, signs), [])
 
