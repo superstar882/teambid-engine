@@ -414,10 +414,19 @@ def available():
     return bool(shutil.which("pdflatex"))
 
 
-def _latex_error(log):
-    """Extract LaTeX error from log."""
+def _latex_error(log, output=""):
+    """Extract LaTeX error from log. If log has a "^! ..." line, use that.
+    Otherwise use the last 3 non-empty lines of process output."""
     err = re.search(r"^! (.+)$", log, re.M)
-    return f"LaTeX error: {err.group(1)[:160] if err else 'the build failed'}"
+    if err:
+        return f"LaTeX error: {err.group(1)[:160]}"
+    # Fallback: last 3 non-empty lines of stdout + stderr
+    if output:
+        lines = [line for line in output.split('\n') if line.strip()]
+        if lines:
+            tail = " / ".join(lines[-3:])[:300]
+            return f"LaTeX error: the build failed: {tail}"
+    return "LaTeX error: the build failed"
 
 
 def compile_tex(src, out_dir, name):
@@ -450,13 +459,13 @@ def compile_tex(src, out_dir, name):
                 pass
             continue
         if r.returncode:
-            raise ValueError(_latex_error(log))
+            raise ValueError(_latex_error(log, r.stdout + r.stderr))
         if "Rerun to get" in log and "rerun" not in tried:
             tried.add("rerun")
             continue
         break
     if r.returncode:
-        raise ValueError(_latex_error(log))
+        raise ValueError(_latex_error(log, r.stdout + r.stderr))
     pdf = out_dir / f"{name}.pdf"
     if not pdf.exists():
         raise ValueError("LaTeX made no PDF")

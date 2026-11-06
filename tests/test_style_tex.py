@@ -313,6 +313,18 @@ class BuildErrors(unittest.TestCase):
         self.assertEqual(str(ctx.exception), "Docker isn't available here for the LaTeX sandbox")
         run.assert_not_called()                  # never falls back to building the upload outside the sandbox
 
+    def test_docker_error_shows_stderr(self):
+        """When LaTeX fails before writing a log (e.g., Docker error), show the last lines of stderr."""
+        with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
+            def mock_run(cmd, **kwargs):
+                # Return failure without creating a log file
+                return subprocess.CompletedProcess(cmd, 1, "", "docker: Error response from daemon: boom\n")
+            with mock.patch("teambid.style_tex.subprocess.run", side_effect=mock_run):
+                with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                    with self.assertRaises(ValueError) as ctx:
+                        style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+                    self.assertIn("boom", str(ctx.exception))
+
     def test_relabel(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             src = Path(tmp) / "test.tex"
