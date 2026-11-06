@@ -948,6 +948,30 @@ def _wrong(doc, todo, kept, drawn, plan, links_before, before, signs):
     return bad + _disturbed(doc, before, drawn, erased) + _signs_hit(doc, drawn, signs)
 
 
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+
+
+def _fix_mailto(doc):
+    """An email link that shows one address and opens another (an old address left in a template's link) opens the one
+    it shows: readers write to what they see. -> how many links were changed. Links showing no address, or two, stay."""
+    fixed = 0
+    for page in doc:
+        words = page.get_text("words")
+        for link in page.get_links():
+            uri = link.get("uri") or ""
+            if not uri.lower().startswith("mailto:"):
+                continue
+            r = link["from"]
+            shown = {m.group(0) for w in words if r.contains(_fitz().Point((w[0] + w[2]) / 2, (w[1] + w[3]) / 2))
+                     for m in [EMAIL.search(w[4])] if m}
+            addr, _, query = uri[7:].partition("?")
+            if len(shown) == 1 and (want := shown.pop()).lower() != addr.lower():
+                link["uri"] = f"mailto:{want}" + (f"?{query}" if query else "")
+                page.update_link(link)
+                fixed += 1
+    return fixed
+
+
 def build(doc, plan, folder, base):
     """Write the tailored PDF into folder. -> {"pdf", "pages", "paper", "kept": [bullet ids whose rewording didn't
     fit and kept their text], "order": {job id: its bullet ids as drawn (the original order where it stayed)}}.
@@ -967,6 +991,7 @@ def build(doc, plan, folder, base):
             try:
                 bad = _wrong(out, todo, kept, drawn, p, links_before, before, signs)
                 if not bad:
+                    _fix_mailto(out)
                     folder = Path(folder)
                     folder.mkdir(parents=True, exist_ok=True)
                     pdf = folder / f"{base}.pdf"

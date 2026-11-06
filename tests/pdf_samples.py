@@ -57,7 +57,7 @@ def _one_name(doc):
 
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
-         blank=False, subhead=False):
+         blank=False, subhead=False, mailto="mailto:dana@example.com"):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -76,7 +76,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     underline: a line 3 pt under the baseline of the second job's first bullet's last line (below that line's box).
     tracked: "public" in the first job's third bullet is letter-spaced (each letter set on its own).
     blank: a lone space at the foot of the page, written right after the first job's last line (no letters, no place).
-    subhead: a project heading inside the first job, between its first and second bullets."""
+    subhead: a project heading inside the first job, between its first and second bullets.
+    mailto: where the header's email link goes (an old address, say: the text still shows dana@example.com)."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -95,7 +96,7 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     page = new_page()
     page.insert_text((50, 60), "DANA REYES", fontname="hebo", fontsize=18)
     page.insert_text((50, 80), "dana@example.com", fontname="helv", fontsize=10)
-    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 71, 140, 83), "uri": "mailto:dana@example.com"})
+    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 71, 140, 83), "uri": mailto})
     page.insert_text((50, 110), "Experience", fontname="hebo", fontsize=13)
     y = 708.0 if break_page else 140.0
     for ji, (title, company, bullets) in enumerate(JOBS):
