@@ -102,7 +102,9 @@ class Tailoring(unittest.TestCase):
                             ("Cloud Engineer (Hybrid Cloud)", "Cloud Engineer (Hybrid Cloud)"),
                             ("Senior Engineer - Remote", "Senior Engineer"), ("Senior Engineer | Remote", "Senior Engineer"),
                             ("Data Engineer (m/w/x)", "Data Engineer"), ("Data Engineer (gn)", "Data Engineer"),
-                            ("Engineer (Full-time, Remote)", "Engineer"), ("[Remote]", "[Remote]")):
+                            ("Engineer (Full-time, Remote)", "Engineer"), ("Data Engineer (m/f/div)", "Data Engineer"),
+                            ("Backend Engineer - US - Payments", "Backend Engineer - US - Payments"),
+                            ("Engineer (Remote Sensing)", "Engineer (Remote Sensing)"), ("[Remote]", "[Remote]")):
             self.assertEqual(tailor.headline_title(title), want)
 
     def test_a_role_without_a_company_gets_its_own_section(self):

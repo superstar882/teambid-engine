@@ -142,8 +142,10 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
             jd_text = res["text"]
             company = company or res.get("company", "").replace("-", " ").title()
             title = title or res.get("title", "")
-        if not jd_text and len(saved or "") >= storage.MIN_POST:
-            jd_text = saved              # a feed's post, kept by the scan (see storage.save_feed_posts)
+        # a feed's post, kept by the scan (see storage.save_feed_posts), when the page gave nothing or only a stub
+        # ("You need to enable JavaScript to run this app.")
+        if len(saved or "") >= storage.MIN_POST and len(jd_text or "") < storage.MIN_POST:
+            jd_text = saved
     if not jd_text:
         raise ValueError("Need a job link that can be read, or the pasted job text.")
     company, title = (company or "Company").strip(), (title or "Role").strip()

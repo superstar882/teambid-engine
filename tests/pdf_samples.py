@@ -58,7 +58,7 @@ def _one_name(doc):
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
          blank=False, subhead=False, mailto="mailto:dana@example.com", subhead_page=False, labels=False, sidebar=False,
-         bold_start=False):
+         bold_start=False, footer=False, header=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -80,9 +80,12 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     subhead: a project heading inside the first job, between its first and second bullets.
     mailto: where the header's email link goes (an old address, say: the text still shows dana@example.com).
     subhead_page: the first job's second bullet starts a new page under a project heading at the top of it.
-    labels: project labels in the left margin beside the first job's first and third bullets' first lines.
-    sidebar: text in the left margin beside every line of the first job's bullets (a sidebar, not labels).
-    bold_start: the second line of the first job's first bullet starts with a bold word."""
+    labels: project labels in the left margin beside the first job's first and third bullets' first lines; "two"
+    puts each label's dates on a line under it.
+    sidebar: a column of text in the left margin all along the first job, in its own line spacing (not labels).
+    bold_start: the second line of the first job's first bullet starts with a bold word ("most": is mostly bold).
+    footer: "Page n of N" at each page's foot, just above its bottom 5%, as Word sets it.
+    header: a gray header line on page 2 at half an inch, as Word sets it."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -93,6 +96,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
 
     def new_page():
         p = doc.new_page(width=595, height=842)
+        if header and doc.page_count == 2:
+            p.insert_text((50, 45), "Dana Reyes - Resume", fontname="helv", fontsize=8, color=GRAY)
         if font_file:
             p.insert_font(fontname="F0", fontfile=font_file[0])
             p.insert_font(fontname="F1", fontfile=font_file[1])
@@ -128,7 +133,7 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                 if tracked and (ji, bi, n) == (0, 2, 0):
                     line = line.replace("public", "%%public%%")
                 if bold_start and (ji, bi, n) == (0, 0, 1):
-                    line = line.replace("2M", "**2M**", 1)
+                    line = "**2M requests a day for card and bank** transfers." if bold_start == "most" else                         line.replace("2M", "**2M**", 1)
                 if space_in_bold:
                     line = line.replace(" **", "** ")      # "in **Python** and" -> "in", " Python", " and"
                 x = X_TEXT
@@ -157,16 +162,20 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     page.draw_line((X_TEXT, y + 3), (X_TEXT + 30, y + 3), color=(0, 0, 0), width=0.5)
                 if labels and ji == 0 and bi in (0, 2) and n == 0:
                     page.insert_text((14, y), "Ledger" if bi == 0 else "Docs", fontname="hebo", fontsize=8)
+                    if labels == "two":
+                        page.insert_text((14, y + 9), "2021-23" if bi == 0 else "2023-24", fontname="helv", fontsize=8)
                 if sidebar and ji == 0:
-                    side.append((page, y))            # drawn after the bullets, as a sidebar is: its own block
+                    side.append((page, y))
                 _runs(page, x, y, line, faces)
                 y += p
             if blank and (ji, bi) == (0, len(bullets) - 1):
                 page.insert_text((300, 830), " ", fontname="helv", fontsize=10)
             y += gap - p
         y += after
-    for pg, sy in side:
-        pg.insert_text((14, sy), "Skill", fontname="helv", fontsize=8)
+    if side:                                  # after the bullets, as a sidebar is drawn: its own lines, every 9.5 pt
+        pg, top, bottom = side[0][0], side[0][1] - 20, side[-1][1] + 10
+        for n in range(int((bottom - top) / 9.5) + 1):
+            pg.insert_text((14, top + 9.5 * n), "Skill", fontname="helv", fontsize=8)
     if y > BOTTOM - 20:
         page, y = new_page(), 60.0
     page.insert_text((50, y + 10), "Education", fontname="hebo", fontsize=13)
@@ -174,6 +183,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
         from teambid import style_pdf
         style_pdf._fix_tounicode(doc, {"F0", "F1"})        # hyphens and spaces read back as "-" and " "
         _one_name(doc)
+    if footer:
+        for n, pg in enumerate(doc):
+            pg.insert_text((270, 804), f"Page {n + 1} of {doc.page_count}", fontname="helv", fontsize=10)
     doc.save(path)
     doc.close()
     return path
