@@ -381,6 +381,14 @@ def render_source(doc, plan):
 
 TIMEOUT = 60                             # seconds per LaTeX run
 FONTSPEC = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\bfontspec\b")
+ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT")     # SYSTEMROOT: Windows needs it
+
+
+def _env():
+    """The environment LaTeX and tlmgr run with: only what they need to find themselves and their packages, never the
+    run's secrets (Claude key, GitHub token, site password), since the file being built is someone's upload."""
+    env = {k: v for k, v in os.environ.items() if k in ENV_KEEP or k.startswith("TEXMF")}
+    return dict(env, openin_any="p", openout_any="p", shell_escape="f")
 
 
 def available():
@@ -404,7 +412,7 @@ def compile_tex(src, out_dir, name):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.tex").write_text(src, encoding="utf-8")
-    env = dict(os.environ, openin_any="p", openout_any="p", shell_escape="f")
+    env = _env()
     cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
     tried, log_file = set(), out_dir / f"{name}.log"
     for _ in range(5):
@@ -417,7 +425,7 @@ def compile_tex(src, out_dir, name):
         if r.returncode and missing and missing.group(1) not in tried and shutil.which("tlmgr"):
             tried.add(missing.group(1))
             try:
-                subprocess.run(["tlmgr", "install", missing.group(1)], capture_output=True, timeout=300)
+                subprocess.run(["tlmgr", "install", missing.group(1)], env=env, capture_output=True, timeout=300)
             except subprocess.TimeoutExpired:
                 pass
             continue

@@ -1,5 +1,6 @@
 """Keep-original-style, LaTeX handler (stdlib unittest). Tests that build PDFs skip without pdflatex;
 the online "Tests" workflow installs TinyTeX so they run there."""
+import hashlib
 import os
 import subprocess
 import sys
@@ -148,6 +149,24 @@ class Build(unittest.TestCase):
         self.assertFalse((tmp / "pwned").exists())
         with self.assertRaises(ValueError):
             style_tex.compile_tex(S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\input{/etc/hostname}", 1), tmp, "read")
+        # pdfTeX's own file-reading primitives: the file's bytes (hex) or its md5 must never reach the PDF
+        host = Path("/etc/hostname")
+        data = host.read_bytes() if host.exists() else b""
+        if not data:
+            return
+        secrets = (data[:32].hex().upper(), hashlib.md5(data).hexdigest().upper())
+        for name, prim in (("dump", r"\pdffiledump length 32 {/etc/hostname}"),
+                           ("md5", r"\pdfmdfivesum file {/etc/hostname}")):
+            with self.subTest(name):
+                src = S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\edef\\x{" + prim + "}\\x", 1)
+                try:
+                    pdf, _ = style_tex.compile_tex(src, tmp, name)
+                except ValueError:
+                    continue
+                with fitz.open(pdf) as d:
+                    text = "".join("".join(p.get_text() for p in d).split())
+                for s in secrets:
+                    self.assertNotIn(s, text)
 
     def test_find_then_build(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
@@ -199,6 +218,38 @@ class BuildErrors(unittest.TestCase):
                     self.assertTrue(str(ctx.exception).startswith("LaTeX error:"))
                     self.assertIn("not found", str(ctx.exception))
                     self.assertNotIn("made no PDF", str(ctx.exception))
+
+    def test_latex_never_sees_the_runs_secrets(self):
+        envs = {}
+
+        def run(cmd, **kw):
+            envs.setdefault(Path(cmd[0]).name, kw.get("env"))
+            if cmd[0] == "pdflatex":
+                log = Path(kw["cwd"]) / "x.log"
+                if "tlmgr" not in envs:          # first run: a package is missing, so tlmgr runs too
+                    log.write_text("! LaTeX Error: File `pkg.sty' not found.", encoding="utf-8")
+                    return subprocess.CompletedProcess(cmd, 1, "", "")
+                log.write_text("ok", encoding="utf-8")
+                d = fitz.open()
+                d.new_page()
+                d.save(Path(kw["cwd"]) / "x.pdf")
+                d.close()
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        fake = {"ANTHROPIC_API_KEY": "sk-secret", "GH_TOKEN": "gh-secret", "TEAMBID_SITE_PASSWORD": "pw-secret",
+                "TEXMFHOME": "/tex/home"}
+        with mock.patch.dict(os.environ, fake), \
+             mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"), \
+             mock.patch("teambid.style_tex.subprocess.run", side_effect=run):
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                self.assertEqual(style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")[1], 1)
+        for name in ("pdflatex", "tlmgr"):        # on failure, print only the leaked names, never the whole env
+            env = envs[name]
+            self.assertIsNotNone(env, name)
+            self.assertEqual(sorted(set(env) & {"ANTHROPIC_API_KEY", "GH_TOKEN", "TEAMBID_SITE_PASSWORD"}), [], name)
+            self.assertEqual([k for k, v in env.items() if "secret" in v], [], name)
+            self.assertEqual((env["openin_any"], env["openout_any"], env["shell_escape"]), ("p", "p", "f"))
+            self.assertEqual(env["PATH"], os.environ["PATH"])
+            self.assertEqual(env["TEXMFHOME"], "/tex/home")
 
     def test_relabel(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
