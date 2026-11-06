@@ -250,11 +250,15 @@ def _main_style(spans):
     return max(w, key=w.get)
 
 
-def _starts_bullet(l, marks):
-    """Whether a line begins a bullet of its own: its sign starts it, or a sign stands just left of it."""
+def _starts_bullet(l, marks, indent=None):
+    """Whether a line begins a bullet of its own: its sign starts it, or a sign stands just left of it. A typed sign
+    ("- Built") counts only left of where the job's wrapped lines start (indent): a wrapped line can begin "- like
+    this"."""
     first = next((s for s in l["spans"] if s["text"].strip()), l["spans"][0])
-    if _is_sign(l["spans"][0]["text"]) or _is_sign(first["text"]) or _is_lead(first):
+    if _is_sign(l["spans"][0]["text"]) or _is_sign(first["text"]):
         return True
+    if _is_lead(first):
+        return indent is None or l["bbox"].x0 < indent - 2
     lb = l["bbox"]
     return any(m["page"] == l["page"] and lb.y0 - 1 <= (m["rect"].y0 + m["rect"].y1) / 2 <= lb.y1 + 1
                and m["rect"].x1 <= lb.x0 + 1 and lb.x0 - m["rect"].x1 < 25 for m in marks)
@@ -300,9 +304,11 @@ def read(doc, pieces):
     lines = _lines(doc)
     drawings = [page.get_drawings() for page in doc]
     marks = _marks(doc, lines, drawings)
-    # a typed sign ("* Built") isn't part of the bullet's words: key() drops "-" and "•" but not "*" or "►"
+    # a typed sign ("* Built") isn't part of the bullet's words: key() drops "-" and "•" but not "*" or "►"; a page
+    # number or repeated footer between a bullet's two halves at a page break isn't part of them either
+    _mark_furniture(lines)
     keyed = [(l, key(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"]))
-             for l in lines if not _is_sign(l["text"])]
+             for l in lines if not _is_sign(l["text"]) and not l["furniture"]]
     # a line with no letters (a lone space at the foot of a page) would end a bullet just as well as its own last line
     text_lines, keys = [l for l, k in keyed if k], [k for l, k in keyed if k]
     starts, pos = [], 0
@@ -373,7 +379,6 @@ def read(doc, pieces):
                           "link": link, "fixed": styled or link or art or not mark})
         if found:
             jobs.append({"id": f"r{ji}", "bullets": found, "_lines": lines})
-    _mark_furniture(lines)
     claimed = {id(l) for j in jobs for b in j["bullets"] for l in b["lines"]}
     for j in jobs:
         # where the job's wrapped lines start: a heading starts left of it, the rest of a bullet's sentence never does
@@ -390,9 +395,10 @@ def _goes_on(b, lines, claimed, marks, cont=None):
     (a line's pitch below it on its page or, when only the pages' furniture follows it there, the first line on the
     next page) belongs to another bullet, starts a bullet of its own, is set larger than the bullet's text, or (on its
     page) starts clearly left of where the job's wrapped lines start (cont: a heading does; the rest of a sentence
-    starts there). On the next page, lines left of that (a header, a heading) are passed over to the first that
-    isn't. The same size in another color or all bold is no proof by itself (a link, a bold phrase). A gap of more
-    than a line's pitch on its page ends it."""
+    starts there). On the next page, lines left of that or larger (a header, a heading) are passed over to the first
+    that is neither, which must be another bullet's or start one. The same size in another color or all bold is no
+    proof by itself (a link, a bold phrase). A gap of more than a line's pitch on its page ends it, unless what's
+    there is smaller than the text or at the page's foot (a footer of that page alone)."""
     last = b["lines"][-1]
     base = lambda l: l["spans"][0]["origin"][1]
     body = _main_style([s for l in b["lines"] for s in l["spans"] if s["text"].strip() and not _is_sign(s["text"])])
@@ -400,16 +406,23 @@ def _goes_on(b, lines, claimed, marks, cont=None):
     pitch = median([c - a for a, c in zip(ys, ys[1:]) if c > a] or [1.35 * body[1]])
     x0, x1 = min(l["bbox"].x0 for l in b["lines"]), max(l["bbox"].x1 for l in b["lines"])
     near = lambda l, pno: l["page"] == pno and key(l["text"]) and not _is_sign(l["text"]) and not l.get("furniture")         and l["bbox"].x0 < x1 and l["bbox"].x1 > x0
-    ended = lambda l: id(l) in claimed or _starts_bullet(l, marks) or (cont is not None and l["bbox"].x0 < cont - 2) or         min(s["size"] for s in l["spans"] if s["text"].strip()) > body[1] + 0.6
+    size = lambda l: min(s["size"] for s in l["spans"] if s["text"].strip())
+    starts = lambda l: id(l) in claimed or _starts_bullet(l, marks, cont)
+    ended = lambda l: starts(l) or (cont is not None and l["bbox"].x0 < cont - 2) or size(l) > body[1] + 0.6
     below = sorted((l for l in lines if near(l, last["page"]) and base(l) > base(last) + 0.5), key=base)
+    # a far line smaller than the text, or at the page's foot, may be a footer of this page only ("Continued on next
+    # page"): look past it, down to the next page
+    far = lambda l: base(l) - base(last) > 1.15 * pitch + 0.5
+    while below and far(below[0]) and not starts(below[0]) and             (size(below[0]) < body[1] - 0.6 or below[0]["bbox"].y0 > 0.85 * below[0]["height"]):
+        below.pop(0)
     if below:
-        return base(below[0]) - base(last) <= 1.15 * pitch + 0.5 and not ended(below[0])
+        return not far(below[0]) and not ended(below[0])
     for l in sorted((l for l in lines if near(l, last["page"] + 1)), key=base):
-        if id(l) in claimed or _starts_bullet(l, marks):
+        if starts(l):
             return False
-        if cont is not None and l["bbox"].x0 < cont - 2:
-            continue
-        return not ended(l)
+        if (cont is not None and l["bbox"].x0 < cont - 2) or size(l) > body[1] + 0.6:
+            continue                       # a header or heading over the page: what's under it decides
+        return True
     return False
 
 def find(path, pieces):
@@ -694,8 +707,9 @@ def _lay_out(jobs, plan, fonts):
 def _runs(job):
     """The job's bullets in runs with nothing else between them. A line between two of them that is neither (a
     project's heading and dates inside one job, on the page or across a page break; page numbers aside, and anything
-    else counts, a repeated header too: splitting is always safe) stays where it is, and so does any text left of a
-    bullet's first line (a label): bullets are reordered only within their own run, under their own heading."""
+    else counts, a repeated header too: splitting is always safe) stays where it is, and a bullet with any text left
+    of its lines (a label, a sidebar) stays where it is: bullets are reordered only within their own run, under their
+    own heading."""
     own = {id(l) for b in job["bullets"] for l in b["lines"]}
     x0 = min(l["bbox"].x0 for b in job["bullets"] for l in b["lines"])
     x1 = max(l["bbox"].x1 for b in job["bullets"] for l in b["lines"])
@@ -705,6 +719,8 @@ def _runs(job):
     column = [l for l in other if l["bbox"].x0 < x1 and l["bbox"].x1 > x0]
     side = [l for l in other if l["bbox"].x1 <= x0 + 1]
     beside = lambda l, m: m["page"] == l["page"] and l["bbox"].y0 - 1 < mid(m) < l["bbox"].y1 + 1
+    # margin text beside any line of a bullet (a label, centred on its project or not) keeps that bullet on its own
+    boxed = {b["id"] for b in job["bullets"] if any(beside(l, m) for l in b["lines"] for m in side)}
     runs = [[job["bullets"][0]]]
     for a, b in zip(job["bullets"], job["bullets"][1:]):
         la, lb = a["lines"][-1], b["lines"][0]
@@ -713,7 +729,7 @@ def _runs(job):
         else:
             apart = any((l["page"] == la["page"] and mid(l) > la["bbox"].y1 - 1) or
                         (l["page"] == lb["page"] and mid(l) < lb["bbox"].y0 + 1) for l in column)
-        if apart or any(beside(lb, m) for m in side):
+        if apart or a["id"] in boxed or b["id"] in boxed:
             runs.append([b])
         else:
             runs[-1].append(b)
