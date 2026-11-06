@@ -391,6 +391,25 @@ def _env():
     return dict(env, openin_any="p", openout_any="p", shell_escape="f")
 
 
+def _latex_cmd(exe, engine, name, out_dir):
+    """-> (command, host time limit) for one LaTeX run. In the cloud (TEAMBID_LATEX_SANDBOX=docker) it runs in a
+    throwaway container that sees only TeX (read-only) and out_dir, with no network: openin_any=p doesn't stop
+    \\input of an absolute path, so an upload could otherwise put the runner's files (members' data, ~/.ssh) in its PDF."""
+    args = ["-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
+    if os.environ.get("TEAMBID_LATEX_SANDBOX") != "docker":
+        return [exe, *args], TIMEOUT
+    if not shutil.which("docker"):
+        raise ValueError("Docker isn't available here for the LaTeX sandbox")
+    bindir = Path(os.path.realpath(exe)).parent       # TinyTeX's own bin dir, past the ~/bin links its installer makes
+    return ["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
+            "-v", f"{bindir.parents[1]}:/opt/tex:ro", "-v", f"{out_dir.absolute()}:/work", "-w", "/work",
+            "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var",
+            "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
+            os.environ.get("TEAMBID_LATEX_IMAGE", "ubuntu:24.04"), "timeout", "-s", "KILL", str(TIMEOUT),
+            # by name: pdflatex is a link to pdftex, and pdftex under its own name starts plain TeX, not LaTeX
+            f"/opt/tex/bin/{bindir.name}/{engine}", *args], TIMEOUT + 15      # + container start-up
+
+
 def available():
     return bool(shutil.which("pdflatex"))
 
@@ -403,21 +422,22 @@ def _latex_error(log):
 
 def compile_tex(src, out_dir, name):
     """Build src into out_dir/<name>.pdf. -> (pdf path, pages). Raises ValueError with LaTeX's own error line.
-    Safe for a file someone uploaded: no shell commands, no reading or writing outside out_dir (openin_any/openout_any
-    = paranoid), 60 s per run. A missing package is installed once with TinyTeX's tlmgr."""
+    Safe for a file someone uploaded: no shell commands, no writing outside out_dir (openout_any = paranoid), 60 s per
+    run, and in the cloud no reading outside it either (the Docker sandbox, _latex_cmd). A missing package is installed
+    once with TinyTeX's tlmgr, on the host: the sandbox sees TeX read-only, so the next run has the package."""
     engine = "xelatex" if FONTSPEC.search(_mask(src)) else "pdflatex"
     exe = shutil.which(engine)
     if not exe:
         raise ValueError(f"{engine} isn't installed here, so a .tex resume can't be built")
     out_dir = Path(out_dir)
+    cmd, limit = _latex_cmd(exe, engine, name, out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / f"{name}.tex").write_text(src, encoding="utf-8")
-    env = _env()
-    cmd = [exe, "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error", f"{name}.tex"]
+    env = _env()                             # docker itself gets the same short list; the container only its -e values
     tried, log_file = set(), out_dir / f"{name}.log"
     for _ in range(5):
         try:
-            r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=TIMEOUT)
+            r = subprocess.run(cmd, cwd=out_dir, env=env, capture_output=True, text=True, errors="replace", timeout=limit)
         except subprocess.TimeoutExpired:
             raise ValueError(f"LaTeX took longer than {TIMEOUT} s") from None
         log = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else r.stdout

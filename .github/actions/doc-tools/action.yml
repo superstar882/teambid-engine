@@ -1,6 +1,6 @@
 # TinyTeX (a small, real TeX Live: the same pdfLaTeX engine Overleaf uses) so members' own LaTeX resumes can be read
 # at upload and rebuilt for each job. The install is cached between runs; a package a resume needs that isn't in the
-# list below is installed by style_tex.compile_tex on first use.
+# list below is installed by style_tex.compile_tex on first use. LaTeX itself then runs inside a Docker sandbox.
 name: Document tools
 description: TinyTeX for building members' own LaTeX resumes
 runs:
@@ -34,3 +34,11 @@ runs:
         # the installer's tlmgr can be older than the package repository, and then it refuses to install anything
         "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" update --self
         "$HOME/.TinyTeX/bin/x86_64-linux/tlmgr" install fontawesome fontawesome5 sectsty enumitem helvetic titlesec marvosym preprint babel-english fancyhdr
+
+    - name: LaTeX sandbox
+      shell: bash
+      run: |
+        # every later step builds members' .tex files in a throwaway container that sees only TeX and the build folder
+        # (style_tex._latex_cmd); pulled now so the first build isn't slowed by the download
+        docker pull -q ubuntu:24.04
+        echo "TEAMBID_LATEX_SANDBOX=docker" >> "$GITHUB_ENV"

@@ -2,6 +2,7 @@
 the online "Tests" workflow installs TinyTeX so they run there."""
 import hashlib
 import os
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -139,7 +140,7 @@ class Build(unittest.TestCase):
         with self.assertRaises(ValueError):
             style_tex.compile_tex(S.SAMPLE.replace("\\end{itemize}", "", 1), Path(tempfile.mkdtemp()), "broken")
 
-    def test_no_shell_commands_and_no_reading_outside_the_folder(self):
+    def test_no_shell_commands(self):
         tmp = Path(tempfile.mkdtemp())
         evil = S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\immediate\\write18{touch pwned}", 1)
         try:
@@ -147,25 +148,27 @@ class Build(unittest.TestCase):
         except ValueError:
             pass
         self.assertFalse((tmp / "pwned").exists())
-        with self.assertRaises(ValueError):
-            style_tex.compile_tex(S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\input{/etc/hostname}", 1), tmp, "read")
-        # pdfTeX's own file-reading primitives: the file's bytes (hex) or its md5 must never reach the PDF
-        host = Path("/etc/hostname")
-        data = host.read_bytes() if host.exists() else b""
-        if not data:
-            return
-        secrets = (data[:32].hex().upper(), hashlib.md5(data).hexdigest().upper())
-        for name, prim in (("dump", r"\pdffiledump length 32 {/etc/hostname}"),
-                           ("md5", r"\pdfmdfivesum file {/etc/hostname}")):
+
+    @unittest.skipUnless(os.environ.get("TEAMBID_LATEX_SANDBOX") == "docker", "the LaTeX sandbox is on in the online Tests workflow")
+    def test_no_reading_outside_the_folder(self):
+        # a file outside the build folder, like members' data or ~/.ssh: no way of reading it may reach the PDF
+        secret = Path(tempfile.mkdtemp()) / "secret.txt"
+        secret.write_text(secrets.token_hex(16), encoding="utf-8")
+        data = secret.read_bytes()
+        hidden = (data.decode(), data[:32].hex().upper(), hashlib.md5(data).hexdigest().upper())
+        path, tmp = secret.as_posix(), Path(tempfile.mkdtemp())
+        for name, cmd in (("input", r"\input{" + path + "}"),
+                          ("dump", r"\edef\x{\pdffiledump length 32 {" + path + r"}}\x"),
+                          ("md5", r"\edef\x{\pdfmdfivesum file {" + path + r"}}\x")):
             with self.subTest(name):
-                src = S.SAMPLE.replace("\\begin{document}", "\\begin{document}\\edef\\x{" + prim + "}\\x", 1)
+                src = S.SAMPLE.replace("\\begin{document}", "\\begin{document}" + cmd, 1)
                 try:
                     pdf, _ = style_tex.compile_tex(src, tmp, name)
                 except ValueError:
                     continue
                 with fitz.open(pdf) as d:
                     text = "".join("".join(p.get_text() for p in d).split())
-                for s in secrets:
+                for s in hidden:
                     self.assertNotIn(s, text)
 
     def test_find_then_build(self):
@@ -192,6 +195,12 @@ class Build(unittest.TestCase):
 
 
 class BuildErrors(unittest.TestCase):
+    def setUp(self):
+        # these fake today's direct run unless they say otherwise: the online Tests job turns the sandbox on for all steps
+        direct = mock.patch.dict(os.environ, {"TEAMBID_LATEX_SANDBOX": ""})
+        direct.start()
+        self.addCleanup(direct.stop)
+
     def test_timeout(self):
         with mock.patch("teambid.style_tex.shutil.which", return_value="pdflatex"):
             with mock.patch("teambid.style_tex.subprocess.run", side_effect=subprocess.TimeoutExpired("pdflatex", 60)):
@@ -250,6 +259,59 @@ class BuildErrors(unittest.TestCase):
             self.assertEqual((env["openin_any"], env["openout_any"], env["shell_escape"]), ("p", "p", "f"))
             self.assertEqual(env["PATH"], os.environ["PATH"])
             self.assertEqual(env["TEXMFHOME"], "/tex/home")
+
+    def test_the_sandbox_sees_only_tex_and_the_build_folder(self):
+        tools = {"pdflatex": "/home/u/bin/pdflatex", "docker": "/usr/bin/docker", "tlmgr": "/home/u/bin/tlmgr"}
+        links = {"/home/u/bin/pdflatex": "/home/u/.TinyTeX/bin/x86_64-linux/pdftex"}     # TinyTeX's installer links ~/bin
+        real = os.path.realpath
+        fake = {"TEAMBID_LATEX_SANDBOX": "docker", "ANTHROPIC_API_KEY": "sk-secret", "GH_TOKEN": "gh-secret",
+                "TEAMBID_SITE_PASSWORD": "pw-secret", "TEXMFHOME": "/tex/home"}
+        calls = []
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            def run(cmd, **kw):
+                calls.append((cmd, kw))
+                if cmd[0] == "docker":
+                    log = Path(tmp) / "x.log"
+                    if len(calls) == 1:          # first run: a package is missing, so tlmgr installs it on the host
+                        log.write_text("! LaTeX Error: File `pkg.sty' not found.", encoding="utf-8")
+                        return subprocess.CompletedProcess(cmd, 1, "", "")
+                    log.write_text("ok", encoding="utf-8")
+                    d = fitz.open()
+                    d.new_page()
+                    d.save(Path(tmp) / "x.pdf")
+                    d.close()
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            with mock.patch.dict(os.environ, fake), \
+                 mock.patch("teambid.style_tex.shutil.which", side_effect=tools.get), \
+                 mock.patch("teambid.style_tex.os.path.realpath", side_effect=lambda p, **kw: links.get(p) or real(p, **kw)), \
+                 mock.patch("teambid.style_tex.os.getuid", create=True, return_value=1001), \
+                 mock.patch("teambid.style_tex.os.getgid", create=True, return_value=118), \
+                 mock.patch("teambid.style_tex.subprocess.run", side_effect=run):
+                os.environ.pop("TEAMBID_LATEX_IMAGE", None)
+                self.assertEqual(style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")[1], 1)
+            want = ["docker", "run", "--rm", "--network", "none", "--user", "1001:118",
+                    "-v", f"{Path('/home/u/.TinyTeX')}:/opt/tex:ro", "-v", f"{Path(tmp).absolute()}:/work", "-w", "/work",
+                    "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var",
+                    "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
+                    "ubuntu:24.04", "timeout", "-s", "KILL", "60",
+                    "/opt/tex/bin/x86_64-linux/pdflatex", "-no-shell-escape", "-interaction=nonstopmode", "-halt-on-error",
+                    "x.tex"]
+        self.assertEqual([c for c, _ in calls], [want, ["tlmgr", "install", "pkg"], want])   # tlmgr: on the host
+        self.assertEqual([kw["timeout"] for c, kw in calls if c[0] == "docker"], [75, 75])      # + container start-up
+        for cmd, kw in calls:                    # on failure, print only what leaked, never the whole env
+            self.assertEqual([a for a in cmd if "secret" in a], [])
+            self.assertEqual([k for k, v in kw["env"].items() if "secret" in v], [])
+
+    def test_no_docker_no_build(self):
+        tools = {"pdflatex": "/home/u/bin/pdflatex"}
+        with mock.patch.dict(os.environ, {"TEAMBID_LATEX_SANDBOX": "docker"}), \
+             mock.patch("teambid.style_tex.shutil.which", side_effect=tools.get), \
+             mock.patch("teambid.style_tex.subprocess.run") as run:
+            with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+                with self.assertRaises(ValueError) as ctx:
+                    style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")
+        self.assertEqual(str(ctx.exception), "Docker isn't available here for the LaTeX sandbox")
+        run.assert_not_called()                  # never falls back to building the upload outside the sandbox
 
     def test_relabel(self):
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
