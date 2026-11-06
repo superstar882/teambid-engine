@@ -27,7 +27,6 @@ jobs:
       TEAMBID_CLOUD: "1"
       GH_TOKEN: ${{ github.token }}
       TEAMBID_SITE_PASSWORD: ${{ secrets.TEAMBID_SITE_PASSWORD }}
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       PYTHONUNBUFFERED: "1"
     steps:
       - uses: actions/checkout@v7
@@ -67,9 +66,13 @@ jobs:
 
       - name: Team changes from the results page
         continue-on-error: true          # never let a bad request block the scan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes; only this step
         run: python tb.py admin apply
 
       - name: Run task
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # reparse-all: Claude reads each resume again
         run: |
           case "${{ inputs.task }}" in
             reparse-all) python tb.py reparse all ;;

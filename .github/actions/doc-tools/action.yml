@@ -6,12 +6,18 @@ description: TinyTeX for building members' own LaTeX resumes
 runs:
   using: composite
   steps:
+    - name: This month
+      id: month
+      shell: bash
+      run: echo "ym=$(date +%Y-%m)" >> "$GITHUB_OUTPUT"
+
     - name: Restore TinyTeX
       id: cache
       uses: actions/cache@v4
       with:
         path: ~/.TinyTeX
-        key: tinytex-${{ runner.os }}-v1
+        # a fresh install at most once a month: tlmgr install fails against an old cached TeX Live after its yearly release
+        key: tinytex-${{ runner.os }}-${{ steps.month.outputs.ym }}
 
     - name: Install TinyTeX
       if: steps.cache.outputs.cache-hit != 'true'
