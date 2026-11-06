@@ -26,13 +26,14 @@ Claude's reading, the rewrite and the fact checks are unchanged from Part 1.
 - **Privacy:** never put a real member's resume in the repo. All fixtures are fictional ("Dana Reyes"), drawn by `tests/pdf_samples.py`.
 - **Scope:** bullets only. A PDF's headline, summary and skills are never changed in Part 3 (`find` returns `headline=None`, `summary=None`, `skills=[]`).
 - **Outputs:** a PDF member's application gets the edited PDF only. There's no DOCX, and `docs.py` already skips missing files.
-- **Every bullet stays exactly once.** A job is reordered only when every bullet was found whole with its own sign and none holds a link.
-- **Fixed bullets:** a bullet with a link, italics, or mixed sizes or colors is never reworded.
-- **Fitting:** reworded text may squeeze spaces to 70% (`MIN_SPACE = 0.7`), and only in justified jobs. A moved word in a font other than the PDF's own is fitted to its original width by a horizontal scale of 0.85–1.15.
+- **Every bullet stays exactly once.** A job is reordered only when none of its bullets is fixed.
+- **Fixed bullets:** a bullet with a link, italics, mixed sizes or colors, or no sign of its own is never reworded, erased or redrawn.
+- **Fitting:** reworded text may squeeze spaces to 70% (`MIN_SPACE = 0.7`), and only in justified jobs. A moved word in a font other than the PDF's own is fitted to its original width (scale at most 1.15, never wider than its space; below 0.6 the job isn't redrawn).
 - **Trusting the PDF's own font:** 90% of its letter advances within 0.35 pt of the original, every needed character drawn and read back, and no ligature in the word.
 - **Read-back check:**
-  - Every redrawn bullet must read back as exactly its text from where it was drawn.
+  - Every redrawn bullet must read back as exactly its text's words from where it was drawn.
   - The link count must be unchanged.
+  - Every other word of the PDF must be unchanged (box within 1 pt) and not drawn over.
   - Otherwise render again without the PDF's own fonts.
   - Otherwise raise `ValueError`, so the RenderCV resume is used.
 - **Tests:** must never reach the real Claude API. A real key file exists on this PC, and `python tb.py test` loads it.
@@ -541,6 +542,8 @@ git commit -m "Keep style: find each confirmed bullet and its bullet sign inside
 - Consumes: `read`, `find`, `Fonts`, `_plain`, `_is_bold`, `_is_sign`, `MIN_SPACE` from Task 1.
 - Produces: `style_pdf.build(doc, plan, folder: Path, base: str) -> {"pdf": str, "pages": int, "paper": "A4"|"Letter", "kept": [bullet ids]}`. It raises `ValueError` when the result doesn't read back. `plan` has the shape `{"order": {job_id: [ids]}, "text": {bullet_id: "new text with **bold**"}}`.
 
+> **Final review fixes (2026-11-06), which supersede the code below where they differ.** `build` also returns `"order": {job_id: [ids as drawn]}`. A bullet with no sign of its own is fixed too, and any fixed bullet pins its job. Fixed bullets and unchanged jobs are never erased or redrawn. Erasing uses the x-height band of each line, in two passes (dots, then text with no line art). Moved words are fitted at 0.6–1.15 and never wider than their space. Rewordings that don't fit go back one at a time. The check compares word lists and checks that every other word of the PDF is unchanged and not drawn over. Typed signs ("- text") are signs. Reworded text takes the job's most common style. Signs keep their glyph (own font → DejaVu → dot → Symbol). The code is in `teambid/style_pdf.py`, the spec in "PDF in place".
+
 - [ ] **Step 1: Write the failing tests**
 
 Append to `tests/test_style_pdf.py`:
@@ -999,6 +1002,8 @@ git commit -m "Keep style: redraw a PDF's bullets in place (moved exactly, rewor
   - Part 1's `keep_style.tailor(slug, member, profile, jd, jd_text, model, folder, base)`
   - in `tests/test_keep_style.py`: `TempWorkspace`, `JD_TEXT`, and the module imports `service`, `llm`, `config`, `json`, `tempfile`, `mock`, `Path`
 - Produces: PDF members get `{"files": {"pdf", "pages", "paper"}, "spec", "note"}` from `keep_style.tailor`. The note says how many rewordings were kept because they didn't fit, and `files` no longer carries `"kept"`.
+
+> **Final review fixes (2026-11-06).** `tailor` also pops `"order"` from a PDF build into the plan, so the note and report give the order really drawn. When nothing in the PDF changed, it deletes the PDF and returns `{"note": "original style skipped: nothing in the file could be tailored safely"}`, and the tailored RenderCV resume is used (owner's decision). Pieces carry `"by"` (`"claude"` from `read`, `"rules"` from `rule_pieces`). For a PDF, pieces not read by Claude (older saved ones without `"by"` too) are only reordered, so Claude isn't called. `service.onboard` and `reparse` save rule-based pieces when Claude's reading is rejected or unavailable, and never over a Claude reading of the same file.
 
 - [ ] **Step 1: Write the failing test**
 
