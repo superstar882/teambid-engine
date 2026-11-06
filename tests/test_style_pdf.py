@@ -53,6 +53,10 @@ class Read(unittest.TestCase):
         self.assertEqual(jobs[0]["bullets"][0]["text"],
                          "Built a payments API in **Python** and FastAPI that handles 2M requests a day for card and bank transfers.")
 
+    def test_a_space_drawn_in_a_bold_run_stays_a_space(self):
+        self.assertEqual(self.jobs(space_in_bold=True)[0]["bullets"][0]["text"],
+                         "Built a payments API in **Python** and FastAPI that handles 2M requests a day for card and bank transfers.")
+
     def test_drawn_dots_are_bullet_signs_too(self):
         self.assertEqual({b["mark"]["kind"] for j in self.jobs(sign="circle") for b in j["bullets"]}, {"circle"})
 
@@ -172,6 +176,13 @@ class Build(unittest.TestCase):
         self.assertNotIn(key(PS.PIECES["jobs"][1]["bullets"][0]), text)
         self.assertEqual(f["kept"], [])
         self.assertEqual(f["order"], {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]})
+
+    def test_a_bold_run_with_its_own_space_moves_and_reads_back(self):
+        # the word check once failed every such bullet: its text read "inPython" while the page read "in Python"
+        f = self.build({"order": {"r0": ["r0b1", "r0b2", "r0b0"]}, "text": {}}, space_in_bold=True)
+        self.assertEqual(f["order"]["r0"], ["r0b1", "r0b2", "r0b0"])
+        ws = words(f["pdf"])
+        self.assertLess(first(ws, "Wrote"), first(ws, "Built"))
 
     def test_bold_words_stay_bold(self):
         f = self.build({"order": {}, "text": {
@@ -427,13 +438,17 @@ class Build(unittest.TestCase):
         self.assertEqual(f["kept"], ["r0b0"])
         self.assertIn(key(part), all_text(f["pdf"]))
 
-    def test_rules_in_bullet_lines_survive(self):
-        f = self.build({"order": {"r1": ["r1b1", "r1b0"]}, "text": {}}, sign="circle", rule=True)
+    def test_a_drawing_in_a_bullet_line_pins_its_job(self):
+        # a rule, an underline or LaTeX's drawn underscore would stay put while the words moved away from it
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]}, "text": {}},
+                       sign="circle", rule=True)
+        self.assertEqual(f["order"], {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b0", "r1b1"]})
         with fitz.open(f["pdf"]) as d:
-            rules = [dr for pg in d for dr in pg.get_drawings() if dr["rect"].width > 50 and dr["rect"].height < 2]
-        self.assertEqual(len(rules), 1)
+            rules = [dr["rect"] for pg in d for dr in pg.get_drawings() if dr["rect"].width > 50 and dr["rect"].height < 2]
         ws = words(f["pdf"])
-        self.assertLess(first(ws, "Added"), first(ws, "Moved"))
+        self.assertEqual(len(rules), 1)
+        self.assertLess(first(ws, "Moved"), first(ws, "Added"))
+        self.assertAlmostEqual(rules[0].y0, first(ws, "Moved")[1] + 7, delta=3)      # still through its own line
 
     def test_a_failing_render_closes_the_file(self):
         opened, real = [], fitz.open
@@ -586,6 +601,21 @@ class OwnFont(unittest.TestCase):
         self.assertIn(key(new), all_text(f["pdf"]))
         ws = words(f["pdf"])
         self.assertLess(first(ws, "Wrote"), first(ws, "Built"))
+
+
+    @unittest.skipUnless(FONT_FILES, "no TrueType font to embed here")
+    def test_words_drawn_apart_read_back_apart_even_after_an_arrow(self):
+        # each word is drawn on its own; MuPDF never guesses a space after "→" or "≈", so a real one goes between
+        tmp = Path(tempfile.mkdtemp())
+        src = PS.make(str(tmp / "in.pdf"), font_file=FONT_FILES)
+        new = "Moved 30 cron jobs to Airflow → zero missed nightly runs and ≈ no manual reruns at all."
+        f = style_pdf.build(style_pdf.find(src, PS.PIECES), {"order": {"r0": ["r0b2", "r0b0", "r0b1"]},
+                                                              "text": {"r1b0": new}}, tmp, "out")
+        self.assertEqual(f["kept"], [])
+        ws = [w for _, _, w in words(f["pdf"])]
+        self.assertIn("→", ws)
+        self.assertIn("≈", ws)
+        self.assertIn("zero", ws)
 
 
 class OnlineFonts(unittest.TestCase):

@@ -219,16 +219,30 @@ def _lines(doc):
     return out
 
 
-def _marks(doc, lines):
+def _is_dot(dr):
+    r = dr["rect"]
+    return bool(dr.get("fill")) and 0.8 < r.width < 8 and 0.8 < r.height < 8 and abs(r.width - r.height) < 1.5
+
+
+def _marks(doc, lines, drawings):
     """Bullet signs that aren't part of their text line: separate one-character lines, and small drawn dots."""
     marks = [{"page": l["page"], "rect": l["bbox"], "kind": "text", "span": l["spans"][0]} for l in lines if _is_sign(l["text"])]
-    for pno, page in enumerate(doc):
-        for dr in page.get_drawings():
-            r = dr["rect"]
-            if dr.get("fill") and 0.8 < r.width < 8 and 0.8 < r.height < 8 and abs(r.width - r.height) < 1.5:
-                marks.append({"page": pno, "rect": r, "fill": dr["fill"],
+    for pno, drs in enumerate(drawings):
+        for dr in drs:
+            if _is_dot(dr):
+                marks.append({"page": pno, "rect": dr["rect"], "fill": dr["fill"],
                               "kind": "circle" if all(i[0] == "c" for i in dr["items"]) else "rect"})
     return marks
+
+
+def _art_in(line, drawings):
+    """Whether a drawing that isn't a dot sits inside this line: an underscore LaTeX draws as a rule, an underline,
+    a strike-through. It would stay put while the line's words moved or changed. Drawings bigger than the line (a
+    background, a table's border) aren't the line's, and stay put rightly."""
+    lb = line["bbox"]
+    return any(not _is_dot(dr) and r.width <= lb.width + 2 and r.height <= lb.height + 2
+               and r.x0 < lb.x1 - 0.5 and r.x1 > lb.x0 + 0.5 and r.y0 < lb.y1 - 0.5 and r.y1 > lb.y0 + 0.5
+               for dr in drawings[line["page"]] for r in [dr["rect"]])
 
 
 def read(doc, pieces):
@@ -236,9 +250,10 @@ def read(doc, pieces):
     -> [{"id", "reorder", "bullets": [{"id", "text" (with **bold**), "piece", "lines", "mark", "link", "fixed"}], "_lines"}]
     A bullet is found only when it starts and ends exactly on line boundaries, over lines no other bullet claimed;
     anything else stays as it is. A bullet is fixed (never reworded, its job never reordered) when it holds a link,
-    italics or mixed sizes or colors, or has no sign of its own."""
+    italics or mixed sizes or colors, a drawing (_art_in), or has no sign of its own."""
     lines = _lines(doc)
-    marks = _marks(doc, lines)
+    drawings = [page.get_drawings() for page in doc]
+    marks = _marks(doc, lines, drawings)
     text_lines = [l for l in lines if not _is_sign(l["text"])]
     # a typed sign ("* Built") isn't part of the bullet's words: key() drops "-" and "•" but not "*" or "►"
     keys = [key(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"])
@@ -296,14 +311,17 @@ def read(doc, pieces):
                     first = first or s
                     runs.append(("".join(c["c"] for c in cs), _is_bold(s)))
                 runs.append((" ", False))
-            shown = "".join(f"**{t.strip()}**{' ' if t.endswith(' ') else ''}" if b and t.strip() else t for t, b in runs)
+            # a bold run's own spaces stay outside its marks: some exporters draw "using" then " C#" (space in bold)
+            shown = "".join(f"{' ' if t[:1].isspace() else ''}**{t.strip()}**{' ' if t[-1:].isspace() else ''}"
+                            if b and t.strip() else t for t, b in runs)
             shown = re.sub(r"\*\*(\s*)\*\*", r"\1", re.sub(r"\s+", " ", shown)).strip()
             spans = [s for l in ls for s in l["spans"] if s["text"].strip() and not _is_sign(s["text"])]
             styled = any(s["flags"] & 2 or abs(s["size"] - first["size"]) > 0.6 or s["color"] != first["color"] for s in spans)
             link = any(l["link"] for l in ls)
+            art = any(_art_in(l, drawings) for l in ls)
             # no sign of its own: the piece may be only part of a bullet, and rewording it would garble the rest
             found.append({"id": f"r{ji}b{bi}", "text": shown, "piece": text, "lines": ls, "mark": mark,
-                          "link": link, "fixed": styled or link or not mark})
+                          "link": link, "fixed": styled or link or art or not mark})
         if found:
             reorder = not any(b["fixed"] for b in found)
             jobs.append({"id": f"r{ji}", "bullets": found, "reorder": reorder, "_lines": lines})
@@ -769,6 +787,15 @@ def _draw(doc, todo, fonts, signs):
         morph = (fitz.Point(x, y), fitz.Matrix(sx, 1)) if abs(sx - 1) > 0.002 else None
         page.insert_text((x, y), t, fontname=f[2], fontsize=size, color=fitz.sRGB_to_pdf(color), morph=morph)
 
+    helv = (fitz.Font("helv"), None, "helv", False)
+
+    def space(page, x, y, width, size, color):
+        """A real space in the gap between two words drawn apart. Readers (ATS parsers too) otherwise guess spaces
+        from the gaps, and MuPDF never guesses one after "→" or "≈". Helvetica's space: every reader has it, and
+        it's squeezed to the gap so it never reaches the next word."""
+        sx = min(width / helv[0].text_length(" ", fontsize=size), 1.0)
+        put(page, x, y, " ", helv, size, color, max(sx, 0.05))
+
     for bullets, flow in todo:
         current = None
         for pno, y, items, b in flow:
@@ -782,8 +809,12 @@ def _draw(doc, todo, fonts, signs):
             if b and b["mark"]:
                 box = _sign(page, b, y - b["lines"][0]["spans"][0]["origin"][1], fonts, put)
                 signs[job_of[b["id"]]][1].append((pno, box, b["id"], False))
+            end = None
             for x, t, f, size, color, sx in items:
+                if end is not None and x - end > 0.1 * size:
+                    space(page, end, y, x - end, size, color)
                 put(page, x, y, t, f, size, color, sx)
+                end = x + f[0].text_length(t, fontsize=size) * sx
     return drawn, {name for _, name in inserted}
 
 
