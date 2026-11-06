@@ -99,7 +99,10 @@ class Tailoring(unittest.TestCase):
         for title, want in (("[WBG] Senior DevOps Engineer", "Senior DevOps Engineer"),
                             ("Backend Engineer (Remote)", "Backend Engineer"), ("Data Engineer (m/f/d)", "Data Engineer"),
                             ("Forward Deployed Engineer (Client Facing)", "Forward Deployed Engineer (Client Facing)"),
-                            ("[Remote]", "[Remote]")):
+                            ("Cloud Engineer (Hybrid Cloud)", "Cloud Engineer (Hybrid Cloud)"),
+                            ("Senior Engineer - Remote", "Senior Engineer"), ("Senior Engineer | Remote", "Senior Engineer"),
+                            ("Data Engineer (m/w/x)", "Data Engineer"), ("Data Engineer (gn)", "Data Engineer"),
+                            ("Engineer (Full-time, Remote)", "Engineer"), ("[Remote]", "[Remote]")):
             self.assertEqual(tailor.headline_title(title), want)
 
     def test_a_role_without_a_company_gets_its_own_section(self):
@@ -115,6 +118,13 @@ class Tailoring(unittest.TestCase):
         if cv_pdf.available():                           # RenderCV takes it (it rejected a role without a company)
             with tempfile.TemporaryDirectory() as td:
                 self.assertGreaterEqual(cv_pdf.write_pdf(spec, str(Path(td) / "cv.pdf")), 1)
+        # a newer role without a company (freelance now) goes above the jobs; one titled just "Experience" can't be
+        # mistaken for the jobs' section
+        spec["roles"] += [{"company": "", "title": "Freelance Engineer", "start": "2024-01", "end": "Present", "bullets": ["Shipped apps."]},
+                          {"company": "", "title": "Experience", "bullets": ["Taught a course."]}]
+        names = list(cv_pdf.to_rendercv(spec)["cv"]["sections"])
+        self.assertLess(names.index(next(n for n in names if n.startswith("Freelance"))), names.index("Experience"))
+        self.assertIn("Other experience", names)
 
     def test_fit_and_resume(self):
         f = tailor.fit(self.p, self.jd)
@@ -193,30 +203,36 @@ class Storage(unittest.TestCase):
             self.assertEqual(con.execute("SELECT count(*) n FROM jobs").fetchone()["n"], 1)
 
     def test_a_feeds_post_is_kept_for_its_link(self):
+        post = "We build payments. You will own React and Node services end to end. " * 20      # a whole post
         feed = {"url": "https://himalayas.app/companies/tabby/jobs/senior-fullstack-engineer?utm_source=api",
                 "company": "Tabby", "title": "Senior Fullstack Engineer", "ats": "feed", "source": "Himalayas",
-                "description": "We build payments. You will own React and Node services end to end."}
+                "description": post}
+        teaser = {**feed, "url": "https://www.jobindex.dk/jobannonce/1", "company": "Teaser",
+                  "description": "A short teaser from an RSS feed."}
         board = {"url": "https://boards.greenhouse.io/acme/jobs/7", "company": "Acme", "title": "Engineer",
-                 "ats": "greenhouse", "description": "A board's text is read from its page, not kept here."}
+                 "ats": "greenhouse", "description": post}
+        saved = lambda url: (lambda j: storage.get_jd(con, j["id"]) if j else None)(storage.job_for_url(con, url))
         with storage.connect() as con:
-            storage.upsert_jobs(con, [feed, board], "2026-03-01")
-            self.assertEqual(storage.save_feed_posts(con, [feed, board]), 1)
-            self.assertEqual(storage.jd_for_url(con, feed["url"].split("?")[0]), feed["description"])
-            self.assertIsNone(storage.jd_for_url(con, board["url"]))
+            storage.upsert_jobs(con, [feed, teaser, board], "2026-03-01")
+            self.assertEqual(storage.save_feed_posts(con, [feed, teaser, board]), 1)
+            self.assertEqual(storage.job_for_url(con, feed["url"].split("?")[0])["company"], "Tabby")
+            self.assertEqual(saved(feed["url"]), post)
+            self.assertIsNone(saved(teaser["url"]))      # a teaser isn't the post: the page is read instead
+            self.assertIsNone(saved(board["url"]))       # a board's post is read from its page
             # three weeks unseen: forgotten, unless someone applied to it
             old = {**feed, "url": "https://himalayas.app/companies/old/jobs/x", "company": "Old"}
             applied = {**feed, "url": "https://himalayas.app/companies/kept/jobs/y", "company": "Kept"}
             storage.upsert_jobs(con, [old, applied], "2026-01-01")
             storage.save_feed_posts(con, [old, applied])
             mid, _ = storage.save_member(con, "Feed Tester", {}, {})
-            jid = con.execute("SELECT id FROM jobs WHERE company='Kept'").fetchone()["id"]
+            jid = storage.job_for_url(con, applied["url"])["id"]
             storage.create_application(con, mid, "Kept", "Senior Fullstack Engineer", job_id=jid)
             storage.prune_jd(con, "2026-02-08")
-            self.assertIsNone(storage.jd_for_url(con, old["url"]))
-            self.assertEqual(storage.jd_for_url(con, applied["url"]), feed["description"])
-            self.assertEqual(storage.jd_for_url(con, feed["url"]), feed["description"])
+            self.assertIsNone(saved(old["url"]))
+            self.assertEqual(saved(applied["url"]), post)
+            self.assertEqual(saved(feed["url"]), post)
             # the other tests share this database (test_roundtrip counts its jobs)
-            ids = [r["id"] for r in con.execute("SELECT id FROM jobs WHERE company IN ('Tabby','Acme','Old','Kept')")]
+            ids = [r["id"] for r in con.execute("SELECT id FROM jobs WHERE company IN ('Tabby','Teaser','Acme','Old','Kept')")]
             q = ",".join("?" * len(ids))
             for sql in (f"DELETE FROM jd WHERE job_id IN ({q})", f"DELETE FROM applications WHERE job_id IN ({q})",
                         f"DELETE FROM jobs WHERE id IN ({q})"):

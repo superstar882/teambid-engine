@@ -201,8 +201,12 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
     return spec
 
 
-TAG = re.compile(r"(?i)\[[^\]]*\]|\((?=[^)]*\b(?:remote|hybrid|on-?site|contract|freelance|full[- ]time|part[- ]time|"
-                 r"m/f/d|f/m/d|m/w/d|w/m/d|h/f|f/h|all genders)\b)[^)]*\)")
+_WORK = (r"remote|hybrid|on-?site|in-office|contract|freelance|full[- ]time|part[- ]time|temporary|permanent|"
+         r"anywhere|worldwide|us|usa|uk|eu|emea|europe|latam|apac")
+_GENDER = r"[mfwdxh](?:\s*/\s*[mfwdxh]){1,3}|w/m/div|m/w/div|gn|all genders"
+# square brackets: a post's own codes ("[WBG]"); round ones only when they hold nothing but work-mode, place or
+# gender words ("(Remote - US)", "(m/f/d)"), so "(Hybrid Cloud)" stays; and a trailing " - Remote" / " | Hybrid"
+TAG = re.compile(rf"(?i)\[[^\]]*\]|\(\s*(?:(?:{_WORK}|{_GENDER})\s*[-,/|&]?\s*)+\)|\s[-–—|,]\s*(?:{_WORK})(?:\s*[-,/]\s*\w+)*\s*$")
 
 
 def headline_title(title):
