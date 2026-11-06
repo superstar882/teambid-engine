@@ -86,8 +86,20 @@ jobs:
         id: pull
         run: python tb.py cloud pull --force
 
+      - name: Team changes waiting?
+        id: adm
+        continue-on-error: true          # a Supabase hiccup must not stop the scan (no output: TeX is installed anyway)
+        run: python tb.py admin check
+
+      - name: Document tools (to read uploaded .tex resumes)
+        if: steps.adm.outputs.admin != '0'
+        continue-on-error: true
+        uses: ./.github/actions/doc-tools
+
       - name: Team changes from the results page
         continue-on-error: true          # never let a bad request block the scan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes; only this step
         run: python tb.py admin apply
 
       - name: Scan, match, publish

@@ -80,6 +80,11 @@ jobs:
         if: steps.q.outputs.pending != '0'
         run: python tb.py cloud pull --force
 
+      - name: Document tools (LaTeX for members' own resume files)
+        if: steps.q.outputs.pending != '0'
+        continue-on-error: true          # without LaTeX, .tex members get the RenderCV resume and a note
+        uses: ./.github/actions/doc-tools
+
       - name: Build documents
         if: steps.q.outputs.pending != '0'
         run: python tb.py docs

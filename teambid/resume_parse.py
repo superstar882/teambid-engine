@@ -5,7 +5,7 @@ Pipeline: extract text (PDF via PyMuPDF, DOCX via python-docx, TXT/MD) -> split 
 certifications -> per-role stack and metrics -> years of experience, level and career lanes.
 
 The parse is heuristic, so the UI shows it for review and every field is editable. With ANTHROPIC_API_KEY set,
-llm.refine_profile() can clean it further (it may only restructure what is in the text).
+keep_style.read() has Claude read it too (only strings found word for word in the text are kept).
 """
 import datetime as dt
 import re
@@ -132,6 +132,17 @@ def extract_text(path):
                 if para.text.strip():
                     lines.insert(0, para.text)
         return "\n".join(lines), meta
+    if ext == ".tex":                    # a LaTeX resume: read the text of the PDF it builds
+        import tempfile
+        from . import style_tex
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            try:
+                pdf, _ = style_tex.compile_tex(p.read_text(encoding="utf-8", errors="replace"), Path(tmp), "resume")
+            except ValueError as e:          # e.g. it needs a .cls or image that wasn't uploaded with it
+                raise ValueError(f"couldn't build this .tex file ({e}); upload its PDF instead") from e
+            text, meta = extract_text(pdf)
+        meta.update(file=p.name, source="tex")
+        return text, meta
     return p.read_text(encoding="utf-8", errors="replace"), meta
 
 

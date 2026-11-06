@@ -5,38 +5,44 @@ import re
 import shutil
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
-from . import analyze, config, cover, llm, render, resume_parse, storage, tailor, vault, writing
+from . import analyze, config, cover, keep_style, llm, render, resume_parse, storage, tailor, vault, writing
 from .jobs import jd as JD, matcher, scanner
 
 
 # ---------------------------------------------------------------- members
-def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, prefs=None, use_llm=False):
+def onboard(name, resume_path=None, resume_b64=None, filename=None, email=None, prefs=None, use_llm=True):
     """Parse a resume, audit it, save the member with default preferences, and build their vault."""
     config.ensure_dirs()
     slug = storage.slugify(name)
+    new_member = not (config.MEMBERS / slug).exists()
     folder = config.member_dir(slug)
+    wrote = True
     if resume_b64 is not None:
         dst = folder / "resume" / Path(filename or "resume.pdf").name
         dst.write_bytes(base64.b64decode(resume_b64.split(",")[-1]))
     else:
         src = Path(resume_path)
         dst = folder / "resume" / src.name
-        if src.resolve() != dst.resolve():
+        wrote = src.resolve() != dst.resolve()
+        if wrote:
             shutil.copy(src, dst)
-    profile = resume_parse.parse_file(dst)
+    try:
+        profile = resume_parse.parse_file(dst)
+    except Exception:
+        # e.g. a .tex that doesn't build: leave nothing behind, or a later reparse or tailoring could pick that file up
+        if wrote:
+            dst.unlink(missing_ok=True)
+        if new_member:
+            shutil.rmtree(folder, ignore_errors=True)
+        raise
     note = ""
-    if use_llm and llm.available():
-        roles, note = llm.refine_profile(profile["raw_text"], profile)
-        if roles:
-            for r in roles:
-                r.setdefault("bullets", [])
-                r["bullets"] = [{"text": b} if isinstance(b, str) else b for b in r["bullets"]]
-                r.update({"current": r.get("end") == "Present", "months": 0, "stack_line": ""})
-                resume_parse.finish_role(r)
-            profile["roles"] = roles
-            resume_parse.derive(profile)
+    if use_llm and llm.available():      # Claude reads jobs, bullets, summary and skills; code keeps only exact copies
+        pieces, note = keep_style.read(profile["raw_text"])
+        if pieces:
+            keep_style.apply_to_profile(profile, pieces)
+            keep_style.save_pieces(slug, dst, pieces)
     if not profile.get("name"):
         profile["name"] = name
     base = matcher.default_prefs(profile)
@@ -141,10 +147,6 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     use_claude = bool(model) and llm.available()
     if model and not llm.available():
         resume_note = "no Claude key set yet: built with the free template"
-    if use_claude:                    # reword the chosen bullets toward the post (numbers, facts and tools kept)
-        spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
-    problems = tailor.validate(spec, p)
-    kw = tailor.keyword_report(spec, jd)
     letter, letter_check = cover.draft_letter(p, jd, fit)
     polish_note = ""
     if use_claude:                    # Claude writes the letter; the fact-only draft is the fallback
@@ -168,7 +170,17 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     folder = config.member_dir(slug) / "applications" / f"{day}-{safe(company)}-{safe(title)}"
     folder.mkdir(parents=True, exist_ok=True)
     base = f"{safe(m['name']).replace('-', '_')}_Resume_{safe(company)}"
-    files = render.write_resume(spec, folder, base, p.get("years_experience", 0), reg)
+    # the member's own file (their look: icons, links, layout) when a handler can edit it; else today's RenderCV resume
+    style = keep_style.tailor(slug, m, p, jd, jd_text, model if use_claude else None, folder, base)
+    if style.get("files"):
+        files, spec, resume_note = style["files"], style["spec"], style["note"]
+    else:
+        if use_claude:                # reword the chosen bullets toward the post (numbers, facts and tools kept)
+            spec, resume_note = llm.rewrite_resume(spec, p, jd_text, model)
+        files = render.write_resume(spec, folder, base, p.get("years_experience", 0), reg)
+        resume_note = "; ".join(n for n in (style.get("note"), resume_note) if n)
+    problems = tailor.validate(spec, p)
+    kw = tailor.keyword_report(spec, jd)
     lfiles = render.write_letter(p.get("name") or m["name"], p.get("contact", {}), letter, folder,
                                  f"{safe(m['name']).replace('-', '_')}_Cover_Letter_{safe(company)}", RG.letter_date(date_prefs),
                                  RG.paper(reg))
@@ -176,7 +188,8 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     (folder / "cover-letter.md").write_text(letter + "\n", encoding="utf-8")
     report = ["# Fit report", "", f"**{fit['verdict']}**: covers {fit['coverage']}% of the must-have skills.", ""] + \
              [f"- {n}" for n in fit["notes"]] + ["", f"Resume keyword coverage: {kw['pct']}% (missing: {', '.join(kw['missing']) or 'none'})",
-             f"Resume pages: {files['pages']}", f"Fact check: {'OK' if not problems else '; '.join(problems)}", "",
+             f"Resume pages: {files['pages']}", f"Resume: {resume_note or 'built from the template'}",
+             f"Fact check: {'OK' if not problems else '; '.join(problems)}", "",
              "## Answers", ""] + [f"### {q}\n\n{a['answer']}\n" for q, a in answers.items()]
     (folder / "report.md").write_text("\n".join(report), encoding="utf-8")
     (folder / "spec.json").write_text(json.dumps(spec, indent=1), encoding="utf-8")
@@ -303,11 +316,21 @@ def reparse(slug):
         m = storage.member(con, slug)
     if not m:
         raise KeyError(slug)
-    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder
-    files = sorted(f for f in (config.member_dir(slug) / "resume").iterdir() if f.suffix.lower() in (".pdf", ".docx", ".txt", ".md"))
+    # the stored path can be from another computer (PC vs cloud): look in the member's own resume folder, for the file
+    # they uploaded last (by name, split at either slash); else a .tex source wins over its PDF
+    folder, kinds = config.member_dir(slug) / "resume", (".tex", ".pdf", ".docx", ".txt", ".md")
+    stored = folder / PureWindowsPath(str(m.get("resume_file") or "")).name
+    files = [stored] if stored.suffix.lower() in kinds and stored.is_file() else \
+        sorted((f for f in folder.iterdir() if f.suffix.lower() in kinds),
+               key=lambda f: (f.suffix.lower() != ".tex", f.name))
     if not files:
         raise ValueError(f"no resume file for {slug}")
     profile = resume_parse.parse_file(files[0])
+    if llm.available():
+        pieces, _ = keep_style.read(profile["raw_text"])
+        if pieces:
+            keep_style.apply_to_profile(profile, pieces)
+            keep_style.save_pieces(slug, files[0], pieces)
     if not profile.get("name"):
         profile["name"] = m["name"]
     with storage.connect() as con:
