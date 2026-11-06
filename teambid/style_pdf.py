@@ -259,10 +259,11 @@ def read(doc, pieces):
     lines = _lines(doc)
     drawings = [page.get_drawings() for page in doc]
     marks = _marks(doc, lines, drawings)
-    text_lines = [l for l in lines if not _is_sign(l["text"])]
     # a typed sign ("* Built") isn't part of the bullet's words: key() drops "-" and "•" but not "*" or "►"
-    keys = [key(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"])
-            for l in text_lines]
+    keyed = [(l, key(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"]))
+             for l in lines if not _is_sign(l["text"])]
+    # a line with no letters (a lone space at the foot of a page) would end a bullet just as well as its own last line
+    text_lines, keys = [l for l, k in keyed if k], [k for l, k in keyed if k]
     starts, pos = [], 0
     for k in keys:
         starts.append(pos)
@@ -313,7 +314,9 @@ def read(doc, pieces):
             runs, first = [], None
             for n in range(len(ls)):
                 for s, cs in _body(ls, mark, n):
-                    first = first or s
+                    # the first span with letters: a space after the sign can come in the sign's own color
+                    if first is None and "".join(c["c"] for c in cs).strip():
+                        first = s
                     runs.append(("".join(c["c"] for c in cs), _is_bold(s)))
                 runs.append((" ", False))
             # a bold run's own spaces stay outside its marks: some exporters draw "using" then " C#" (space in bold)
@@ -328,9 +331,36 @@ def read(doc, pieces):
             found.append({"id": f"r{ji}b{bi}", "text": shown, "piece": text, "lines": ls, "mark": mark,
                           "link": link, "fixed": styled or link or art or not mark})
         if found:
-            reorder = not any(b["fixed"] for b in found)
-            jobs.append({"id": f"r{ji}", "bullets": found, "reorder": reorder, "_lines": lines})
+            jobs.append({"id": f"r{ji}", "bullets": found, "_lines": lines})
+    claimed = {id(l) for j in jobs for b in j["bullets"] for l in b["lines"]}
+    for j in jobs:
+        for b in j["bullets"]:
+            b["fixed"] = b["fixed"] or _goes_on(b, lines, claimed)
+        j["reorder"] = not any(b["fixed"] for b in j["bullets"])
     return jobs
+
+
+def _goes_on(b, lines, claimed):
+    """Whether the bullet's sentence may go on in the line below it, one that no piece holds (a piece cut short): the
+    next line in its column sits a line's pitch down, in the bullet's own text style, without a sign. Moving the bullet
+    would leave that line behind under another one."""
+    last = b["lines"][-1]
+    base = last["spans"][0]["origin"][1]
+    body = next(s for l in b["lines"] for s in l["spans"] if s["text"].strip() and not _is_sign(s["text"]))
+    ys = [l["spans"][0]["origin"][1] for l in b["lines"]]
+    pitch = median([c - a for a, c in zip(ys, ys[1:]) if c > a] or [1.35 * body["size"]])
+    for l in lines:
+        if l["page"] != last["page"] or id(l) in claimed or _is_sign(l["text"]) or not key(l["text"]) \
+                or _is_sign(l["spans"][0]["text"]):                 # a line with its own sign starts a bullet
+            continue
+        if not (l["bbox"].x0 < last["bbox"].x1 and l["bbox"].x1 > last["bbox"].x0):
+            continue
+        if 0 < l["spans"][0]["origin"][1] - base <= 1.15 * pitch + 0.5:
+            s = next(s for s in l["spans"] if s["text"].strip())
+            if not _is_bold(s) and abs(s["size"] - body["size"]) <= 0.6 and s["color"] == body["color"] \
+                    and not _is_lead(s):
+                return True
+    return False
 
 
 def find(path, pieces):
@@ -586,22 +616,51 @@ def _lay_out(jobs, plan, fonts):
             continue
         order = plan.get("order", {}).get(job["id"]) if job["reorder"] else None
         order = order if order and sorted(order) == sorted(ids) else ids
-        # rewordings that don't fit go back to their own text one at a time, the one that grew most first; a job left
+        # rewordings that don't fit go back to their own text one at a time, the one that grew most first; a run left
         # with nothing to change isn't erased and redrawn at all
         grew = lambda i: (len(texts[i].replace("**", "")) - len(own[i].replace("**", "")), i)
-        ch, flow = set(changed), None
-        while order != ids or ch:
-            flow = _flow(job, order, texts, ch, st, fonts)
-            if flow or not ch:
-                break
-            ch.remove(max(ch, key=grew))
-        if flow:
-            kept += sorted(changed - ch)
-            todo.append((job["bullets"], flow))
-            used[job["id"]] = list(order)
-        else:
-            kept += sorted(changed)                         # nothing fits: the job stays exactly as it is
+        drew = []
+        for run in _runs(job):
+            rids = [b["id"] for b in run]
+            rorder, rchanged = [i for i in order if i in rids], changed & set(rids)
+            sub = {**job, "bullets": run}
+            rst = {**_style(sub), **{k: st[k] for k in ("size", "font", "bold_font", "color", "right", "justified")}}
+            ch, flow = set(rchanged), None
+            while rorder != rids or ch:
+                flow = _flow(sub, rorder, texts, ch, rst, fonts)
+                if flow or not ch:
+                    break
+                ch.remove(max(ch, key=grew))
+            if flow:
+                kept += sorted(rchanged - ch)
+                todo.append((run, flow))
+                drew += rorder
+            else:
+                kept += sorted(rchanged)                    # nothing fits: the run stays exactly as it is
+                drew += rids
+        used[job["id"]] = drew
     return todo, kept, used
+
+
+def _runs(job):
+    """The job's bullets in runs with nothing else between them. A line between two of them on a page that is neither
+    (a project's heading and dates inside one job) stays where it is, so bullets are reordered only within their own
+    run, under their own heading."""
+    own = {id(l) for b in job["bullets"] for l in b["lines"]}
+    x0 = min(l["bbox"].x0 for b in job["bullets"] for l in b["lines"])
+    x1 = max(l["bbox"].x1 for b in job["bullets"] for l in b["lines"])
+    runs = [[job["bullets"][0]]]
+    for a, b in zip(job["bullets"], job["bullets"][1:]):
+        la, lb = a["lines"][-1], b["lines"][0]
+        apart = la["page"] == lb["page"] and any(
+            l["page"] == la["page"] and id(l) not in own and key(l["text"]) and not _is_sign(l["text"])
+            and l["bbox"].x0 < x1 and l["bbox"].x1 > x0 and la["bbox"].y1 - 1 < (l["bbox"].y0 + l["bbox"].y1) / 2 < lb["bbox"].y0 + 1
+            for l in job["_lines"])
+        if apart:
+            runs.append([b])
+        else:
+            runs[-1].append(b)
+    return runs
 
 
 def _words_at(page):
@@ -627,22 +686,29 @@ def _untouched(doc, todo):
     return {pno: [(r, t) for r, t in _words_at(page) if not inside(pno, r)] for pno, page in enumerate(doc)}
 
 
-def _disturbed(doc, before, drawn):
+def _disturbed(doc, before, drawn, erased=None):
     """Words outside the redrawn bullets that are gone, moved or changed since before (_untouched), or that a drawn
-    line lies on (0.3 pt of touching allowed)."""
-    bad, over = [], {}
-    for rects in drawn.values():
+    line lies on (0.3 pt of touching allowed). Each names the bullet that did it where one can be told: the one drawn
+    over the word, or the one erased right by a word that's gone (erased = {bullet id: [(page, line box)]})."""
+    bad, over, near = [], {}, {}
+    for bid, rects in drawn.items():
         for p, r in rects:
-            over.setdefault(p, []).append(r)
+            over.setdefault(p, []).append((r, bid))
+    for bid, rects in (erased or {}).items():
+        for p, r in rects:
+            near.setdefault(p, []).append((r + (-2, -2, 2, 2), bid))
     for pno, words in before.items():
         now = {}
         for r, t in _words_at(doc[pno]):
             now.setdefault(t, []).append(r)
         for r, t in words:
             if not any(max(abs(a - b) for a, b in zip(r, q)) <= 1.0 for q in now.get(t, [])):
-                bad.append(f"lost {t!r}")
-            elif any((r + (0.3, 0.3, -0.3, -0.3)).intersects(d) for d in over.get(pno, [])):
-                bad.append(f"drawn over {t!r}")
+                who = next((bid for q, bid in near.get(pno, []) if q.intersects(r)), None)
+                bad.append(f"lost {t!r}" + (f" ({who})" if who else ""))
+            else:
+                who = next((bid for d, bid in over.get(pno, []) if (r + (0.3, 0.3, -0.3, -0.3)).intersects(d)), None)
+                if who:
+                    bad.append(f"drawn over {t!r} ({who})")
     return bad
 
 
@@ -878,30 +944,43 @@ def _wrong(doc, todo, kept, drawn, plan, links_before, before, signs):
                 bad.append(b["id"])
     if sum(len(p.get_links()) for p in doc) != links_before:
         bad.append("links")
-    return bad + _disturbed(doc, before, drawn) + _signs_hit(doc, drawn, signs)
+    erased = {b["id"]: [(l["page"], l["bbox"]) for l in b["lines"]] for bullets, _ in todo for b in bullets}
+    return bad + _disturbed(doc, before, drawn, erased) + _signs_hit(doc, drawn, signs)
 
 
 def build(doc, plan, folder, base):
     """Write the tailored PDF into folder. -> {"pdf", "pages", "paper", "kept": [bullet ids whose rewording didn't
     fit and kept their text], "order": {job id: its bullet ids as drawn (the original order where it stayed)}}.
-    Raises ValueError when the result doesn't read back, even without the PDF's own fonts."""
+    Raises ValueError when the result doesn't read back, even without the PDF's own fonts.
+    When every problem names its bullet, the jobs of those bullets are left exactly as they are and the rest is tried
+    again (twice at most): one job that can't be redrawn doesn't cost the member their own PDF."""
     fitz = _fitz()
     with fitz.open(doc["_path"]) as d:
         links_before = sum(len(p.get_links()) for p in d)
-    bad = []
-    for allow in (True, False):
-        out, todo, kept, drawn, order, before, signs = _render(doc["_path"], doc["_pieces"], plan, allow)
-        try:
-            bad = _wrong(out, todo, kept, drawn, plan, links_before, before, signs)
-            if not bad:
-                folder = Path(folder)
-                folder.mkdir(parents=True, exist_ok=True)
-                pdf = folder / f"{base}.pdf"
-                out.save(pdf, garbage=3, deflate=True)
-                width, pages = out[0].rect.width, out.page_count
-                return {"pdf": str(pdf), "pages": pages, "paper": "A4" if abs(width - 595) < 6 else "Letter",
-                        "kept": kept, "order": order}
-        finally:
-            out.close()
+    bad, spare, asked = [], set(), plan.get("text", {})
+    job_of = lambda bid: re.match(r"r\d+", bid).group(0)
+    for _ in range(3):
+        p = {**plan, "order": {j: o for j, o in plan.get("order", {}).items() if j not in spare},
+             "text": {i: t for i, t in asked.items() if job_of(i) not in spare}}
+        for allow in (True, False):
+            out, todo, kept, drawn, order, before, signs = _render(doc["_path"], doc["_pieces"], p, allow)
+            try:
+                bad = _wrong(out, todo, kept, drawn, p, links_before, before, signs)
+                if not bad:
+                    folder = Path(folder)
+                    folder.mkdir(parents=True, exist_ok=True)
+                    pdf = folder / f"{base}.pdf"
+                    out.save(pdf, garbage=3, deflate=True)
+                    width, pages = out[0].rect.width, out.page_count
+                    kept = kept + sorted(i for i in asked if job_of(i) in spare and i not in kept)
+                    return {"pdf": str(pdf), "pages": pages, "paper": "A4" if abs(width - 595) < 6 else "Letter",
+                            "kept": kept, "order": order}
+            finally:
+                out.close()
+        named = [re.search(r"\br\d+b\d+\b", e) for e in bad]
+        jobs = {job_of(m.group(0)) for m in named if m}
+        if not all(named) or jobs <= spare:
+            break                                    # a problem no bullet answers for, or one that leaving jobs won't fix
+        spare |= jobs
     raise ValueError(f"the tailored PDF didn't read back as written ({', '.join(bad[:4])})")
 

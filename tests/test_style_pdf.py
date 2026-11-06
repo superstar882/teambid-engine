@@ -57,6 +57,30 @@ class Read(unittest.TestCase):
         self.assertEqual(self.jobs(space_in_bold=True)[0]["bullets"][0]["text"],
                          "Built a payments API in **Python** and FastAPI that handles 2M requests a day for card and bank transfers.")
 
+    def test_a_space_in_the_signs_color_doesnt_make_the_text_two_colored(self):
+        # gray "•", a gray " ", then black text: only the text's own colors count, so these bullets stay free
+        jobs = self.jobs(sign="gray")
+        with fitz.open(sample(sign="gray")) as d:
+            line = next(l for l in style_pdf._lines(d) if "payments" in l["text"])
+        sign, space = line["spans"][:2]                                                  # the shape this test is about
+        self.assertTrue(style_pdf._is_sign(sign["text"]) and space["text"] == " " and space["color"] == sign["color"])
+        self.assertTrue(all(not b["fixed"] for j in jobs for b in j["bullets"]))
+        self.assertTrue(all(j["reorder"] for j in jobs))
+
+    def test_a_line_without_letters_never_ends_a_bullet(self):
+        # a lone space written right after a bullet's last line once became that bullet's last line, at a page's foot
+        b = self.jobs(blank=True)[0]["bullets"][2]
+        self.assertEqual([key(l["text"]) != "" for l in b["lines"]], [True, True])
+
+    def test_a_piece_cut_short_pins_its_job(self):
+        # the piece holds only the bullet's first line: its second line, right below in the same style, would stay
+        # behind if the bullet moved
+        pieces = {"jobs": [dict(PS.PIECES["jobs"][0], bullets=[PS.JOBS[0][2][0][0].replace("**", "")]
+                                + PS.PIECES["jobs"][0]["bullets"][1:]), PS.PIECES["jobs"][1]]}
+        jobs = self.jobs(pieces=pieces)
+        self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
+        self.assertEqual([j["reorder"] for j in jobs], [False, True])
+
     def test_drawn_dots_are_bullet_signs_too(self):
         self.assertEqual({b["mark"]["kind"] for j in self.jobs(sign="circle") for b in j["bullets"]}, {"circle"})
 
@@ -231,6 +255,36 @@ class Build(unittest.TestCase):
         with fitz.open(f["pdf"]) as d:
             self.assertEqual(sum(len(pg.get_links()) for pg in d), 2)
 
+    def test_bullets_move_only_under_their_own_heading(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}}, subhead=True)
+        self.assertEqual(f["order"]["r0"], ["r0b0", "r0b2", "r0b1"])     # Built stays above the heading
+        ws = words(f["pdf"])
+        for a, b in (("Built", "Payments"), ("Payments", "Wrote"), ("Wrote", "Cut")):
+            self.assertLess(first(ws, a), first(ws, b))
+
+    def test_a_job_that_doesnt_read_back_is_left_as_it_was(self):
+        real, calls = style_pdf._wrong, []
+
+        def wrong(*a):                                   # the second job never reads back while it's redrawn
+            calls.append(a[4])
+            return (["r1b0"] if "r1" in a[4].get("order", {}) else []) + real(*a)
+        new = "Moved 30 cron jobs to Airflow, ending missed nightly runs and cutting manual reruns to zero!"
+        with mock.patch.object(style_pdf, "_wrong", wrong):
+            f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]}, "text": {"r1b0": new}})
+        self.assertEqual(f["order"], {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b0", "r1b1"]})
+        self.assertEqual(f["kept"], ["r1b0"])
+        self.assertEqual(len(calls), 3)                  # both font passes with the second job, then once without it
+        ws = words(f["pdf"])
+        self.assertLess(first(ws, "Wrote"), first(ws, "Built"))
+        self.assertIn(key(PS.PIECES["jobs"][1]["bullets"][0]), all_text(f["pdf"]))
+
+    def test_a_problem_no_bullet_answers_for_fails_at_once(self):
+        calls = []
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: calls.append(1) or ["links"]):
+            with self.assertRaises(ValueError):
+                self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}})
+        self.assertEqual(len(calls), 2)
+
     def test_a_result_that_doesnt_read_back_fails(self):
         tmp = Path(tempfile.mkdtemp())
         doc = style_pdf.find(PS.make(str(tmp / "in.pdf")), PS.PIECES)
@@ -279,8 +333,12 @@ class Build(unittest.TestCase):
                 out.append(line)
             return out
         with mock.patch.object(style_pdf, "_old_lines", glued):
-            with self.assertRaises(ValueError):           # the same letters, but not the same words
-                self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}})
+            # the same letters, but not the same words: the job is left as it was, and nothing else changed
+            f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]}, "text": {}})
+        self.assertEqual(f["order"], {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]})
+        ws = words(f["pdf"])
+        self.assertLess(first(ws, "Built"), first(ws, "Wrote"))
+        self.assertIn("payments", [w for _, _, w in ws])
 
     # --- erasing: only the bullets' own letters, and the rest of the PDF checked
     def test_tight_leading_keeps_the_lines_around(self):
@@ -314,7 +372,7 @@ class Build(unittest.TestCase):
             before = {0: style_pdf._words_at(pg)}
             self.assertEqual(style_pdf._disturbed(d, before, {}), [])
             self.assertEqual(style_pdf._disturbed(d, before, {"r0b0": [(0, fitz.Rect(40, 95, 200, 105))]}),
-                             ["drawn over 'Heading'"])
+                             ["drawn over 'Heading' (r0b0)"])
             # a line drawn right below: the boxes of its letters' line height overlap, the letters don't
             self.assertEqual(style_pdf._disturbed(d, before, {"r0b0": [(0, fitz.Rect(40, 103, 200, 113))]}), [])
 
@@ -407,13 +465,17 @@ class Build(unittest.TestCase):
         self.assertLess(sign[0][2], cut[0][0])
         self.assertEqual(f["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
 
-    def test_text_drawn_over_a_sign_fails_the_build(self):
+    def test_text_drawn_over_a_sign_leaves_that_job_as_it_was(self):
         real = style_pdf._new_lines
         # the old layout: the rewording set from the job's first text x (the paragraph's 50), over its own sign
         old = lambda text, st, fonts, bullet=None: real(text, dict(st, x_first=50.0), fonts)
-        with self.assertRaises(ValueError) as ctx:
-            self.probe(_new_lines=old)
-        self.assertIn("text over the sign of r0b1", str(ctx.exception))
+        seen = []
+        wrong = style_pdf._wrong
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: seen.append(wrong(*a)) or seen[-1]):
+            f = self.probe(_new_lines=old)
+        self.assertIn("text over the sign of r0b1", seen[0])
+        self.assertEqual((f["kept"], seen[-1]), (["r0b1"], []))          # its rewording dropped, nothing else wrong
+        self.assertIn(key(PS.PIECES["jobs"][0]["bullets"][1]), all_text(f["pdf"]))
 
     # --- signs
     def test_typed_signs_move_with_their_bullets(self):

@@ -24,6 +24,7 @@ PIECES = {"headline": "", "summary": "", "skills": [],
 PITCH, GAP, X_SIGN, X_TEXT = 12.5, 18.0, 52.0, 62.0
 BOTTOM = 790.0
 BLUE = (0.1, 0.3, 0.8)
+GRAY = (0.37, 0.39, 0.41)
 
 
 def _runs(page, x, y, text, faces, size=10):
@@ -55,10 +56,12 @@ def _one_name(doc):
 
 
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
-         lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False):
+         lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
+         blank=False, subhead=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
-    font than the text's: Times, or the bold font of font_file).
+    font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
+    as some resume builders draw them).
     break_page: the first job starts near the bottom of page 1 and its last bullet runs onto page 2.
     link_bullet: the second job's first bullet holds a link.
     tight: lines 11.5 pt apart with no extra gap between bullets, the job headings right above and below.
@@ -71,7 +74,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     intro: the first job's first bullet is a paragraph without a sign, set at x=50 (left of the signs at 52).
     space_in_bold: the space before a bold word is drawn in the bold run (" Python"), as some exporters write it.
     underline: a line 3 pt under the baseline of the second job's first bullet's last line (below that line's box).
-    tracked: "public" in the first job's third bullet is letter-spaced (each letter set on its own)."""
+    tracked: "public" in the first job's third bullet is letter-spaced (each letter set on its own).
+    blank: a lone space at the foot of the page, written right after the first job's last line (no letters, no place).
+    subhead: a project heading inside the first job, between its first and second bullets."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -100,6 +105,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
         y += above
         for bi, lines in enumerate(bullets):
             p = pitches[bi] if pitches and ji == 0 else pitch
+            if subhead and (ji, bi) == (0, 1):
+                page.insert_text((50, y), "Payments platform", fontname="hebo", fontsize=10)
+                y += gap
             for n, line in enumerate(lines):
                 if y > BOTTOM:
                     page, y = new_page(), 60.0
@@ -123,6 +131,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     elif sign in ("dash", "dot"):
                         page.insert_text((X_SIGN, y), "–" if sign == "dash" else "•",
                                          fontname=faces["bold"][0] if font_file else "tiro", fontsize=10)
+                    elif sign == "gray":                  # the sign and the space after it in gray, the text black
+                        page.insert_text((X_SIGN, y), "•", fontname="symb", fontsize=10, color=GRAY)
+                        page.insert_text((X_SIGN + 4.6, y), " ", fontname="helv", fontsize=10, color=GRAY)
                     else:
                         page.insert_text((X_SIGN, y), "•", fontname="symb", fontsize=10)
                     if link_bullet and ji == 1 and bi == 0:
@@ -134,6 +145,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     page.draw_line((X_TEXT, y + 3), (X_TEXT + 30, y + 3), color=(0, 0, 0), width=0.5)
                 _runs(page, x, y, line, faces)
                 y += p
+            if blank and (ji, bi) == (0, len(bullets) - 1):
+                page.insert_text((300, 830), " ", fontname="helv", fontsize=10)
             y += gap - p
         y += after
     if y > BOTTOM - 20:
