@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path, PureWindowsPath
 
-from . import config, llm, resume_parse, style_tex
+from . import config, llm, resume_parse, style_pdf, style_tex
 from . import skills as SK
 from . import tailor as TL
 from .style_text import key
@@ -270,7 +270,7 @@ def check(doc, reply, profile, jd):
     return plan
 
 
-HANDLERS = {".tex": style_tex}        # .docx and PDF handlers come in parts 2 and 3
+HANDLERS = {".tex": style_tex, ".pdf": style_pdf}      # .docx comes in part 2 (after PDFs: the team uploads PDFs)
 
 
 def source_file(slug, member):
@@ -348,6 +348,7 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
     if not src:
         return {}
     handler = HANDLERS[src.suffix.lower()]
+    kept = []
     try:
         pieces = pieces_for(slug, profile, src)
         if not pieces:
@@ -361,6 +362,9 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
             if reply:
                 plan, why = check(doc, reply, profile, jd), ""
         files, reverted = _build(handler, doc, plan, Path(folder), base)
+        kept = files.pop("kept", [])
+        for bid in kept:                           # rewordings the file couldn't fit kept their original text
+            plan["text"].pop(bid, None)
     except Exception as e:                       # any failure: today's RenderCV resume is used instead
         return {"note": f"original style skipped: {str(e)[:160]}"}
     total = sum(len(j["bullets"]) for j in doc["jobs"])
@@ -370,6 +374,8 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
             f"{files['pages']} page(s) (original {doc['pages']})")
     if reverted:
         note += f", put back {reverted} longer piece(s) to keep the page count"
+    if kept:
+        note += f", {len(kept)} reworded bullet(s) kept their original text to fit"
     if why:
         note += f" ({why})"
     spec = report_spec(doc, plan)
