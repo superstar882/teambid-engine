@@ -60,6 +60,11 @@ class Read(unittest.TestCase):
                                                         "Inter-Semi-Bold", "NimbusSanL-Regu")],
                          ["Calibri", "Roboto", "Arial", "Inter", "NimbusSanL"])
 
+    def test_word_and_wingdings_bullet_glyphs_are_signs(self):
+        for c in ("", "", "", "", "", "•", "▪", "–"):
+            self.assertTrue(style_pdf._is_sign(c), repr(c))
+        self.assertEqual(len(style_pdf.BULLETS), 25)
+
 
 class Find(unittest.TestCase):
     def test_doc_shape(self):
