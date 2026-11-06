@@ -461,6 +461,39 @@ class ApplyWithPdf(TempWorkspace):
         self.assertIn(key(new), text)
         self.assertEqual(r["problems"], [])
 
+    def test_the_note_tells_a_job_left_as_it_was_from_a_rewording_that_didnt_fit(self):
+        real = style_pdf.build
+
+        def build(*a):                                   # as if the second job didn't redraw cleanly
+            f = real(*a)
+            return {**f, "kept": f["kept"] + ["r1b0"], "left": ["r1"], "mailto": 1}
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        with mock.patch.object(style_pdf, "build", build):
+            r = self._apply({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "bullets": {"r1b0": new}})
+        self.assertIn("1 job(s) left as they were", r["resume_ai"])
+        self.assertIn("1 email link(s) set to the address they show", r["resume_ai"])
+        self.assertNotIn("kept their original text to fit", r["resume_ai"])
+        self.assertIn("0 of 5 bullets reworded", r["resume_ai"])
+
+    def test_a_link_only_request_uses_the_feeds_post_when_the_page_wont_read(self):
+        post = "Acme builds freight software. You will write Python services and Airflow pipelines. " * 20
+        job = {"url": "https://himalayas.app/companies/acme/jobs/python-engineer", "company": "Acme Freight",
+               "title": "Senior Python Engineer", "location": "Remote US", "ats": "feed", "source": "Himalayas",
+               "description": post}
+        with storage.connect() as con:
+            storage.upsert_jobs(con, [job], str(config.today()))
+            storage.save_feed_posts(con, [job])
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=({"order": {}, "bullets": {}}, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")), \
+             mock.patch.object(service.JD, "fetch", side_effect=RuntimeError("403 Forbidden")):
+            r = service.apply(self.slug, url=job["url"], ai="haiku")
+        self.assertEqual((r["jd"]["company"], r["jd"]["title"]), ("Acme Freight", "Senior Python Engineer"))
+        with storage.connect() as con:                   # the scanned job is used, not added again by hand
+            self.assertEqual(con.execute("SELECT count(*) n FROM jobs WHERE url LIKE '%acme/jobs%'").fetchone()["n"], 1)
+            self.assertEqual(storage.job_for_url(con, job["url"])["location"], "Remote US")
+
     def test_a_rewording_that_doesnt_fit_is_reported_and_left_out(self):
         long = " ".join([pdf_samples.PIECES["jobs"][0]["bullets"][1]] * 3)
         with mock.patch.object(keep_style, "check", side_effect=lambda doc, reply, profile, jd: dict(

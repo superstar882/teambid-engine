@@ -81,6 +81,28 @@ class Read(unittest.TestCase):
         self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
         self.assertEqual([j["reorder"] for j in jobs], [False, True])
 
+    def cut_short(self, ji, bi):
+        """PIECES with that bullet's piece holding only its first line."""
+        jobs = [dict(j, bullets=list(j["bullets"])) for j in PS.PIECES["jobs"]]
+        jobs[ji]["bullets"][bi] = PS.JOBS[ji][2][bi][0].replace("**", "")
+        return {"jobs": jobs}
+
+    def test_a_piece_cut_short_at_a_page_break_pins_its_job(self):
+        # the third bullet's second line is the first on page 2: moving the bullet would leave it there
+        b = self.jobs(pieces=self.cut_short(0, 2), break_page=True)[0]["bullets"][2]
+        self.assertEqual((b["lines"][-1]["page"], b["fixed"]), (0, True))
+
+    def test_a_piece_cut_short_before_a_bold_word_pins_its_job(self):
+        jobs = self.jobs(pieces=self.cut_short(0, 0), bold_start=True)
+        self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [True, False, False])
+
+    def test_the_next_bullets_drawn_dot_says_it_isnt_the_rest_of_this_one(self):
+        # tight lines, the second bullet not in the reading: its first line sits a pitch below the first bullet, but
+        # its dot says it starts a bullet of its own
+        pieces = {"jobs": [dict(PS.PIECES["jobs"][0], bullets=PS.PIECES["jobs"][0]["bullets"][::2]), PS.PIECES["jobs"][1]]}
+        jobs = self.jobs(pieces=pieces, sign="circle", tight=True)
+        self.assertEqual([b["fixed"] for b in jobs[0]["bullets"]], [False, False])
+
     def test_drawn_dots_are_bullet_signs_too(self):
         self.assertEqual({b["mark"]["kind"] for j in self.jobs(sign="circle") for b in j["bullets"]}, {"circle"})
 
@@ -262,6 +284,37 @@ class Build(unittest.TestCase):
         for a, b in (("Built", "Payments"), ("Payments", "Wrote"), ("Wrote", "Cut")):
             self.assertLess(first(ws, a), first(ws, b))
 
+    def test_bullets_stay_under_a_heading_at_a_page_break(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}}, subhead_page=True)
+        self.assertEqual(f["order"]["r0"], ["r0b0", "r0b2", "r0b1"])     # Built stays on page 1, above the heading
+        ws = words(f["pdf"])
+        self.assertEqual(first(ws, "Built")[0], 0)
+        for a, b in (("Payments", "Wrote"), ("Wrote", "Cut")):
+            self.assertLess(first(ws, a), first(ws, b))
+
+    def test_a_label_beside_a_bullet_keeps_its_run(self):
+        # "Ledger" beside the first bullet, "Docs" beside the third: the third stays by its label
+        f = self.build({"order": {"r0": ["r0b2", "r0b1", "r0b0"]}, "text": {}}, labels=True)
+        self.assertEqual(f["order"]["r0"], ["r0b1", "r0b0", "r0b2"])
+        ws = words(f["pdf"])
+        self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
+        self.assertAlmostEqual(first(ws, "Ledger")[1], first(ws, "Cut")[1], delta=2.5)
+
+    def test_a_sidebar_beside_every_line_isnt_a_label(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}}, sidebar=True)
+        self.assertEqual(f["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
+
+    def test_a_lost_word_names_every_bullet_erased_beside_it(self):
+        with fitz.open() as d:
+            pg = d.new_page()
+            pg.insert_text((50, 100), "Heading", fontname="hebo", fontsize=11)
+            before = {0: style_pdf._words_at(pg)}
+            pg.add_redact_annot(fitz.Rect(40, 85, 200, 105))
+            pg.apply_redactions()
+            erased = {"r0b1": [(0, fitz.Rect(50, 102, 300, 112))], "r1b0": [(0, fitz.Rect(50, 80, 300, 90))],
+                      "r2b0": [(0, fitz.Rect(50, 300, 300, 310))]}
+            self.assertEqual(style_pdf._disturbed(d, before, {}, erased), ["lost 'Heading' (r0b1, r1b0)"])
+
     def test_a_job_that_doesnt_read_back_is_left_as_it_was(self):
         real, calls = style_pdf._wrong, []
 
@@ -303,6 +356,34 @@ class Build(unittest.TestCase):
         with fitz.open(src) as d:                        # as build has it: a PDF read from its file
             self.assertEqual(style_pdf._fix_mailto(d), 0)
             self.assertEqual([l["uri"] for l in d[0].get_links()], ["mailto:x@example.com"] * 2)
+
+    def test_an_email_link_thats_right_stays(self):
+        # an icon read as a letter glued to the address, a +alias left off, a link box that reaches into the next line
+        src = Path(tempfile.mkdtemp()) / "links.pdf"
+        with fitz.open() as d:
+            pg = d.new_page()
+            for y, text in ((100, "Mdana@example.com"), (130, "dana@example.com"), (160, "Email me"), (171, "jo@agency.com")):
+                pg.insert_text((50, y), text, fontname="helv", fontsize=10)
+            for rect, uri in (((48, 90, 160, 103), "mailto:dana@example.com"), ((48, 120, 160, 133), "mailto:dana+cv@example.com"),
+                              ((48, 150, 160, 167), "mailto:x@example.com")):
+                pg.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(rect), "uri": uri})
+            d.save(src)
+        with fitz.open(src) as d:
+            self.assertEqual(style_pdf._fix_mailto(d), 0)
+
+    @unittest.skipUnless(FONT_FILES, "no TrueType font to embed here")
+    def test_an_email_link_shown_with_a_ligature_stays(self):
+        src = Path(tempfile.mkdtemp()) / "links.pdf"
+        with fitz.open() as d:
+            pg = d.new_page()
+            pg.insert_font(fontname="F0", fontfile=FONT_FILES[0])
+            pg.insert_text((50, 100), "ﬁona.reyes@example.com", fontname="F0", fontsize=10)    # "ﬁ", as pdfTeX's fonts read
+            pg.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(48, 90, 200, 103), "uri": "mailto:fiona.reyes@example.com"})
+            d.save(src)
+        with fitz.open(src) as d:
+            if "ﬁ" not in d[0].get_text():
+                self.skipTest("this font has no fi ligature")
+            self.assertEqual(style_pdf._fix_mailto(d), 0)
 
     def test_a_result_that_doesnt_read_back_fails(self):
         tmp = Path(tempfile.mkdtemp())
