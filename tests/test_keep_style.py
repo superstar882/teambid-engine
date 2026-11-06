@@ -15,6 +15,9 @@ os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 import fitz  # noqa: E402
 
 from teambid import config, keep_style, llm, local_ai, resume_parse, service, storage, style_tex, tailor  # noqa: E402
+from teambid import style_pdf  # noqa: E402
+from teambid.style_text import key  # noqa: E402
+from tests import pdf_samples  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
 
 local_ai.DISABLED = True
@@ -131,19 +134,35 @@ class Onboard(TempWorkspace):
         f.write_text(S.SAMPLE_TEXT + "\nchanged", encoding="utf-8")
         self.assertIsNone(keep_style.load_pieces(r["slug"], f))
 
+    def saved(self, slug):
+        return json.loads((config.member_dir(slug) / "resume" / "pieces.json").read_text(encoding="utf-8"))
+
     def test_without_claude_the_rule_based_parse_stays(self):
         with mock.patch.object(llm, "available", return_value=False):
             r = service.onboard("Dana Three", resume_path=self._src())
-        self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
+        self.assertEqual(self.saved(r["slug"])["by"], "rules")       # saved, so tailoring doesn't read it every time
+        self.assertEqual(keep_style.load_pieces(r["slug"], config.member_dir(r["slug"]) / "resume" / "dana.txt")["by"],
+                         "rules")
 
     def test_a_malformed_reading_keeps_the_rule_based_parse(self):
         with mock.patch.object(llm, "available", return_value=True), \
              mock.patch.object(llm, "read_resume", return_value=({"jobs": [{"bullets": 5}], "skills": 7}, "read")):
             r = service.onboard("Dana Four", resume_path=self._src())
-        self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
         rule_based = resume_parse.parse_file(self._src())["roles"]
         self.assertEqual([x["company"] for x in r["profile"]["roles"]], [x["company"] for x in rule_based])
         self.assertEqual(r["llm"], "no job bullets found in the resume")
+        pieces = self.saved(r["slug"])                               # the rejected reading's stand-in is saved
+        self.assertEqual(pieces["by"], "rules")
+        self.assertEqual([j["company"] for j in pieces["jobs"]], [x["company"] for x in rule_based])
+
+    def test_claude_reading_is_marked_and_not_replaced_by_rules(self):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(reading(), "read")):
+            slug = service.onboard("Dana Five", resume_path=self._src())["slug"]
+        self.assertEqual(self.saved(slug)["by"], "claude")
+        with mock.patch.object(llm, "available", return_value=False):      # a reparse without a key keeps it
+            service.reparse(slug)
+        self.assertEqual(self.saved(slug)["by"], "claude")
 
     def test_a_tex_that_wont_build_leaves_nothing_behind(self):
         src = Path(tempfile.mkdtemp()) / "dana.tex"
@@ -159,16 +178,17 @@ class Onboard(TempWorkspace):
         with boom(), mock.patch.object(llm, "available", return_value=False):
             with self.assertRaises(ValueError):
                 service.onboard("Dana Kept", resume_path=src)
-        self.assertEqual([f.name for f in (config.member_dir(slug) / "resume").iterdir()], ["dana.txt"])
+        self.assertEqual([f.name for f in (config.member_dir(slug) / "resume").iterdir() if f.name != "pieces.json"],
+                         ["dana.txt"])
 
 
 class LeftoverFiles(TempWorkspace):
     """A .tex left from an earlier upload never beats the resume the member uploaded last."""
     def test_only_the_stored_file_is_tailored(self):
         folder = config.member_dir("dana-left") / "resume"
-        (folder / "new.pdf").write_bytes(b"%PDF-1.4")
+        (folder / "new.docx").write_bytes(b"PK\x03\x04")          # .docx isn't a handled extension yet
         (folder / "old.tex").write_text(S.SAMPLE, encoding="utf-8")
-        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.pdf"}
+        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.docx"}
         with mock.patch.object(llm, "available", return_value=False), \
              mock.patch.object(llm, "read_resume", return_value=(None, "no")):
             self.assertIsNone(keep_style.source_file("dana-left", member))
@@ -410,6 +430,94 @@ class ApplyWithTex(TempWorkspace):
 
     def test_members_without_a_tex_file_are_untouched(self):
         self.assertEqual(keep_style.tailor("nobody-here", {"resume_file": "x.pdf"}, {}, {}, "", None, ".", "b"), {})
+
+
+class ApplyWithPdf(TempWorkspace):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src))
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(json.loads(json.dumps(pdf_samples.PIECES)), "read")):
+            cls.slug = service.onboard("Dana Pdf", resume_path=src)["slug"]
+
+    def _apply(self, reply):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            return service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+
+    def test_tailors_inside_the_members_own_pdf(self):
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        r = self._apply({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "bullets": {"r1b0": new}})
+        self.assertIn("Resume style: original (.pdf)", r["resume_ai"])
+        self.assertEqual(set(r["files"]) - {"letter_pdf", "letter_docx"}, {"pdf", "pages", "paper"})
+        import fitz
+        with fitz.open(r["files"]["pdf"]) as d:
+            text = key("".join(p.get_text() for p in d))
+            self.assertEqual(sum(len(p.get_links()) for p in d), 1)
+        self.assertIn(key(new), text)
+        self.assertEqual(r["problems"], [])
+
+    def test_a_rewording_that_doesnt_fit_is_reported_and_left_out(self):
+        long = " ".join([pdf_samples.PIECES["jobs"][0]["bullets"][1]] * 3)
+        with mock.patch.object(keep_style, "check", side_effect=lambda doc, reply, profile, jd: dict(
+                keep_style.default_plan(doc, jd), text={"r0b1": long})):
+            r = self._apply({"bullets": {"r0b1": long}})
+        self.assertIn("1 reworded bullet(s) kept their original text to fit", r["resume_ai"])
+        self.assertIn("0 of 5 bullets reworded", r["resume_ai"])
+
+    def test_nothing_tailorable_gets_the_tailored_template(self):
+        r = self._apply({"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})    # nothing changes
+        self.assertIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
+        self.assertTrue(Path(r["files"]["docx"]).exists())                                  # the RenderCV resume
+
+    def test_the_note_says_the_order_really_drawn(self):
+        real = style_pdf.build
+
+        def build(doc, plan, folder, base):              # the first job can't be redrawn in this PDF
+            return real(doc, dict(plan, order={k: v for k, v in plan["order"].items() if k != "r0"}), folder, base)
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        with mock.patch.object(style_pdf, "build", build):
+            r = self._apply({"order": {"r0": ["r0b2", "r0b0", "r0b1"], "r1": ["r1b1", "r1b0"]}, "bullets": {"r1b0": new}})
+        self.assertIn("1 of 5 bullets reworded", r["resume_ai"])
+        self.assertIn("order changed in 1 jobs", r["resume_ai"])
+        self.assertEqual(r["spec"]["style"]["plan"]["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
+        self.assertEqual(r["spec"]["roles"][0]["bullets"][0], pdf_samples.PIECES["jobs"][0]["bullets"][0])
+
+
+class ApplyWithRulePieces(TempWorkspace):
+    """Pieces Claude didn't read (the rule-based parse, or saved before pieces said who read them) are only reordered
+    in a PDF: a rule-based "bullet" can be half of one, and Claude isn't asked to reword it."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src))
+        with mock.patch.object(llm, "available", return_value=False):
+            cls.slug = service.onboard("Dana Rules", resume_path=src)["slug"]
+
+    def _apply(self, by, title):
+        pieces = dict(json.loads(json.dumps(pdf_samples.PIECES)), **({"by": by} if by else {}))
+        keep_style.save_pieces(self.slug, config.member_dir(self.slug) / "resume" / "dana.pdf", pieces)
+        new = "Moved 30 cron jobs into Airflow, ending missed nightly runs and cutting manual reruns to zero."
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=({"bullets": {"r1b0": new}}, "ok")) as ask, \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            r = service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title=title, ai="haiku")
+        self.assertFalse(ask.called, by)
+        self.assertIn("Resume style: original (.pdf). 0 of 5 bullets reworded", r["resume_ai"])
+        self.assertIn("order changed in 2 jobs", r["resume_ai"])
+        self.assertIn("(read without Claude: reordered only)", r["resume_ai"])
+
+    def test_rule_based_pieces_are_only_reordered(self):
+        self._apply("rules", "Senior Python Engineer")
+
+    def test_pieces_saved_before_they_said_who_read_them_too(self):
+        self._apply(None, "Python Engineer")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path, PureWindowsPath
 
-from . import config, llm, resume_parse, style_tex
+from . import config, llm, resume_parse, style_pdf, style_tex
 from . import skills as SK
 from . import tailor as TL
 from .style_text import key
@@ -90,12 +90,15 @@ def confirm(reading, text):
 
 def read(text):
     """Claude reads the resume text -> (confirmed pieces or None, note). Any failure here only skips the reading: the
-    upload goes on with the rule-based parse."""
+    upload goes on with the rule-based parse. The pieces say they came from Claude ("by")."""
     try:
         data, note = llm.read_resume(text)
         if not data:
             return None, note
-        return confirm(data, text)
+        pieces, note = confirm(data, text)
+        if pieces:
+            pieces["by"] = "claude"
+        return pieces, note
     except Exception as e:
         return None, f"Claude reading skipped: {e}"
 
@@ -106,6 +109,15 @@ def pieces_from_profile(profile):
             "jobs": [{"title": r.get("title", ""), "company": r.get("company", ""), "location": r.get("location", ""),
                       "start": r.get("start", ""), "end": r.get("end", ""),
                       "bullets": [b["text"] for b in r.get("bullets", [])]} for r in profile.get("roles", [])]}
+
+
+def rule_pieces(profile, text):
+    """The rule-based parse's pieces that confirm against the text, marked "by": "rules", or None. Its bullets can be
+    pieces of a bullet (a wrapped line read as two), so a PDF only reorders them (see tailor)."""
+    pieces = confirm(pieces_from_profile(profile), text)[0]
+    if pieces:
+        pieces["by"] = "rules"
+    return pieces
 
 
 def _ym(value, end=False):
@@ -164,6 +176,17 @@ def load_pieces(slug, src):
     except (OSError, ValueError):
         return None
     return data if data.get("sha") == _sha(src) else None
+
+
+def save_rule_pieces(slug, src, profile):
+    """Save the rule-based pieces (when Claude's reading was rejected or Claude isn't available), so tailoring doesn't
+    read the file again for every job. A reading of this same file that isn't rule-based is kept."""
+    saved = load_pieces(slug, src)
+    if saved and saved.get("by", "claude") != "rules":        # an older reading without "by" came from Claude too
+        return
+    pieces = rule_pieces(profile, profile.get("raw_text", ""))
+    if pieces:
+        save_pieces(slug, src, pieces)
 
 
 LENGTH = (0.75, 1.10)        # a reworded bullet or summary: at most 25% shorter, at most 10% longer
@@ -270,7 +293,7 @@ def check(doc, reply, profile, jd):
     return plan
 
 
-HANDLERS = {".tex": style_tex}        # .docx and PDF handlers come in parts 2 and 3
+HANDLERS = {".tex": style_tex, ".pdf": style_pdf}      # .docx comes in part 2 (after PDFs: the team uploads PDFs)
 
 
 def source_file(slug, member):
@@ -282,15 +305,15 @@ def source_file(slug, member):
 
 
 def pieces_for(slug, profile, src):
-    """The confirmed pieces of the member's file: the saved ones while the file is unchanged, else read again (Claude
-    when a key is set, the rule-based parse if not) and saved."""
+    """The confirmed pieces of the member's file: the saved ones while the file is unchanged (whoever read them), else
+    read again (Claude when a key is set, the rule-based parse if not) and saved."""
     saved = load_pieces(slug, src)
     if saved:
         return saved
     text, _ = resume_parse.extract_text(src)
     pieces = read(text)[0] if llm.available() else None
     if not pieces:
-        pieces = confirm(pieces_from_profile(profile), text)[0]
+        pieces = rule_pieces(profile, text)
     if pieces:
         save_pieces(slug, src, pieces)
     return pieces
@@ -348,6 +371,7 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
     if not src:
         return {}
     handler = HANDLERS[src.suffix.lower()]
+    kept = []
     try:
         pieces = pieces_for(slug, profile, src)
         if not pieces:
@@ -356,11 +380,25 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         if not doc["jobs"]:
             return {"note": "original style skipped: couldn't find the job bullets in the file"}
         plan, why, reply = default_plan(doc, jd), "no Claude: reordered only", None
+        if model and handler is style_pdf and pieces.get("by") != "claude":
+            # the rule-based parse can cut a bullet in two (a wrapped line read as its own bullet): a rewording drawn
+            # over half a bullet would garble the PDF, so those pieces are only reordered (older saved pieces too)
+            model, why = None, "read without Claude: reordered only"
         if model:
             reply, why = llm.tailor_in_place(doc, jd_text, model)
             if reply:
                 plan, why = check(doc, reply, profile, jd), ""
         files, reverted = _build(handler, doc, plan, Path(folder), base)
+        kept = files.pop("kept", [])
+        for bid in kept:                           # rewordings the file couldn't fit kept their original text
+            plan["text"].pop(bid, None)
+        used = files.pop("order", None)            # the PDF handler says the order it really drew (.tex builds don't)
+        if used is not None:
+            plan["order"].update(used)
+            same = lambda j: used.get(j["id"], [b["id"] for b in j["bullets"]]) == [b["id"] for b in j["bullets"]]
+            if not plan["text"] and all(same(j) for j in doc["jobs"]):
+                Path(files["pdf"]).unlink(missing_ok=True)       # the tailored RenderCV resume is used instead
+                return {"note": "original style skipped: nothing in the file could be tailored safely"}
     except Exception as e:                       # any failure: today's RenderCV resume is used instead
         return {"note": f"original style skipped: {str(e)[:160]}"}
     total = sum(len(j["bullets"]) for j in doc["jobs"])
@@ -370,6 +408,8 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
             f"{files['pages']} page(s) (original {doc['pages']})")
     if reverted:
         note += f", put back {reverted} longer piece(s) to keep the page count"
+    if kept:
+        note += f", {len(kept)} reworded bullet(s) kept their original text to fit"
     if why:
         note += f" ({why})"
     spec = report_spec(doc, plan)
