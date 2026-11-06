@@ -60,14 +60,27 @@ def to_rendercv(spec, paper="letter"):
         sections["Summary"] = [_md(spec["summary"])]
     if spec.get("skills"):
         sections["Skills"] = [{"label": _md(g), "details": _md(", ".join(items))} for g, items in spec["skills"] if items]
-    if spec.get("roles"):
-        sections["Experience"] = [{
-            "company": _md(r["company"]), "position": _md(r["title"]),
-            "location": _md(r.get("location")) or None,
-            "date": _span(r.get("start"), r.get("end")) or None,
-            "summary": _md(" | ".join(r["stack"])) if r.get("stack") else None,
-            "highlights": [_md(b) for b in r["bullets"]] or None,
-        } for r in spec["roles"]]
+    roles = spec.get("roles", [])
+    # RenderCV's experience entries need a company and every entry of a section is the same kind: a role without one
+    # ("Earlier Experience", a group of older roles; a freelance stint) gets a section of its own, its title and dates
+    # the heading, above Experience when it's newer than every job there, else below
+    alone = [r for r in roles if not r.get("company") and r.get("bullets")]
+    newest = max((r.get("start") or "" for r in roles if r.get("company")), default="")
+    for above in (True, False):
+        for r in alone:
+            if ((r.get("start") or "") > newest) == above:
+                span = _span(r.get("start"), r.get("end"))
+                title = (_md(r.get("title")) or "Other experience") + (f" ({span})" if span else "")
+                title = "Other experience" if title.lower() == "experience" else title    # Experience is the jobs'
+                sections.setdefault(title, []).extend({"bullet": _md(b)} for b in r["bullets"])
+        if above and any(r.get("company") for r in roles):
+            sections["Experience"] = [{
+                "company": _md(r["company"]), "position": _md(r["title"]),
+                "location": _md(r.get("location")) or None,
+                "date": _span(r.get("start"), r.get("end")) or None,
+                "summary": _md(" | ".join(r["stack"])) if r.get("stack") else None,
+                "highlights": [_md(b) for b in r["bullets"]] or None,
+            } for r in roles if r.get("company")]
     if spec.get("projects"):
         sections["Projects"] = [{
             "name": f"[{_md(p['name'])}]({_url(p['link'])})" if p.get("link") else _md(p["name"]),
