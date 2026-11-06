@@ -186,27 +186,33 @@ def get_jd(con, job_id):
     return r["text"] if r else None
 
 
-def jd_for_url(con, url):
-    """The saved post of the job at this link, or None (a request from the results page has only the link)."""
-    r = con.execute("SELECT jd.text FROM jobs j JOIN jd ON jd.job_id=j.id WHERE j.url_key=?", (url_key(url),)).fetchone()
-    return (r["text"] or None) if r else None
+def job_for_url(con, url):
+    """The job the scan knows at this link (a dict), or None: a request from the results page has only the link."""
+    r = con.execute("SELECT * FROM jobs WHERE url_key=?", (url_key(url),)).fetchone()
+    return dict(r) if r else None
+
+
+MIN_POST = 1200       # shorter than this a feed's text is a teaser (Jobindex's run ~400 characters), not the post
 
 
 def save_feed_posts(con, jobs):
     """Keep the post that came with a feed's listing (Himalayas, RemoteOK, ...): their pages often won't be read by
-    a program, and documents need the text. Only the posts the scan kept (engineering jobs, see scanner)."""
-    rows = [(url_key(j["url"]), j["description"]) for j in jobs
-            if j.get("ats") == "feed" and j.get("url") and j.get("description")]
+    a program, and documents need the text. Only whole posts the scan kept (engineering jobs, see scanner), and only
+    where the text changed."""
+    rows = [(j["description"], stamp(), url_key(j["url"])) for j in jobs
+            if j.get("ats") == "feed" and j.get("url") and len(j.get("description") or "") >= MIN_POST]
     con.executemany("INSERT INTO jd (job_id, text, fetched) SELECT id, ?, ? FROM jobs WHERE url_key=? "
-                    "ON CONFLICT(job_id) DO UPDATE SET text=excluded.text, fetched=excluded.fetched",
-                    [(text, stamp(), k) for k, text in rows])
+                    "ON CONFLICT(job_id) DO UPDATE SET text=excluded.text, fetched=excluded.fetched "
+                    "WHERE jd.text != excluded.text", rows)
     return len(rows)
 
 
 def prune_jd(con, keep_after):
-    """Forget saved posts of jobs not seen since keep_after (a date string), unless a member applied to that job."""
-    return con.execute("DELETE FROM jd WHERE job_id IN (SELECT j.id FROM jobs j WHERE j.last_seen < ? AND NOT EXISTS "
-                       "(SELECT 1 FROM applications a WHERE a.job_id=j.id))", (keep_after,)).rowcount
+    """Forget saved posts of jobs not seen since keep_after (a date string), unless a member applied to that job.
+    Starts from the saved posts (thousands), not the jobs ever seen (hundreds of thousands)."""
+    return con.execute("DELETE FROM jd WHERE job_id IN (SELECT jd.job_id FROM jd JOIN jobs j ON j.id=jd.job_id "
+                       "WHERE j.last_seen < ? AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id=jd.job_id))",
+                       (keep_after,)).rowcount
 
 
 # ---------- matches / applications ----------
