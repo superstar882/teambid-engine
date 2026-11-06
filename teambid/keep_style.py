@@ -281,7 +281,7 @@ def check(doc, reply, profile, jd):
             plan["summary"] = new
     h = doc.get("headline")
     if h and not h["fixed"]:
-        plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, jd.get("title", ""))
+        plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, TL.headline_title(jd.get("title", "")))
     lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
     for line in doc["skills"]:
         got = [str(x).strip() for x in _list(lines.get(line["id"]))]
@@ -392,6 +392,8 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         kept = files.pop("kept", [])
         for bid in kept:                           # rewordings the file couldn't fit kept their original text
             plan["text"].pop(bid, None)
+        left, mailto = files.pop("left", []), files.pop("mailto", 0)     # the PDF handler's (see style_pdf.build)
+        kept = [b for b in kept if b.split("b")[0] not in left]          # those left with their job are told apart
         used = files.pop("order", None)            # the PDF handler says the order it really drew (.tex builds don't)
         if used is not None:
             plan["order"].update(used)
@@ -410,6 +412,10 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         note += f", put back {reverted} longer piece(s) to keep the page count"
     if kept:
         note += f", {len(kept)} reworded bullet(s) kept their original text to fit"
+    if left:
+        note += f", {len(left)} job(s) left as they were (they didn't redraw cleanly)"
+    if mailto:
+        note += f", {mailto} email link(s) set to the address they show"
     if why:
         note += f" ({why})"
     spec = report_spec(doc, plan)

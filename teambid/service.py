@@ -117,21 +117,35 @@ def member_matches(slug, status=None, tier=None, limit=200, new_only=False):
 def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, polish=False, ai=None):
     """ai: "haiku" / "sonnet" (Claude, needs a key), "free" (fact-only template), None = Claude Sonnet if a key is set."""
     """Analyze a job, build the tailored resume + cover letter + answers, save an application folder."""
+    saved = None
     with storage.connect() as con:
         m = storage.member(con, slug)
         if job_id:
             j = dict(con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
             url, company, title = j["url"], company or j["company"], title or j["title"]
             jd_text = jd_text or storage.get_jd(con, job_id)
+        elif url and (j := storage.job_for_url(con, url)):
+            # a request from the results page has only the link: a job the scan knows brings its company, title and
+            # place (and isn't added again as a manual job), and its saved post stands in if the page can't be read
+            job_id, company, title = j["id"], company or j["company"], title or j["title"]
+            saved = storage.get_jd(con, job_id)
     if not jd_text and url:
         try:
             res = JD.fetch(url)
         except Exception as e:
-            raise ValueError(f"Couldn't read the job page ({type(e).__name__}: {str(e)[:80]}). Some sites block automated "
-                             "reading (LinkedIn, Indeed, Himalayas pages). Open the link, copy the job text, and paste it instead.")
-        jd_text = res["text"]
-        company = company or res.get("company", "").replace("-", " ").title()
-        title = title or res.get("title", "")
+            res = None
+            if len(saved or "") < storage.MIN_POST:
+                raise ValueError(f"Couldn't read the job page ({type(e).__name__}: {str(e)[:80]}). Some sites block "
+                                 "automated reading (LinkedIn, Indeed, Himalayas pages). Open the link, copy the job "
+                                 "text, and paste it instead.")
+        if res:
+            jd_text = res["text"]
+            company = company or res.get("company", "").replace("-", " ").title()
+            title = title or res.get("title", "")
+        # a feed's post, kept by the scan (see storage.save_feed_posts), when the page gave nothing or only a stub
+        # ("You need to enable JavaScript to run this app.")
+        if len(saved or "") >= storage.MIN_POST and len(jd_text or "") < storage.MIN_POST:
+            jd_text = saved
     if not jd_text:
         raise ValueError("Need a job link that can be read, or the pasted job text.")
     company, title = (company or "Company").strip(), (title or "Role").strip()

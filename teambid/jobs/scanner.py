@@ -195,6 +195,8 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
         t1 = time.monotonic()
         with storage.connect() as con:
             n = storage.upsert_jobs(con, all_jobs, day)
+            storage.save_feed_posts(con, all_jobs)       # before the descriptions are dropped below
+            storage.prune_jd(con, str(config.today() - __import__("datetime").timedelta(days=21)))
         timing["store"] = time.monotonic() - t1
         log(f"stored {n:,} open jobs")
         # description facts (skills, years, location rules) for every engineering job, shared by all members.
