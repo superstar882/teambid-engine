@@ -285,6 +285,25 @@ class Build(unittest.TestCase):
                 self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}})
         self.assertEqual(len(calls), 2)
 
+    def test_an_email_link_opens_the_address_it_shows(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}},
+                       mailto="mailto:dana.old@example.org?subject=Hello")
+        with fitz.open(f["pdf"]) as d:
+            self.assertEqual([l["uri"] for l in d[0].get_links()], ["mailto:dana@example.com?subject=Hello"])
+
+    def test_an_email_link_without_one_address_shown_stays(self):
+        src = Path(tempfile.mkdtemp()) / "links.pdf"
+        with fitz.open() as d:
+            pg = d.new_page()
+            pg.insert_text((50, 100), "Email me", fontname="helv", fontsize=10)
+            pg.insert_text((50, 130), "a@example.com b@example.com", fontname="helv", fontsize=10)
+            pg.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(48, 90, 100, 103), "uri": "mailto:x@example.com"})
+            pg.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(48, 120, 200, 133), "uri": "mailto:x@example.com"})
+            d.save(src)
+        with fitz.open(src) as d:                        # as build has it: a PDF read from its file
+            self.assertEqual(style_pdf._fix_mailto(d), 0)
+            self.assertEqual([l["uri"] for l in d[0].get_links()], ["mailto:x@example.com"] * 2)
+
     def test_a_result_that_doesnt_read_back_fails(self):
         tmp = Path(tempfile.mkdtemp())
         doc = style_pdf.find(PS.make(str(tmp / "in.pdf")), PS.PIECES)
