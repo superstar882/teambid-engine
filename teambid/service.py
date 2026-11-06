@@ -123,6 +123,10 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
             j = dict(con.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone())
             url, company, title = j["url"], company or j["company"], title or j["title"]
             jd_text = jd_text or storage.get_jd(con, job_id)
+        elif url and not jd_text:
+            # a request from the results page has only the link: the scan may have the post (a feed's, whose page
+            # often won't be read by a program)
+            jd_text = storage.jd_for_url(con, url)
     if not jd_text and url:
         try:
             res = JD.fetch(url)
