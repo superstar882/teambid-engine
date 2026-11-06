@@ -112,13 +112,13 @@ def _roundtrip(buf, chars):
     """The characters this font draws AND reads back as themselves once re-embedded."""
     fitz = _fitz()
     chars = sorted(chars)
-    d = fitz.open()
-    p = d.new_page(width=40 * (len(chars) + 2), height=60)
-    p.insert_font(fontname="F0", fontbuffer=buf)
-    for n, c in enumerate(chars):
-        p.insert_text((10 + n * 30, 40), c, fontname="F0", fontsize=12)
-    got = [ch["c"] for b in p.get_text("rawdict")["blocks"] for l in b.get("lines", []) for s in l["spans"]
-           for ch in s["chars"] if not ch["c"].isspace()]
+    with fitz.open() as d:
+        p = d.new_page(width=40 * (len(chars) + 2), height=60)
+        p.insert_font(fontname="F0", fontbuffer=buf)
+        for n, c in enumerate(chars):
+            p.insert_text((10 + n * 30, 40), c, fontname="F0", fontsize=12)
+        got = [ch["c"] for b in p.get_text("rawdict")["blocks"] for l in b.get("lines", []) for s in l["spans"]
+               for ch in s["chars"] if not ch["c"].isspace()]
     return {c for c, g in zip(chars, got) if c == g} if len(got) == len(chars) else set()
 
 
@@ -324,15 +324,22 @@ def find(path, pieces):
                                   for b in j["bullets"]]} for j in jobs]}
 
 
+def _text_x(b, n):
+    """Where line n of bullet b's text starts, after its sign: its first letter's x."""
+    return next((c["origin"][0] for s, cs in _body(b["lines"], b["mark"], n) if not _is_sign(s["text"])
+                 for c in cs if not c["c"].isspace()), b["lines"][n]["bbox"].x0)
+
+
 def _style(job):
     """How the job's bullets are set: size, width, justification, line spacing per page, where it may flow. The text
-    style is the job's most common one (by letters), so a bold or colored lead-in doesn't become every rewording's."""
+    style is the job's most common one (by letters), so a bold or colored lead-in doesn't become every rewording's.
+    Where the text starts comes from the bullets that may be redrawn: a fixed one (a paragraph without a sign, say)
+    can start somewhere else, even where the other bullets' signs are."""
     ls = [l for b in job["bullets"] for l in b["lines"]]
     base = lambda l: l["spans"][0]["origin"][1]
-    b0 = job["bullets"][0]
-    first = b0["lines"][0]
-    x_first = next(c["origin"][0] for s, cs in _body(b0["lines"], b0["mark"], 0) if not _is_sign(s["text"])
-                   for c in cs if not c["c"].isspace())
+    first = job["bullets"][0]["lines"][0]
+    free = [b for b in job["bullets"] if not b["fixed"]] or job["bullets"]
+    x_first = _text_x(free[0], 0)
     weight = {}
     for b in job["bullets"]:
         for n in range(len(b["lines"])):
@@ -368,7 +375,7 @@ def _style(job):
         # land on the page break); the job's last page never grows, the next heading follows it
         below = any(l["page"] == pg and l["bbox"].y0 > bottom + 2 for l in job["_lines"])
         slack[pg] = 0.5 if pg == max(regions) or below else (between_at[pg] - pitch_at[pg]) + 0.5
-    later = [l["spans"][0]["origin"][0] for b in job["bullets"] for l in b["lines"][1:]]
+    later = [_text_x(b, n) for b in free for n in range(1, len(b["lines"]))]
     return {"size": size, "font": body[1], "bold_font": bold[1] if bold else body[1], "color": body[3],
             "right": right, "justified": justified, "regions": regions, "pitch_at": pitch_at, "between_at": between_at,
             "slack": slack, "x_first": x_first, "x_next": median(later) if later else x_first,
@@ -390,16 +397,20 @@ def _words(text):
     return words
 
 
-def _new_lines(text, st, fonts):
-    """A reworded bullet wrapped into the job's width: lines of (x, text, font, size, color, x-scale). None when one
-    word alone is wider than the column (it would run past the right edge)."""
+def _new_lines(text, st, fonts, bullet=None):
+    """A reworded bullet wrapped into the job's width: lines of (x, text, font, size, color, x-scale). It starts where
+    its own bullet's text starts (bullet given), so it stays clear of its own sign. None when one word alone is wider
+    than the column (it would run past the right edge)."""
     size, words = st["size"], _words(text)
+    x_first = _text_x(bullet, 0) if bullet else st["x_first"]
+    x_next = median(_text_x(bullet, n) for n in range(1, len(bullet["lines"]))) \
+        if bullet and len(bullet["lines"]) > 1 else st["x_next"]
     letters = {b: "".join(t for w in words for t, bb in w if bb == b) for b in (False, True)}
     fp = {b: fonts.pick(st["page"], st["bold_font"] if b else st["font"], letters[b] + " ", b) for b in (False, True)}
     width = lambda r: fp[r[1]][0].text_length(r[0], fontsize=size)
     space = fp[False][0].text_length(" ", fontsize=size)
     squeeze = MIN_SPACE if st["justified"] else 1.0
-    avail = lambda: st["right"] - (st["x_first"] if not lines else st["x_next"])
+    avail = lambda: st["right"] - (x_first if not lines else x_next)
     lines, cur, w = [], [], 0.0
     for word in words:
         ww = sum(width(r) for r in word)
@@ -414,7 +425,7 @@ def _new_lines(text, st, fonts):
         lines.append(cur)
     out = []
     for n, line in enumerate(lines):
-        x0 = st["x_first"] if n == 0 else st["x_next"]
+        x0 = x_first if n == 0 else x_next
         ws = [sum(width(r) for r in word) for word in line]
         gap = space
         if st["justified"] and n < len(lines) - 1 and len(line) > 1:
@@ -478,7 +489,7 @@ def _flow(job, order, texts, changed, st, fonts):
     pi, y, first, out = 0, st["regions"][pages[0]][0], True, []
     for bid in order:
         b = by_id[bid]
-        lines = _new_lines(texts[bid], st, fonts) if bid in changed else _old_lines(b, fonts)
+        lines = _new_lines(texts[bid], st, fonts, b) if bid in changed else _old_lines(b, fonts)
         if lines is None:
             return None
         for n, items in enumerate(lines):
@@ -520,21 +531,24 @@ def _lay_out(jobs, plan, fonts):
     reworded bullet ids that keep their text, order = {job id: its bullet ids as they'll stand}."""
     todo, kept, used = [], [], {}
     for job in jobs:
-        st = _style(job)
         ids = [b["id"] for b in job["bullets"]]
         used[job["id"]] = ids
         fixed = {b["id"] for b in job["bullets"] if b["fixed"]}
         asked = {i for i in ids if plan.get("text", {}).get(i)}
         kept += sorted(asked & fixed)                       # a fixed bullet's text never changes
         changed = asked - fixed
+        if fixed == set(ids):
+            continue                                        # nothing in this job may be redrawn
+        st = _style(job)
         own = {b["id"]: b["text"] for b in job["bullets"]}
         texts = {**own, **{i: plan["text"][i] for i in changed}}
         if fixed:
             # a job with a fixed bullet stays where it is and its fixed bullets aren't touched: a rewording of another
-            # bullet there is used only if it keeps exactly its number of lines (it's redrawn on them)
+            # bullet there is used only if it keeps exactly its number of lines (it's redrawn on them, from where its
+            # own text starts)
             for b in job["bullets"]:
                 if b["id"] in changed:
-                    new = _new_lines(texts[b["id"]], st, fonts)
+                    new = _new_lines(texts[b["id"]], st, fonts, b)
                     if new and len(new) == len(b["lines"]):
                         todo.append(([b], [(l["page"], l["spans"][0]["origin"][1], items, b if n == 0 else None)
                                            for n, (l, items) in enumerate(zip(b["lines"], new))]))
@@ -603,6 +617,48 @@ def _disturbed(doc, before, drawn):
     return bad
 
 
+def _glyph_box(x0, x1, y, size):
+    """A sign's box from its advance and baseline, set like a drawn line's (_draw), so the two compare."""
+    return _fitz().Rect(x0, y - 0.75 * size, x1, y + 0.25 * size)
+
+
+def _sign_at(b):
+    """Where bullet b's sign is in the PDF: (page, box)."""
+    m = b["mark"]
+    if m["kind"] in ("circle", "rect"):
+        return m["page"], _fitz().Rect(m["rect"])
+    cs = [m["char"]] if m["kind"] == "lead" else [c for c in m["span"]["chars"] if not c["c"].isspace()]
+    box = _glyph_box(min(c["bbox"][0] for c in cs), max(c["bbox"][2] for c in cs), cs[0]["origin"][1], m["span"]["size"])
+    return m.get("page", b["lines"][0]["page"]), box
+
+
+def _signs(jobs, todo):
+    """Each job's signs of the bullets that stay where they are: {job id: ([its bullet ids], [(page, box, bullet id,
+    a drawn dot that must still be there)])}. _draw adds the signs it draws."""
+    erased = {b["id"] for bullets, _ in todo for b in bullets}
+    return {j["id"]: ([b["id"] for b in j["bullets"]],
+                      [(*_sign_at(b), b["id"], b["mark"]["kind"] in ("circle", "rect"))
+                       for b in j["bullets"] if b["mark"] and b["id"] not in erased]) for j in jobs}
+
+
+def _signs_hit(doc, drawn, signs):
+    """Signs a drawn line of their job lies on (0.3 pt of touching allowed), and drawn dots left alone that are gone or
+    moved. key() ignores "•" and "-", so the read-back can't see a sign printed over a word. Signs that are text are
+    words, so _disturbed already checks the ones left alone are still there."""
+    bad, art = [], {}
+    for ids, boxes in signs.values():
+        rects = [(p, r) for i in ids for p, r in drawn.get(i, [])]
+        for p, box, bid, dot in boxes:
+            if any(q == p and (box + (0.3, 0.3, -0.3, -0.3)).intersects(r) for q, r in rects):
+                bad.append(f"text over the sign of {bid}")
+            if dot:
+                if p not in art:
+                    art[p] = [dr["rect"] for dr in doc[p].get_drawings() if dr.get("fill")]
+                if not any(max(abs(a - c) for a, c in zip(box, r)) <= 1.0 for r in art[p]):
+                    bad.append(f"lost the sign of {bid}")
+    return bad
+
+
 def _erase(doc, todo):
     """Erase the bullets about to be redrawn: drawn dot signs first (and only the line art they cover whole), then the
     text in thin bands that leave all line art alone, so underlines and rules in bullet lines survive. Links that
@@ -662,16 +718,17 @@ def _sign(page, b, dy, fonts, put):
     """Draw bullet b's sign moved down by dy, keeping its glyph: the PDF's own font (the standard Symbol font built in,
     when the PDF didn't embed it), else DejaVu Sans, each only if the sign reads back as itself, else (for a round
     sign) a dot of about its size, else the Symbol font's bullet. A typed sign ("- ") is text like the rest of its
-    line, drawn as fonts.pick has it."""
+    line, drawn as fonts.pick has it. -> the box it was drawn in (_glyph_box for text)."""
     fitz = _fitz()
     m, l0 = b["mark"], b["lines"][0]
     if m["kind"] == "circle":
         r = fitz.Rect(m["rect"]) + (0, dy, 0, dy)
         page.draw_circle((r.x0 + r.width / 2, r.y0 + r.height / 2), r.width / 2, color=None, fill=m["fill"])
-        return
+        return r
     if m["kind"] == "rect":
-        page.draw_rect(fitz.Rect(m["rect"]) + (0, dy, 0, dy), color=None, fill=m["fill"])
-        return
+        r = fitz.Rect(m["rect"]) + (0, dy, 0, dy)
+        page.draw_rect(r, color=None, fill=m["fill"])
+        return r
     s, pg = m["span"], m.get("page", l0["page"])
     if m["kind"] == "lead":
         ch = m["char"]
@@ -684,23 +741,26 @@ def _sign(page, b, dy, fonts, put):
         symbol = (fitz.Font("symb"), None, "symb") if family(s["font"]).lower() == "symbol" else None
         ways = [fonts.own(pg, s["font"], t, sign=True), symbol, fonts.installed(FALLBACK, False, t)]
     f = next((w for w in ways if w and _reads_back(w, t, fonts.reads)), None)
-    if f:
-        put(page, ch["origin"][0], ch["origin"][1] + dy, t, f, s["size"], s["color"])
-    elif set(t) <= ROUND:
+    x, y, size = ch["origin"][0], ch["origin"][1] + dy, s["size"]
+    if not f and set(t) <= ROUND:
         # a bullet's dot is about two thirds of its advance wide and sits about a third of the size above the line
         bb = fitz.Rect(ch["bbox"])
-        d = min(0.7 * bb.width, 0.45 * s["size"])
-        page.draw_circle((bb.x0 + bb.width / 2, ch["origin"][1] + dy - 0.32 * s["size"]), d / 2, color=None,
-                         fill=fitz.sRGB_to_pdf(s["color"]))
-    else:
-        put(page, ch["origin"][0], ch["origin"][1] + dy, "•", (fitz.Font("symb"), None, "symb"), s["size"], s["color"])
+        d = min(0.7 * bb.width, 0.45 * size)
+        c = fitz.Point(bb.x0 + bb.width / 2, y - 0.32 * size)
+        page.draw_circle(c, d / 2, color=None, fill=fitz.sRGB_to_pdf(s["color"]))
+        return fitz.Rect(c.x - d / 2, c.y - d / 2, c.x + d / 2, c.y + d / 2)
+    if not f:
+        t, f = "•", (fitz.Font("symb"), None, "symb")
+    put(page, x, y, t, f, size, s["color"])
+    return _glyph_box(x, x + f[0].text_length(t, fontsize=size), y, size)
 
 
-def _draw(doc, todo, fonts):
-    """Draw each flow: its words, and each bullet's sign moved with its first line. -> (drawn, names of the fonts
-    inserted): drawn = {bullet id: [(page, rect)] of its drawn lines}."""
+def _draw(doc, todo, fonts, signs):
+    """Draw each flow: its words, and each bullet's sign moved with its first line (added to signs, see _signs). ->
+    (drawn, names of the fonts inserted): drawn = {bullet id: [(page, rect)] of its drawn lines}."""
     fitz = _fitz()
     inserted, drawn = set(), {}
+    job_of = {i: j for j, (ids, _) in signs.items() for i in ids}
 
     def put(page, x, y, t, f, size, color, sx=1.0):
         if f[1] and (page.number, f[2]) not in inserted:
@@ -720,15 +780,17 @@ def _draw(doc, todo, fonts):
                 size = max(i[3] for i in items)
                 drawn.setdefault(current["id"], []).append((pno, fitz.Rect(x0 - 0.5, y - 0.75 * size, x1 + 0.5, y + 0.25 * size)))
             if b and b["mark"]:
-                _sign(page, b, y - b["lines"][0]["spans"][0]["origin"][1], fonts, put)
+                box = _sign(page, b, y - b["lines"][0]["spans"][0]["origin"][1], fonts, put)
+                signs[job_of[b["id"]]][1].append((pno, box, b["id"], False))
             for x, t, f, size, color, sx in items:
                 put(page, x, y, t, f, size, color, sx)
     return drawn, {name for _, name in inserted}
 
 
 def _render(path, pieces, plan, allow_embedded):
-    """Draw the plan into a fresh copy of the PDF. -> (doc, todo, kept, drawn, order, before): todo, kept and order
-    as _lay_out has them, drawn as _draw has it, before = the words left alone (_untouched)."""
+    """Draw the plan into a fresh copy of the PDF. -> (doc, todo, kept, drawn, order, before, signs): todo, kept and
+    order as _lay_out has them, drawn as _draw has it, before = the words left alone (_untouched), signs = every
+    job's signs as they stand now (_signs)."""
     fitz = _fitz()
     doc = fitz.open(path)
     try:
@@ -739,22 +801,22 @@ def _render(path, pieces, plan, allow_embedded):
             for b in bullets:
                 if b["mark"] and b["mark"].get("span"):     # read each sign's font now: erasing can drop it
                     fonts._own(b["mark"].get("page", b["lines"][0]["page"]), b["mark"]["span"]["font"])
-        before = _untouched(doc, todo)
+        before, signs = _untouched(doc, todo), _signs(jobs, todo)
         _erase(doc, todo)
-        drawn, inserted = _draw(doc, todo, fonts)
+        drawn, inserted = _draw(doc, todo, fonts, signs)
         doc.subset_fonts()
         _fix_tounicode(doc, inserted)
-        return doc, todo, kept, drawn, order, before
+        return doc, todo, kept, drawn, order, before, signs
     except Exception:
         doc.close()                                 # Windows keeps an open file locked
         raise
 
 
-def _wrong(doc, todo, kept, drawn, plan, links_before, before):
+def _wrong(doc, todo, kept, drawn, plan, links_before, before, signs):
     """What doesn't read back as it should: each redrawn bullet whose words, read from where they were drawn, aren't
-    exactly its text's words (so two words glued together or one split apart count), "links" if one was lost, and
-    each word outside the redrawn bullets that's gone, moved or drawn over (_disturbed). Clip rects make this
-    independent of reading order, so two-column resumes check right too."""
+    exactly its text's words (so two words glued together or one split apart count), "links" if one was lost, each
+    word outside the redrawn bullets that's gone, moved or drawn over (_disturbed), and each sign drawn over or lost
+    (_signs_hit). Clip rects make this independent of reading order, so two-column resumes check right too."""
     bad = []
     for bullets, _ in todo:
         for b in bullets:
@@ -767,7 +829,7 @@ def _wrong(doc, todo, kept, drawn, plan, links_before, before):
                 bad.append(b["id"])
     if sum(len(p.get_links()) for p in doc) != links_before:
         bad.append("links")
-    return bad + _disturbed(doc, before, drawn)
+    return bad + _disturbed(doc, before, drawn) + _signs_hit(doc, drawn, signs)
 
 
 def build(doc, plan, folder, base):
@@ -779,9 +841,9 @@ def build(doc, plan, folder, base):
         links_before = sum(len(p.get_links()) for p in d)
     bad = []
     for allow in (True, False):
-        out, todo, kept, drawn, order, before = _render(doc["_path"], doc["_pieces"], plan, allow)
+        out, todo, kept, drawn, order, before, signs = _render(doc["_path"], doc["_pieces"], plan, allow)
         try:
-            bad = _wrong(out, todo, kept, drawn, plan, links_before, before)
+            bad = _wrong(out, todo, kept, drawn, plan, links_before, before, signs)
             if not bad:
                 folder = Path(folder)
                 folder.mkdir(parents=True, exist_ok=True)

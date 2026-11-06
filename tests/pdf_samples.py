@@ -50,7 +50,7 @@ def _one_name(doc):
 
 
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
-         lead_in=False, font_file=None, rule=False):
+         lead_in=False, font_file=None, rule=False, intro=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file).
@@ -62,7 +62,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     lead_in: the first bullet starts with a bold blue word.
     font_file: (regular, bold) TrueType files embedded whole for the bullets, with a correct text layer (as Word
     writes it).
-    rule: a thin line through the middle of the second job's first bullet line (a strike-through or a table rule)."""
+    rule: a thin line through the middle of the second job's first bullet line (a strike-through or a table rule).
+    intro: the first job's first bullet is a paragraph without a sign, set at x=50 (left of the signs at 52)."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -99,7 +100,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                 if lead_in and (ji, bi, n) == (0, 0, 0):
                     line = line.replace("Built", "##Built##", 1)
                 x = X_TEXT
-                if n == 0:
+                if intro and (ji, bi) == (0, 0):
+                    x = 50.0
+                elif n == 0:
                     if sign == "circle":
                         page.draw_circle((X_SIGN + 1.6, y - 3.2), 1.6, color=None, fill=(0, 0, 0))
                     elif sign == "typed":
