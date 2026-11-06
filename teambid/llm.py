@@ -30,9 +30,9 @@ def provider(prefer="auto"):
     return None
 
 
-def _call(system, user, max_tokens=1500, model=None):
-    r = requests.post(API, timeout=120, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
-                                                 "content-type": "application/json"},
+def _call(system, user, max_tokens=1500, model=None, timeout=120):
+    r = requests.post(API, timeout=timeout, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
+                                                     "content-type": "application/json"},
                       json={"model": model or config.MODEL, "max_tokens": max_tokens, "system": system,
                             "messages": [{"role": "user", "content": user}]})
     r.raise_for_status()
@@ -118,23 +118,31 @@ def guard(new, draft, profile, company="", jd_text=""):
     return problems
 
 
-def refine_profile(raw_text, profile):
-    """Ask Claude to fix company/title/date/bullet splits. -> (roles or None, message). Only structure changes are accepted."""
+READ_RULES = (
+    "You read one resume and return its structure as JSON. Copy every string EXACTLY as it appears in the resume text: "
+    "same words, punctuation, capitals and numbers. Join words that a line break split, but never reword, shorten, merge, "
+    "split, add or drop anything.\n"
+    "headline: the title line under the name (\"\" if there is none). summary: the whole profile or summary paragraph "
+    "(\"\" if none). jobs: every work-experience entry (full-time, part-time, contract, consulting), in the order they "
+    "appear, each with title, company, location (\"\" if none), start and end as YYYY-MM (end \"Present\" for a current "
+    "job, YYYY-01 when only the year is given) and bullets: every bullet under that job, in order. skills: each labeled "
+    "line of the skills section as {label, items} with the items split at the commas ([] when the skills aren't labeled "
+    "lines).\n"
+    "Return ONLY JSON: {\"headline\": \"...\", \"summary\": \"...\", \"jobs\": [{\"title\": \"...\", \"company\": \"...\", "
+    "\"location\": \"...\", \"start\": \"YYYY-MM\", \"end\": \"YYYY-MM or Present\", \"bullets\": [\"...\"]}], "
+    "\"skills\": [{\"label\": \"...\", \"items\": [\"...\"]}]}")
+
+
+def read_resume(text, model=None):
+    """Claude reads the whole resume once (at upload) and returns its structure. -> (dict or None, note).
+    keep_style.confirm() then keeps only the strings that really are in the text."""
     if not available():
-        return None, "no API key"
-    system = ("You fix resume parsing. Return ONLY JSON with key 'roles': a list of {company, title, location, start (YYYY-MM), "
-              "end (YYYY-MM or Present), bullets: [exact bullet text]}. Copy text exactly from the resume. Never add or reword facts.")
+        return None, "no Claude API key"
     try:
-        out = _call(system, f"RESUME TEXT:\n{raw_text[:15000]}\n\nCURRENT PARSE:\n{json.dumps(profile.get('roles', []))[:8000]}", 4000)
-        data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))
-        roles = data.get("roles", [])
-        src = re.sub(r"\s+", " ", raw_text)
-        ok = all(re.sub(r"\s+", " ", b)[:40] in src for r in roles for b in r.get("bullets", []))
-        if not roles or not ok:
-            return None, "model output changed bullet text; kept the original parse"
-        return roles, "refined"
+        out = _call(READ_RULES, f"RESUME TEXT:\n{text[:60000]}", 16000, model or MODELS["sonnet"][0], timeout=300)
+        return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "read by Claude"
     except Exception as e:
-        return None, f"API error: {e}"
+        return None, f"Claude reading skipped: {e}"
 
 
 LETTER_RULES = ("You edit cover letters. Rules: 150-250 words, 3-4 short paragraphs, plain US English, contractions OK. "
@@ -255,6 +263,16 @@ def _bullet_ok(new, old, have):
     return not gained and 0.7 <= len(new) / max(1, len(old)) <= 1.3
 
 
+def _summary_ok(new, old, profile, lo=0.6, hi=1.4):
+    """A reworded summary keeps to the resume's numbers and tools, avoids the banned words and stays about as long."""
+    have = set(profile.get("skills", {}).get("all", []))
+    raw = profile.get("raw_text", "") + " " + old
+    return bool(new and new != old and all(n in raw for n in _numbers(new))
+                and not [s for s in SK.find(new) if s not in have]
+                and not any(re.search(rf"\b{re.escape(w)}\b", new.lower()) for w in writing.BANNED)
+                and lo <= len(new) / max(1, len(old)) <= hi)
+
+
 def rewrite_resume(spec, profile, jd_text, model=None):
     """Claude rewords the chosen bullets + summary toward the job post. Each change must pass _bullet_ok; the rest stay
     verbatim. Accepted rewordings are recorded in spec['rewritten'] (new -> original) for validate(). -> (spec, note)."""
@@ -281,11 +299,57 @@ def rewrite_resume(spec, profile, jd_text, model=None):
                 spec["rewritten"][new] = b
                 took += 1
     s_new, s_old = str(data.get("summary", "")).strip(), spec.get("summary", "")
-    raw = profile.get("raw_text", "") + " " + s_old
-    if (s_new and s_new != s_old and all(n in raw for n in _numbers(s_new))
-            and not [s for s in SK.find(s_new) if s not in have]
-            and not any(re.search(rf"\b{re.escape(w)}\b", s_new.lower()) for w in writing.BANNED)
-            and 0.6 <= len(s_new) / max(1, len(s_old)) <= 1.4):
+    if _summary_ok(s_new, s_old, profile):
         spec["summary"] = s_new
         took += 1
     return spec, f"Claude reworded {took} of {len(ids) + 1} lines toward the job post (each kept its numbers and facts)"
+
+
+TAILOR_RULES = (
+    "You are a senior engineering recruiter tailoring one candidate's resume to one job post. You edit the text inside "
+    "their own resume file, so the layout stays theirs. You get their headline, summary, every bullet of every job "
+    "(each with an ID) and their skills lines. Make a hiring manager for THIS job see the match in a 6-second skim.\n"
+    "Bullets: past-tense action verb first, then what was built or changed, then the result. Use the job post's own "
+    "term when the bullet truly shows it. Lead with the part that matters most to this job. One or two job terms per "
+    "bullet at most, never stuff keywords. Each bullet stays within 10% longer or 25% shorter than its original. Words "
+    "wrapped in ** are bold in the file: you may bold tool or skill names the same way, only in bullets that already "
+    "use **. Bullets marked (fixed) can move but keep their text. If a bullet is already strong for this job, return "
+    "it unchanged.\n"
+    "order: for every job, list ALL of its bullet IDs exactly once, the most relevant to this job first.\n"
+    "headline: the job post's title when the candidate has held that kind of role at that level, else their own "
+    "headline, in the same capital-letter style as the original. Never a higher level (lead, staff, principal, "
+    "manager, architect, head) than a title they have held.\n"
+    "summary: the same facts, aimed at this job's main need, about the same length.\n"
+    "skills: every line with exactly the same items, the ones this job asks for first. skill_lines: every line ID "
+    "once, the lines this job cares about first.\n"
+    "Hard rules: keep every number exactly as written. Keep the same facts, scope and seniority (no 'led' if they "
+    "'helped'). Never add a tool, skill, company, metric or result that isn't in the original. No em dashes, no "
+    "semicolons, no first person.\n"
+    "Never use these words: " + ", ".join(sorted(writing.BANNED)) + ".\n"
+    "Return ONLY JSON: {\"headline\": \"...\", \"summary\": \"...\", \"bullets\": {\"<id>\": \"...\"}, "
+    "\"order\": {\"<job id>\": [\"<bullet id>\", ...]}, \"skills\": {\"<line id>\": [\"...\"]}, "
+    "\"skill_lines\": [\"<line id>\", ...]}")
+
+
+def tailor_in_place(doc, jd_text, model=None):
+    """Claude rewrites and reorders the pieces of the member's own file (keep_style doc) for one job post.
+    -> (reply dict or None, note). keep_style.check() decides what of it is used."""
+    if not available():
+        return None, "no Claude API key"
+    lines = [f"JOB POST:\n{jd_text[:12000]}", ""]
+    if doc.get("headline"):
+        lines.append(f"HEADLINE: {doc['headline']['text']}")
+    if doc.get("summary"):
+        lines.append(f"SUMMARY{' (fixed)' if doc['summary']['fixed'] else ''}: {doc['summary']['text']}")
+    lines.append("\nJOBS:")
+    for j in doc["jobs"]:
+        lines.append(f"{j['id']}: {j['title']} at {j['company']} ({j['start']} - {j['end']})")
+        lines += [f"  {b['id']}{' (fixed)' if b['fixed'] else ''}: {b['text']}" for b in j["bullets"]]
+    if doc.get("skills"):
+        lines.append("\nSKILLS:")
+        lines += [f"{l['id']} - {l['label']}: {', '.join(l['items'])}" for l in doc["skills"]]
+    try:
+        out = _call(TAILOR_RULES, "\n".join(lines), 8000, model, timeout=300)
+        return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "ok"
+    except Exception as e:
+        return None, f"Claude resume step skipped: {e}"

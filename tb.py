@@ -1,7 +1,7 @@
 """TeamBid command line.
 
   python tb.py ui [--port 8765]                     start the web app (http://localhost:8765)
-  python tb.py add "Full Name" resume.pdf [--email x] [--llm]   onboard a member (parse, audit, vault)
+  python tb.py add "Full Name" resume.pdf [--email x] [--no-llm]   onboard a member (parse, audit, vault)
   python tb.py members                              list members with level, lanes, audit score, new matches
   python tb.py audit <member>                       resume audit with the fix list
   python tb.py vault <member>                       rebuild the member's vault
@@ -89,7 +89,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="tb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd")
     s = sub.add_parser("ui"); s.add_argument("--port", type=int, default=8765); s.add_argument("--host", default="127.0.0.1")
-    s = sub.add_parser("add"); s.add_argument("name"); s.add_argument("resume"); s.add_argument("--email"); s.add_argument("--llm", action="store_true")
+    s = sub.add_parser("add"); s.add_argument("name"); s.add_argument("resume"); s.add_argument("--email"); s.add_argument("--no-llm", action="store_true")
     sub.add_parser("members")
     s = sub.add_parser("audit"); s.add_argument("member")
     s = sub.add_parser("vault"); s.add_argument("member")
@@ -142,7 +142,7 @@ def _run(a, ap):
         from teambid import server
         server.serve(a.host, a.port)
     elif a.cmd == "add":
-        r = service.onboard(a.name, resume_path=a.resume, email=a.email, use_llm=a.llm)
+        r = service.onboard(a.name, resume_path=a.resume, email=a.email, use_llm=not a.no_llm)
         p = r["profile"]
         print(f"added {a.name} ({r['slug']}): {len(p['roles'])} roles, {p['years_experience']} yrs, level {p['level']}, lanes {', '.join(p['lanes'])}")
         print(f"resume audit {r['vault']['audit']['score']}/100. Vault: {r['vault']['folder']}")
@@ -160,7 +160,10 @@ def _run(a, ap):
         with storage.connect() as con:
             slugs = [m["slug"] for m in storage.members(con)] if a.member == "all" else [a.member]
         for sl in slugs:
-            print(service.reparse(sl))
+            try:
+                print(service.reparse(sl))
+            except Exception as e:           # one member's file that can't be read must not stop the rest
+                print(f"{sl}: failed: {e}")
     elif a.cmd == "vault":
         with storage.connect() as con:
             print(vault.build(con, storage.member(con, a.member))["folder"])
