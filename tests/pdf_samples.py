@@ -27,16 +27,21 @@ BLUE = (0.1, 0.3, 0.8)
 
 
 def _runs(page, x, y, text, faces, size=10):
-    """Draw text from (x, y): **bold**, //italic// and ##bold blue## runs; a run without marks is ONE insert_text."""
-    bold = italic = blue = False
-    for part in re.split(r"(\*\*|//|##)", text):
-        if part in ("**", "//", "##"):
+    """Draw text from (x, y): **bold**, //italic//, ##bold blue## and %%letter-spaced%% runs (each letter 1.2 pt
+    apart: more than a tenth of the size, less than the gap MuPDF reads as a space); a run without marks is ONE
+    insert_text."""
+    bold = italic = blue = tracked = False
+    for part in re.split(r"(\*\*|//|##|%%)", text):
+        if part in ("**", "//", "##", "%%"):
             bold, italic, blue = bold ^ (part == "**"), italic ^ (part == "//"), blue ^ (part == "##")
+            tracked ^= part == "%%"
             continue
         if part:
             name, font = faces["bold" if bold or blue else "italic" if italic else "body"]
-            page.insert_text((x, y), part, fontname=name, fontsize=size, color=BLUE if blue else (0, 0, 0))
-            x += font.text_length(part, fontsize=size)
+            for t in part if tracked else [part]:
+                page.insert_text((x, y), t, fontname=name, fontsize=size, color=BLUE if blue else (0, 0, 0))
+                x += font.text_length(t, fontsize=size) + (1.2 if tracked else 0)
+            x -= 1.2 if tracked else 0
 
 
 def _one_name(doc):
@@ -50,7 +55,7 @@ def _one_name(doc):
 
 
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
-         lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False):
+         lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file).
@@ -64,7 +69,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     writes it).
     rule: a thin line through the middle of the second job's first bullet line (a strike-through or a table rule).
     intro: the first job's first bullet is a paragraph without a sign, set at x=50 (left of the signs at 52).
-    space_in_bold: the space before a bold word is drawn in the bold run (" Python"), as some exporters write it."""
+    space_in_bold: the space before a bold word is drawn in the bold run (" Python"), as some exporters write it.
+    underline: a line 3 pt under the baseline of the second job's first bullet's last line (below that line's box).
+    tracked: "public" in the first job's third bullet is letter-spaced (each letter set on its own)."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -100,6 +107,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     line = line.replace("public", "//public//")
                 if lead_in and (ji, bi, n) == (0, 0, 0):
                     line = line.replace("Built", "##Built##", 1)
+                if tracked and (ji, bi, n) == (0, 2, 0):
+                    line = line.replace("public", "%%public%%")
                 if space_in_bold:
                     line = line.replace(" **", "** ")      # "in **Python** and" -> "in", " Python", " and"
                 x = X_TEXT
@@ -121,6 +130,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                                           "uri": "https://example.com/airflow"})
                     if rule and (ji, bi) == (1, 0):
                         page.draw_line((X_TEXT, y - 3), (X_TEXT + 60, y - 3), color=(0, 0, 0), width=0.5)
+                if underline and (ji, bi, n) == (1, 0, 1):
+                    page.draw_line((X_TEXT, y + 3), (X_TEXT + 30, y + 3), color=(0, 0, 0), width=0.5)
                 _runs(page, x, y, line, faces)
                 y += p
             y += gap - p

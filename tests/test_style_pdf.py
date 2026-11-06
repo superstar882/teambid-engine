@@ -256,7 +256,7 @@ class Build(unittest.TestCase):
                     if not c["c"].isspace() and (nxt is None or nxt["c"].isspace()):
                         ends.append(c["bbox"][2])
             self.assertEqual(len(ends), len(items))
-            for (x, t, f, size, color, sx), end in zip(items, ends):
+            for (x, t, f, size, color, sx, _), end in zip(items, ends):
                 self.assertLessEqual(sx, 1.15)
                 self.assertLessEqual(x + f[0].text_length(t, fontsize=size) * sx, end + 0.01, t)
 
@@ -450,6 +450,12 @@ class Build(unittest.TestCase):
         self.assertLess(first(ws, "Moved"), first(ws, "Added"))
         self.assertAlmostEqual(rules[0].y0, first(ws, "Moved")[1] + 7, delta=3)      # still through its own line
 
+    def test_an_underline_below_the_lines_box_pins_its_job_too(self):
+        with fitz.open(PS.make(str(Path(tempfile.mkdtemp()) / "in.pdf"), underline=True)) as d:
+            self.assertEqual([b["fixed"] for b in style_pdf.read(d, PS.PIECES)[1]["bullets"]], [True, False])
+        f = self.build({"order": {"r1": ["r1b1", "r1b0"]}, "text": {}}, underline=True)
+        self.assertEqual(f["order"]["r1"], ["r1b0", "r1b1"])
+
     def test_a_failing_render_closes_the_file(self):
         opened, real = [], fitz.open
 
@@ -616,6 +622,22 @@ class OwnFont(unittest.TestCase):
         self.assertIn("→", ws)
         self.assertIn("≈", ws)
         self.assertIn("zero", ws)
+
+
+    @unittest.skipUnless(FONT_FILES, "no TrueType font to embed here")
+    def test_a_letter_spaced_word_stays_one_word(self):
+        # its letters are set one by one, apart; no space goes between them
+        tmp = Path(tempfile.mkdtemp())
+        src = PS.make(str(tmp / "in.pdf"), font_file=FONT_FILES, tracked=True)
+        squash = lambda name: re.sub(r"[^a-z]", "", style_pdf.family(name).lower())
+        own = {squash(s["font"]) for s in spans(src) if "onboarding" in s["text"]}.pop()
+        with mock.patch.object(style_pdf, "system_font", return_value=None):
+            f = style_pdf.build(style_pdf.find(src, PS.PIECES), {"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}},
+                                tmp, "out")
+        ws = words(f["pdf"])
+        self.assertIn("public", [w for _, _, w in ws])
+        self.assertLess(first(ws, "Wrote"), first(ws, "Built"))
+        self.assertTrue(all(squash(s["font"]).startswith(own) for s in spans(f["pdf"]) if "ubli" in s["text"]))
 
 
 class OnlineFonts(unittest.TestCase):
