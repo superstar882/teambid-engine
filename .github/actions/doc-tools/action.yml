@@ -14,6 +14,16 @@ runs:
         # style_tex must still see the sandbox on rather than silently building a member's upload on the bare runner
         echo "TEAMBID_LATEX_SANDBOX=docker" >> "$GITHUB_ENV"
 
+    - name: Fonts for members' own PDFs
+      shell: bash
+      run: |
+        # a reworded bullet in a member's PDF is drawn in the PDF's own font when possible, else in this family or its
+        # metric-compatible stand-in (Calibri -> Carlito, Arial/Helvetica -> Liberation Sans, ...); DejaVu covers ≈ → €.
+        # Best-effort: a failed apt update (a mirror down) mustn't stop the action, LaTeX and the documents still build
+        { sudo apt-get update -qq && sudo apt-get install -y -qq fonts-crosextra-carlito fonts-crosextra-caladea \
+            fonts-liberation fonts-roboto fonts-inter fonts-open-sans fonts-lato fonts-dejavu-core; } \
+          || echo "fonts didn't install this run; reworded bullets fall back to DejaVu Sans"
+
     - name: This month
       id: month
       shell: bash
