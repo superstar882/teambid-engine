@@ -79,7 +79,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     blank: a lone space at the foot of the page, written right after the first job's last line (no letters, no place).
     subhead: a project heading inside the first job, between its first and second bullets.
     mailto: where the header's email link goes (an old address, say: the text still shows dana@example.com).
-    subhead_page: the first job's second bullet starts a new page under a project heading at the top of it.
+    subhead_page: the first job's second bullet starts a new page under a project heading at the top of it, larger
+    than the bullets' text ("same": the same size; "indent": the same size where the bullets' wrapped lines start).
     labels: project labels in the left margin beside the first job's first and third bullets' first lines; "two"
     puts each label's dates on a line under it.
     sidebar: a column of text in the left margin all along the first job, in its own line spacing (not labels).
@@ -121,7 +122,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                 y += gap
             if subhead_page and (ji, bi) == (0, 1):
                 page, y = new_page(), 60.0
-                page.insert_text((50, y), "Payments platform", fontname="hebo", fontsize=10)
+                page.insert_text((X_TEXT if subhead_page == "indent" else 50, y), "Payments platform", fontname="hebo",
+                                 fontsize=11.5 if subhead_page is True else 10)
                 y += gap
             for n, line in enumerate(lines):
                 if y > BOTTOM:

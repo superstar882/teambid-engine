@@ -320,9 +320,20 @@ class Build(unittest.TestCase):
         ws = words(f["pdf"])
         self.assertAlmostEqual(first(ws, "Docs")[1], first(ws, "Wrote")[1], delta=2.5)
 
-    def test_a_sidebar_isnt_a_label(self):
+    def test_text_left_of_a_bullet_keeps_it_in_place(self):
+        # a sidebar can't be told from labels for sure, so text beside a bullet's first line keeps that bullet where
+        # it is (splitting a job's runs is always safe)
         f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}}, sidebar=True)
-        self.assertEqual(f["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
+        with fitz.open(PS.make(str(Path(tempfile.mkdtemp()) / "in.pdf"), sidebar=True)) as d:
+            runs = style_pdf._runs(style_pdf.read(d, PS.PIECES)[0])
+        self.assertGreater(len(runs), 1)
+        self.assertEqual(sorted(f["order"]["r0"]), ["r0b0", "r0b1", "r0b2"])
+
+    def test_a_heading_atop_the_next_page_ends_the_bullet_before_it_only_left_of_the_indent(self):
+        # set where the bullets' wrapped lines start, an all-bold rest of a sentence would look just like it
+        for kind, fixed in (("same", False), ("indent", True)):
+            with fitz.open(PS.make(str(Path(tempfile.mkdtemp()) / "in.pdf"), subhead_page=kind)) as d:
+                self.assertEqual(style_pdf.read(d, PS.PIECES)[0]["bullets"][0]["fixed"], fixed, kind)
 
     def test_a_lost_word_names_every_bullet_erased_beside_it(self):
         with fitz.open() as d:
