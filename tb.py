@@ -160,7 +160,10 @@ def _run(a, ap):
         with storage.connect() as con:
             slugs = [m["slug"] for m in storage.members(con)] if a.member == "all" else [a.member]
         for sl in slugs:
-            print(service.reparse(sl))
+            try:
+                print(service.reparse(sl))
+            except Exception as e:           # one member's file that can't be read must not stop the rest
+                print(f"{sl}: failed: {e}")
     elif a.cmd == "vault":
         with storage.connect() as con:
             print(vault.build(con, storage.member(con, a.member))["folder"])

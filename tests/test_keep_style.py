@@ -14,7 +14,7 @@ os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 
 import fitz  # noqa: E402
 
-from teambid import config, keep_style, llm, local_ai, resume_parse, service, style_tex, tailor  # noqa: E402
+from teambid import config, keep_style, llm, local_ai, resume_parse, service, storage, style_tex, tailor  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
 
 local_ai.DISABLED = True
@@ -75,6 +75,16 @@ class Confirm(unittest.TestCase):
         r2["skills"][0]["items"] = ["Go", "Python", "SQL", "C#"]      # same items, wrong order: not really that line
         self.assertEqual([l["label"] for l in keep_style.confirm(r2, S.SAMPLE_TEXT)[0]["skills"]], ["Cloud & Data"])
 
+    def test_malformed_fields_are_skipped_not_fatal(self):
+        for r in ({"jobs": 3}, {"jobs": [{"bullets": 5}]}, {"skills": 7}, {"skills": [{"label": "X", "items": 9}]},
+                  {**reading(), "skills": 7}, {**reading(), "skills": [{"label": "X", "items": 9}]}):
+            keep_style.confirm(r, S.SAMPLE_TEXT)                      # no TypeError
+        self.assertEqual(keep_style.confirm({**reading(), "skills": 7}, S.SAMPLE_TEXT)[0]["skills"], [])
+
+    def test_a_failing_reading_is_skipped(self):
+        with mock.patch.object(llm, "read_resume", side_effect=RuntimeError("boom")):
+            self.assertEqual(keep_style.read(S.SAMPLE_TEXT), (None, "Claude reading skipped: boom"))
+
 
 class ApplyToProfile(unittest.TestCase):
     def test_replaces_jobs_and_works_out_years_again(self):
@@ -87,6 +97,15 @@ class ApplyToProfile(unittest.TestCase):
         self.assertTrue(any("40" in m for m in profile["metrics"]))
         self.assertGreater(profile["years_experience"], 5)
         self.assertEqual(profile["headline"], "SENIOR BACKEND ENGINEER")
+
+    def test_written_out_dates_are_read(self):
+        pieces = reading()
+        pieces["jobs"][0]["start"], pieces["jobs"][1]["end"] = "March 2022", "June 2023"
+        profile = resume_parse.parse(S.SAMPLE_TEXT)
+        profile["raw_text"] = S.SAMPLE_TEXT
+        keep_style.apply_to_profile(profile, pieces)
+        self.assertEqual(profile["roles"][0]["start"], "2022-03")
+        self.assertEqual((profile["roles"][1]["end"], profile["roles"][1]["current"]), ("2023-06", False))
 
 
 class Onboard(TempWorkspace):
@@ -116,6 +135,73 @@ class Onboard(TempWorkspace):
         with mock.patch.object(llm, "available", return_value=False):
             r = service.onboard("Dana Three", resume_path=self._src())
         self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
+
+    def test_a_malformed_reading_keeps_the_rule_based_parse(self):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=({"jobs": [{"bullets": 5}], "skills": 7}, "read")):
+            r = service.onboard("Dana Four", resume_path=self._src())
+        self.assertFalse((config.member_dir(r["slug"]) / "resume" / "pieces.json").exists())
+        rule_based = resume_parse.parse_file(self._src())["roles"]
+        self.assertEqual([x["company"] for x in r["profile"]["roles"]], [x["company"] for x in rule_based])
+        self.assertEqual(r["llm"], "no job bullets found in the resume")
+
+    def test_a_tex_that_wont_build_leaves_nothing_behind(self):
+        src = Path(tempfile.mkdtemp()) / "dana.tex"
+        src.write_text(S.SAMPLE, encoding="utf-8")
+        boom = lambda: mock.patch.object(style_tex, "compile_tex", side_effect=ValueError("LaTeX error: boom"))
+        with boom(), mock.patch.object(llm, "available", return_value=False):
+            with self.assertRaises(ValueError) as ctx:
+                service.onboard("Dana Broken", resume_path=src)
+        self.assertIn("upload its PDF instead", str(ctx.exception))
+        self.assertFalse((config.MEMBERS / storage.slugify("Dana Broken")).exists())
+        with mock.patch.object(llm, "available", return_value=False):      # a member already there keeps their files
+            slug = service.onboard("Dana Kept", resume_path=self._src())["slug"]
+        with boom(), mock.patch.object(llm, "available", return_value=False):
+            with self.assertRaises(ValueError):
+                service.onboard("Dana Kept", resume_path=src)
+        self.assertEqual([f.name for f in (config.member_dir(slug) / "resume").iterdir()], ["dana.txt"])
+
+
+class LeftoverFiles(TempWorkspace):
+    """A .tex left from an earlier upload never beats the resume the member uploaded last."""
+    def test_only_the_stored_file_is_tailored(self):
+        folder = config.member_dir("dana-left") / "resume"
+        (folder / "new.pdf").write_bytes(b"%PDF-1.4")
+        (folder / "old.tex").write_text(S.SAMPLE, encoding="utf-8")
+        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.pdf"}
+        with mock.patch.object(llm, "available", return_value=False), \
+             mock.patch.object(llm, "read_resume", return_value=(None, "no")):
+            self.assertIsNone(keep_style.source_file("dana-left", member))
+            self.assertEqual(keep_style.tailor("dana-left", member, {}, {}, "", None, ".", "b"), {})
+        windows = {"resume_file": r"C:\TeamBid\workspace\members\dana-left\resume\old.tex"}     # saved on the PC
+        self.assertEqual(keep_style.source_file("dana-left", windows), folder / "old.tex")
+
+    def test_reparse_reads_the_stored_file(self):
+        src = Path(tempfile.mkdtemp()) / "dana.txt"
+        src.write_text(S.SAMPLE_TEXT, encoding="utf-8")
+        with mock.patch.object(llm, "available", return_value=False):
+            slug = service.onboard("Dana Again", resume_path=src)["slug"]
+        (config.member_dir(slug) / "resume" / "old.tex").write_text(S.SAMPLE, encoding="utf-8")
+        with mock.patch.object(style_tex, "compile_tex", side_effect=ValueError("LaTeX error: boom")), \
+             mock.patch.object(llm, "available", return_value=False):
+            service.reparse(slug)
+        with storage.connect() as con:
+            self.assertEqual(Path(storage.member(con, slug)["resume_file"]).name, "dana.txt")
+
+
+class ReparseAll(TempWorkspace):
+    def test_one_failing_member_doesnt_stop_the_rest(self):
+        import argparse
+        import contextlib
+        import io
+        import tb
+        out = io.StringIO()
+        with mock.patch.object(storage, "members", return_value=[{"slug": "ann"}, {"slug": "bob"}]), \
+             mock.patch.object(service, "reparse", side_effect=lambda sl: {"slug": sl} if sl == "bob" else 1 / 0), \
+             contextlib.redirect_stdout(out):
+            tb._run(argparse.Namespace(cmd="reparse", member="all"), None)
+        self.assertIn("ann: failed: division by zero", out.getvalue())
+        self.assertIn("{'slug': 'bob'}", out.getvalue())
 
 
 class ReadPrompt(unittest.TestCase):
@@ -176,6 +262,15 @@ class Checks(unittest.TestCase):
                     "Built a payments API in Python, FastAPI and Kafka that handles 2M requests a day."):
             self.assertNotIn("r0b0", self.plan(bullets={"r0b0": bad})["text"], bad)
         self.assertNotIn("r0b2", self.plan(bullets={"r0b2": "Wrote the public API docs for all 12 endpoints."})["text"])
+
+    def test_characters_latex_may_not_know_keep_the_original(self):
+        ok = "Built a payments API in **Python** and **FastAPI** handling 2M requests a day."
+        self.assertEqual(self.plan(bullets={"r0b0": ok})["text"]["r0b0"], ok)
+        for bad in (ok.replace(" handling", " → handling"), ok.replace("Built a", "Built​ a")):
+            self.assertNotIn("r0b0", self.plan(bullets={"r0b0": bad})["text"], bad)
+        self.assertIsNone(self.plan(headline="Senior Python Engineer →")["headline"])
+        summary = "Backend engineer with **7+ years** building Go and Python services for logistics and payments."
+        self.assertIsNone(self.plan(summary=summary.replace(" for ", " → "))["summary"])
 
     def test_bold_only_on_tools_and_only_where_the_original_had_bold(self):
         got = self.plan(bullets={"r0b0": "Built a **payments** API in **Python** and FastAPI handling 2M requests a day."})
@@ -256,6 +351,20 @@ class PageGuard(unittest.TestCase):
         handler.build.return_value = {"pages": 2}
         with self.assertRaises(ValueError):
             keep_style._build(handler, {"pages": 1, "jobs": [], "summary": None}, {"text": {}, "summary": None}, Path("."), "x")
+
+    def test_a_fallback_leaves_no_tailored_file_behind(self):
+        folder = Path(tempfile.mkdtemp())
+
+        def build(d, p, f, b):
+            (f / f"{b}.pdf").write_bytes(b"%PDF-1.4")
+            (f / f"{b}.tex").write_text("x", encoding="utf-8")
+            return {"pdf": str(f / f"{b}.pdf"), "source": str(f / f"{b}.tex"), "pages": 2}
+        handler = mock.Mock()
+        handler.build.side_effect = build
+        with self.assertRaises(ValueError):
+            keep_style._build(handler, {"pages": 1, "jobs": [], "summary": None}, {"text": {}, "summary": None},
+                              folder, "x")
+        self.assertEqual(list(folder.iterdir()), [])
 
 
 class ApplyWithTex(TempWorkspace):

@@ -9,7 +9,7 @@ import datetime as dt
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from . import config, llm, resume_parse, style_tex
 from . import skills as SK
@@ -34,6 +34,11 @@ def _follows(hay, keys, start, gap=3):
     return True
 
 
+def _list(v):
+    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
+    return v if isinstance(v, list) else []
+
+
 def confirm(reading, text):
     """Keep only what was copied word for word from the resume text (line breaks, hyphen splits, dash and quote styles
     ignored); bullets must also come in reading order. -> (pieces or None, note)."""
@@ -45,11 +50,11 @@ def confirm(reading, text):
         return hay.find(k, start) if len(k) >= shortest else -1
 
     jobs, total, missed, pos = [], 0, 0, 0
-    for j in reading.get("jobs") or []:
+    for j in _list(reading.get("jobs")):
         if not isinstance(j, dict):
             continue
         kept = []
-        for b in j.get("bullets") or []:
+        for b in _list(j.get("bullets")):
             b = str(b).strip()
             total += 1
             i = at(b, pos)
@@ -65,11 +70,11 @@ def confirm(reading, text):
     if missed > MAX_MISSED * total:
         return None, f"{missed} of {total} bullets weren't word for word in the resume"
     skills = []
-    for line in reading.get("skills") or []:
+    for line in _list(reading.get("skills")):
         if not isinstance(line, dict):
             continue
         label = str(line.get("label") or "").strip()
-        items = [str(x).strip() for x in line.get("items") or [] if str(x).strip()]
+        items = [str(x).strip() for x in _list(line.get("items")) if str(x).strip()]
         lk, item_keys = key(label), [key(x) for x in items]
         # the label's own key can also show up earlier (e.g. in the summary), so try every occurrence; a line only
         # counts when, right after one of them, its items chain in order (a short invented item can't just be a
@@ -84,11 +89,15 @@ def confirm(reading, text):
 
 
 def read(text):
-    """Claude reads the resume text -> (confirmed pieces or None, note)."""
-    data, note = llm.read_resume(text)
-    if not data:
-        return None, note
-    return confirm(data, text)
+    """Claude reads the resume text -> (confirmed pieces or None, note). Any failure here only skips the reading: the
+    upload goes on with the rule-based parse."""
+    try:
+        data, note = llm.read_resume(text)
+        if not data:
+            return None, note
+        return confirm(data, text)
+    except Exception as e:
+        return None, f"Claude reading skipped: {e}"
 
 
 def pieces_from_profile(profile):
@@ -99,14 +108,24 @@ def pieces_from_profile(profile):
                       "bullets": [b["text"] for b in r.get("bullets", [])]} for r in profile.get("roles", [])]}
 
 
+def _ym(value, end=False):
+    """A date as the resume writes it ('2022-04', 'June 2023', '04/2022', '2022') -> 'YYYY-MM', else '' (like
+    admin._ym). Without this a job ending 'June 2023' would count as running to today."""
+    v = str(value or "").strip()
+    if YM.fullmatch(v):
+        return v
+    d = None if re.fullmatch(resume_parse.NOW, v, re.I) else resume_parse.parse_date(v, end=end)
+    return f"{d[0]:04d}-{d[1]:02d}" if d else ""
+
+
 def apply_to_profile(profile, pieces):
     """Claude's confirmed reading replaces the rule-based jobs, headline and summary; years, level and lanes are worked
     out again from it."""
     today = dt.date.today()
     roles = []
     for j in pieces.get("jobs", []):
-        start = j["start"] if YM.fullmatch(j["start"]) else ""
-        end = "Present" if re.fullmatch(r"(?i)present|current|now", j["end"]) else (j["end"] if YM.fullmatch(j["end"]) else "")
+        start = _ym(j["start"])
+        end = "Present" if re.fullmatch(resume_parse.NOW, j["end"], re.I) else _ym(j["end"], end=True)
         a = tuple(int(x) for x in start.split("-")) if start else None
         b = (today.year, today.month) if end == "Present" else (tuple(int(x) for x in end.split("-")) if end else None)
         r = {"company": j["company"], "title": j["title"], "location": j["location"], "start": start, "end": end,
@@ -163,11 +182,17 @@ def clean_bold(new, old):
                    for i, p in enumerate(new.split("**")))
 
 
+def _chars_ok(new, old):
+    """Every character is printable ASCII or one the original already has. pdflatex can fail on one it doesn't know
+    (an arrow, an emoji, a zero-width space), and that would send the whole resume to RenderCV."""
+    return all(" " <= c <= "~" or c in old for c in new)
+
+
 def _bullet_new(new, old, have):
     """Claude's rewording of one bullet if it passes the fact checks and the length limits, else None."""
     new = clean_bold(new, old)
     n, o = new.replace("**", ""), old.replace("**", "")
-    ok = llm._bullet_ok(n, o, have) and LENGTH[0] <= len(n) / max(1, len(o)) <= LENGTH[1]
+    ok = _chars_ok(n, o) and llm._bullet_ok(n, o, have) and LENGTH[0] <= len(n) / max(1, len(o)) <= LENGTH[1]
     return new if ok else None
 
 
@@ -175,7 +200,7 @@ def headline_ok(new, old, profile, job_title):
     """The new headline in the original's capital-letter style, or None. Its words must come from titles the member
     held or the job's title, with no level above one they held and no tool they don't list."""
     new = re.sub(r"\s+", " ", re.sub(r"[\\`<>{}*]", "", str(new or ""))).strip()
-    if not new or key(new) == key(old) or len(new) > max(60, 1.5 * len(old)):
+    if not new or key(new) == key(old) or len(new) > max(60, 1.5 * len(old)) or not _chars_ok(new, old):
         return None
     held = " ".join(r.get("title", "") for r in profile.get("roles", [])) + " " + old
     pool = set(re.findall(r"[a-z0-9.+#]+", (held + " " + job_title).lower()))
@@ -209,11 +234,6 @@ def default_plan(doc, jd):
     return plan
 
 
-def _list(v):
-    """v if it's a list, else [] (a malformed reply field is "no answer", not a crash)."""
-    return v if isinstance(v, list) else []
-
-
 def check(doc, reply, profile, jd):
     """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
     that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
@@ -233,7 +253,8 @@ def check(doc, reply, profile, jd):
     s = doc.get("summary")
     if s and not s["fixed"]:
         new = clean_bold(reply.get("summary"), s["text"])
-        if llm._summary_ok(new.replace("**", ""), s["text"].replace("**", ""), profile, *LENGTH):
+        n, o = new.replace("**", ""), s["text"].replace("**", "")
+        if _chars_ok(n, o) and llm._summary_ok(n, o, profile, *LENGTH):
             plan["summary"] = new
     h = doc.get("headline")
     if h and not h["fixed"]:
@@ -253,13 +274,11 @@ HANDLERS = {".tex": style_tex}        # .docx and PDF handlers come in parts 2 a
 
 
 def source_file(slug, member):
-    """The member's own resume file a handler can edit, or None (today's RenderCV resume is used then)."""
-    folder = config.member_dir(slug) / "resume"
-    stored = Path((member or {}).get("resume_file") or "")
-    if stored.suffix.lower() in HANDLERS and (folder / stored.name).exists():    # the stored path may be another PC's
-        return folder / stored.name
-    found = sorted(f for f in folder.iterdir() if f.suffix.lower() in HANDLERS)
-    return found[0] if found else None
+    """The member's own resume file a handler can edit, or None (today's RenderCV resume is used then). Only the file
+    they uploaded last: a .tex left from an earlier upload must never beat their current resume."""
+    # the stored path may be another computer's (PC vs cloud): only its name counts, split at either slash
+    f = config.member_dir(slug) / "resume" / PureWindowsPath(str((member or {}).get("resume_file") or "")).name
+    return f if f.suffix.lower() in HANDLERS and f.is_file() else None
 
 
 def pieces_for(slug, profile, src):
@@ -296,6 +315,9 @@ def _build(handler, doc, plan, folder, base):
             plan["summary"] = None
         else:
             del plan["text"][worst]
+    for k in ("pdf", "source"):          # the RenderCV resume is used instead: no stale tailored file next to it
+        if files.get(k):
+            Path(files[k]).unlink(missing_ok=True)
     raise ValueError(f"the tailored file has {files['pages']} pages, the original {doc['pages']}")
 
 
