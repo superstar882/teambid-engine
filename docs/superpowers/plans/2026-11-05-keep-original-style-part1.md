@@ -32,7 +32,7 @@
   - Run `-no-shell-escape -interaction=nonstopmode -halt-on-error` with the environment variables `openin_any=p` and `openout_any=p`.
   - Run in a temporary folder.
   - Each run has a 60 s limit.
-  - In the cloud (`TEAMBID_LATEX_SANDBOX=docker`, set by `doc-tools`), run it in a throwaway Docker container that sees only TeX (read-only) and the build folder, with no network: `openin_any=p` doesn't stop `\input` of an absolute path (the online test showed it).
+  - In the cloud (`TEAMBID_LATEX_SANDBOX=docker`, set by `doc-tools`), run it in a throwaway Docker container that sees only TeX (read-only) and the build folder, with no network: `openin_any=p` doesn't stop `\input` of an absolute path (the online test showed it). Set `PATH` to include TeX's bin directory so helper programs like `mktexpk` can be found.
 - **Claude calls:**
   - Reading uses `llm.MODELS["sonnet"][0]`, `max_tokens` 16000, timeout 300 s.
   - Tailoring uses the results-page dropdown model, `max_tokens` 8000, timeout 300 s.
