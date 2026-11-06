@@ -281,7 +281,7 @@ def check(doc, reply, profile, jd):
             plan["summary"] = new
     h = doc.get("headline")
     if h and not h["fixed"]:
-        plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, jd.get("title", ""))
+        plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, TL.headline_title(jd.get("title", "")))
     lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
     for line in doc["skills"]:
         got = [str(x).strip() for x in _list(lines.get(line["id"]))]

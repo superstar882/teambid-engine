@@ -180,7 +180,8 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
     groups = [(lab, items) for lab, items, w in sorted(groups, key=lambda g: (g[0] != "Languages", -g[2], order[g[0]]))]
     # headline + summary from the member's own facts
     lane = (profile.get("lanes") or ["backend"])[0]
-    headline = jd.get("title") if _title_fits(profile, jd.get("title", "")) else (profile.get("headline") or SK.LANES[lane][1][0])
+    title = headline_title(jd.get("title", ""))
+    headline = title if _title_fits(profile, title) else (profile.get("headline") or SK.LANES[lane][1][0])
     tech = ("language", "frontend", "backend", "data", "ai", "ml", "cloud", "database", "mobile", "devops")
     proven = sorted([x for x in profile["skills"].get("proven", []) if SK.category(x) in tech], key=lambda x: -_signature(profile, x))
     top = list(dict.fromkeys([x for x in core if x in proven] + proven))[:3]
@@ -198,6 +199,16 @@ def build_resume(profile, jd, max_bullets=(4, 3, 3, 2, 2, 2, 1)):
             "certifications": profile.get("certifications", [])[:4], "awards": profile.get("awards", [])[:3],
             "ranking": "keywords + meaning (local AI)" if sem else "keywords"}
     return spec
+
+
+TAG = re.compile(r"(?i)\[[^\]]*\]|\((?=[^)]*\b(?:remote|hybrid|on-?site|contract|freelance|full[- ]time|part[- ]time|"
+                 r"m/f/d|f/m/d|m/w/d|w/m/d|h/f|f/h|all genders)\b)[^)]*\)")
+
+
+def headline_title(title):
+    """A job post's title as a resume headline: without the post's tags ("[WBG] ...", "... (Remote)", "(m/f/d)")."""
+    t = re.sub(r"\s+", " ", TAG.sub(" ", title or "")).strip(" -–—|,")
+    return t or (title or "").strip()
 
 
 def _title_fits(profile, title):
