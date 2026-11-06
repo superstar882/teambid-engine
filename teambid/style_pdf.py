@@ -19,7 +19,7 @@ from statistics import median
 
 from .style_text import key
 
-BULLETS = set("•●▪◦‣∙·-–—*►➤✓✔○■□➢❖")
+BULLETS = set("•●▪◦‣∙·-–—*►➤✓✔○■□➢❖")
 SANS = re.compile(r"(?i)helvetica|arial|nimbussan|liberationsans|calibri|carlito|roboto|inter|dejavusans|poppins|"
                   r"rubik|opensans|lato|sourcesans|segoe|verdana|tahoma|montserrat|sans")
 LIGATURES = re.compile("[ﬀ-ﬆ]")
