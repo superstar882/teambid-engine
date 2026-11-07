@@ -179,6 +179,119 @@ class Find(unittest.TestCase):
         self.assertEqual(b["piece"], PS.PIECES["jobs"][0]["bullets"][1])
         self.assertIn("**Redis**", b["text"])
 
+    def test_doc_shape_with_headline_summary_and_skills(self):
+        # the shape style_tex gives, so keep_style.check and llm.tailor_in_place read it unchanged; no lines in it
+        doc = style_pdf.find(sample(headline="left", summary=True, skills=True), PS.pieces(True, True, True))
+        self.assertEqual(doc["headline"], {"text": PS.HEADLINE, "fixed": False})
+        self.assertEqual(doc["summary"], {"text": "Backend engineer with eight years of **Python** and Go, building "
+                                                  "payment systems that banks and card networks rely on daily.",
+                                          "fixed": False})
+        self.assertEqual(doc["skills"], [{"id": f"s{n}", "label": label, "items": items, "fixed": False}
+                                         for n, (label, items) in enumerate(PS.SKILLS)])
+        self.assertIs(doc["skills_move"], True)
+        self.assertEqual([b["id"] for j in doc["jobs"] for b in j["bullets"]],
+                         [b["id"] for j in style_pdf.find(sample(), PS.PIECES)["jobs"] for b in j["bullets"]])
+
+
+class TextParts(unittest.TestCase):
+    """A PDF's headline, summary and skill lines, found on whole lines no bullet holds (read_text_parts)."""
+
+    def parts(self, pieces=None, **kw):
+        pieces = pieces or PS.pieces(True, True, True)
+        with fitz.open(sample(**kw)) as d:
+            scan = style_pdf._scan(d)
+            return style_pdf.read_text_parts(d, pieces, style_pdf.read(d, pieces, scan), scan)
+
+    def test_a_left_or_centred_headline_is_found_with_its_alignment(self):
+        for mode in ("left", "center"):
+            h = self.parts(headline=mode)["headline"]
+            self.assertEqual((h["text"], h["align"], h["fixed"], len(h["lines"])), (PS.HEADLINE, mode, False, 1), mode)
+
+    def test_a_headline_in_two_styles_is_fixed(self):
+        h = self.parts(headline="mixed")["headline"]
+        self.assertEqual((h["text"], h["fixed"]), (PS.HEADLINE, True))
+
+    def test_a_right_aligned_headline_is_fixed(self):
+        h = self.parts(headline="right")["headline"]
+        self.assertEqual((h["text"], h["fixed"]), (PS.HEADLINE, True))
+
+    def test_a_headline_is_the_header_line_never_a_jobs_title(self):
+        # a headline that reads like a job's title is the header's line when the header has it; a job's title line is
+        # never taken for one (rewording it would change the member's job history)
+        h = self.parts(pieces=PS.pieces(headline="Senior Backend Engineer"), headline="title")["headline"]
+        self.assertEqual((h["text"], h["lines"][0]["page"], h["lines"][0]["bbox"].y1 < 90),
+                         ("Senior Backend Engineer", 0, True))
+        self.assertIsNone(self.parts(pieces=PS.pieces(headline="Senior Backend Engineer, Northwind Labs"))["headline"])
+
+    def test_a_two_line_summary_is_found_with_its_bold(self):
+        s = self.parts(summary=True)["summary"]
+        self.assertEqual((s["text"], s["fixed"], len(s["lines"])),
+                         ("Backend engineer with eight years of **Python** and Go, building payment systems that banks "
+                          "and card networks rely on daily.", False, 2))
+
+    def test_a_summary_with_an_italic_word_is_fixed(self):
+        self.assertTrue(self.parts(summary="italic")["summary"]["fixed"])
+
+    def test_skill_lines_are_found_in_printed_order_and_may_move(self):
+        got = self.parts(skills=True)
+        self.assertEqual([(l["id"], l["label"], l["items"], l["sep"], l["fixed"], len(l["lines"]))
+                          for l in got["skills"]],
+                         [(f"s{n}", label, items, ", ", False, 1) for n, (label, items) in enumerate(PS.SKILLS)])
+        self.assertIs(got["skills_move"], True)
+
+    def test_skill_lines_are_found_in_printed_order_whatever_the_readings_order(self):
+        pieces = PS.pieces(skills=True)
+        pieces["skills"] = pieces["skills"][::-1]
+        self.assertEqual([l["label"] for l in self.parts(pieces=pieces, skills=True)["skills"]],
+                         [s[0] for s in PS.SKILLS])
+
+    def test_skills_in_drawn_boxes_are_fixed_and_dont_move(self):
+        got = self.parts(skills="chips")
+        self.assertEqual([l["fixed"] for l in got["skills"]], [True, True, True])
+        self.assertIs(got["skills_move"], False)
+
+    def test_items_not_all_set_apart_the_same_way_fix_their_line(self):
+        # read as "Type" and "Script": nothing between those two, ", " between the others
+        pieces = PS.pieces(skills=True)
+        pieces["skills"][0]["items"] = ["Python", "Go", "SQL", "Type", "Script"]
+        got = self.parts(pieces=pieces, skills=True)
+        self.assertEqual(([l["fixed"] for l in got["skills"]], got["skills_move"]), ([True, False, False], False))
+        self.assertEqual(style_pdf._skill_parts("Languages: Python, Go | C++.", "Languages", ["Python", "Go", "C++"]),
+                         ("Languages", ["Python", "Go", "C++"], [", ", " | "]))
+        self.assertIsNone(style_pdf._skill_parts("Languages: Python, Go", "Languages", ["Go", "Python"]))
+
+    def test_lines_with_something_between_them_dont_move(self):
+        # a line between two skill lines that isn't one of them (a skill line the reading left out) stays where it
+        # is, so the lines can't move as one run
+        pieces = PS.pieces(skills=True)
+        del pieces["skills"][1]
+        got = self.parts(pieces=pieces, skills=True)
+        self.assertEqual(([l["label"] for l in got["skills"]], got["skills_move"]), (["Languages", "Cloud"], False))
+
+    def test_pieces_not_in_the_pdf_are_absent(self):
+        none = {"headline": None, "summary": None, "skills": [], "skills_move": False}
+        self.assertEqual(self.parts(), none)
+        self.assertEqual(self.parts(pieces=PS.PIECES, headline="left", summary=True, skills=True), none)
+
+    def test_jobs_from_another_read_of_the_pdf_keep_their_lines(self):
+        # without the scan read used, the bullets' lines are told by where they are: the same parts come out
+        pieces = PS.pieces(True, True, True)
+        pieces["summary"] = PS.PIECES["jobs"][0]["bullets"][0]           # a bullet's text never becomes the summary
+        pdf = sample(headline="left", summary=True, skills=True)
+        with fitz.open(pdf) as d:
+            again = style_pdf.read_text_parts(d, pieces, style_pdf.read(d, pieces))
+        shape = lambda p: (p["headline"] and p["headline"]["text"], p["summary"],
+                           [l["label"] for l in p["skills"]], p["skills_move"])
+        self.assertEqual(shape(again), (PS.HEADLINE, None, [s[0] for s in PS.SKILLS], True))
+        self.assertEqual(shape(self.parts(pieces=pieces, headline="left", summary=True, skills=True)), shape(again))
+
+    def test_bullets_read_the_same_with_these_parts(self):
+        def jobs(pieces, **kw):
+            with fitz.open(sample(**kw)) as d:
+                return [(j["id"], j["reorder"], [(b["id"], b["text"], b["fixed"]) for b in j["bullets"]])
+                        for j in style_pdf.read(d, pieces)]
+        self.assertEqual(jobs(PS.pieces(True, True, True), headline="left", summary=True, skills=True), jobs(PS.PIECES))
+
 
 def words(pdf):
     with fitz.open(pdf) as d:
