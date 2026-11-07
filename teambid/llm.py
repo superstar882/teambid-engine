@@ -311,15 +311,20 @@ TAILOR_RULES = (
     "(each with an ID) and their skills lines. Make a hiring manager for THIS job see the match in a 6-second skim.\n"
     "Bullets: past-tense action verb first, then what was built or changed, then the result. Use the job post's own "
     "term when the bullet truly shows it. Lead with the part that matters most to this job. One or two job terms per "
-    "bullet at most, never stuff keywords. Each bullet stays within 10% longer or 25% shorter than its original. Words "
-    "wrapped in ** are bold in the file: you may bold tool or skill names the same way, only in bullets that already "
-    "use **. Bullets marked (fixed) can move but keep their text. If a bullet is already strong for this job, return "
-    "it unchanged.\n"
+    "bullet at most, never stuff keywords. Return EVERY bullet not marked (fixed) under its ID, reworded toward this "
+    "job; keep a bullet's words only when it already reads as a perfect match for this job. Each bullet stays about "
+    "its original length, best the same or a little shorter: never more than 10% longer or 25% shorter (it must fit "
+    "the same lines in their file). Words wrapped in ** are bold in the file: you may bold tool or skill names the "
+    "same way, only in bullets that already use **. Bullets marked (fixed) can move but keep their text.\n"
     "order: for every job, list ALL of its bullet IDs exactly once, the most relevant to this job first.\n"
     "headline: the job post's title when the candidate has held that kind of role at that level, else their own "
     "headline, in the same capital-letter style as the original. Never a higher level (lead, staff, principal, "
-    "manager, architect, head) than a title they have held.\n"
-    "summary: the same facts, aimed at this job's main need, about the same length.\n"
+    "manager, architect, head) than a title they have held, never a lower level than their own headline, and keep "
+    "every technology their headline names (else keep their headline as it is).\n"
+    "summary: the same facts, aimed at this job's main need, within 10% of its length (best the same or a little "
+    "shorter: it must fit the same lines).\n"
+    "A word broken at a line end in the file shows as \"de- ploying\": always write it whole (\"deploying\", or "
+    "\"database-driven\" for a compound).\n"
     "skills: every line with exactly the same items, the ones this job asks for first. skill_lines: every line ID "
     "once, the lines this job cares about first.\n"
     "Hard rules: keep every number exactly as written. Keep the same facts, scope and seniority (no 'led' if they "
@@ -338,7 +343,7 @@ def tailor_in_place(doc, jd_text, model=None):
         return None, "no Claude API key"
     lines = [f"JOB POST:\n{jd_text[:12000]}", ""]
     if doc.get("headline"):
-        lines.append(f"HEADLINE: {doc['headline']['text']}")
+        lines.append(f"HEADLINE{' (fixed)' if doc['headline']['fixed'] else ''}: {doc['headline']['text']}")
     if doc.get("summary"):
         lines.append(f"SUMMARY{' (fixed)' if doc['summary']['fixed'] else ''}: {doc['summary']['text']}")
     lines.append("\nJOBS:")
@@ -347,7 +352,8 @@ def tailor_in_place(doc, jd_text, model=None):
         lines += [f"  {b['id']}{' (fixed)' if b['fixed'] else ''}: {b['text']}" for b in j["bullets"]]
     if doc.get("skills"):
         lines.append("\nSKILLS:")
-        lines += [f"{l['id']} - {l['label']}: {', '.join(l['items'])}" for l in doc["skills"]]
+        lines += [f"{l['id']}{' (fixed)' if l.get('fixed') else ''} - {l['label']}: {', '.join(l['items'])}"
+                  for l in doc["skills"]]
     try:
         out = _call(TAILOR_RULES, "\n".join(lines), 8000, model, timeout=300)
         return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "ok"

@@ -303,12 +303,31 @@ class Checks(unittest.TestCase):
         for bad in ("Staff Python Engineer", "Senior Rust Engineer", "Principal Engineer"):
             self.assertIsNone(self.plan(headline=bad)["headline"], bad)
 
+    def test_a_headline_never_steps_down(self):
+        # owner, 2026-11-07: not a lower level than the member's own headline, and no technology it names dropped
+        profile = {"roles": [{"title": "Principal DevOps Engineer"}, {"title": "Senior DevOps Engineer"}],
+                   "skills": {"all": [".NET", "Go"]}}
+        ok = lambda new, old, job: keep_style.headline_ok(new, old, profile, job)
+        self.assertIsNone(ok("Senior DevOps Engineer", "Principal DevOps & Cloud Engineer", "Senior DevOps Engineer"))
+        self.assertIsNone(ok("SENIOR DEVOPS ENGINEER", "SENIOR DEVOPS .NET ENGINEER", "DevOps Engineer"))
+        self.assertEqual(ok("Principal DevOps Engineer", "Senior DevOps Engineer", "Principal DevOps Engineer"),
+                         "Principal DevOps Engineer")                                    # the same level or higher
+        self.assertEqual(ok("Senior DevOps .NET Engineer", "Senior .NET Engineer", "Senior DevOps .NET Engineer"),
+                         "Senior DevOps .NET Engineer")                                  # its technology kept
+
     def test_skills_can_only_be_reordered(self):
         p = self.plan(skills={"s0": ["SQL", "C#", "Python", "Go"], "s1": ["AWS", "Docker", "Kubernetes", "Redis", "Airflow"]},
                       skill_lines=["s0", "s1"])
         self.assertEqual(p["skills"]["s0"], ["SQL", "C#", "Python", "Go"])
         self.assertEqual(p["skills"]["s1"], keep_style.default_plan(self.doc, self.jd)["skills"]["s1"])
         self.assertEqual(p["skill_lines"], ["s0", "s1"])
+
+    def test_skill_items_keep_their_printed_spelling(self):
+        # only the order is drawn: Claude's own spelling ("sql", "c#") is no change, and a reorder keeps the printed one
+        same = self.plan(skills={"s0": ["python", "GO", "sql", "c#"]})
+        self.assertEqual(same["skills"]["s0"], ["Python", "Go", "SQL", "C#"])
+        moved = self.plan(skills={"s0": ["sql", "c#", "PYTHON", "go"]})
+        self.assertEqual(moved["skills"]["s0"], ["SQL", "C#", "Python", "Go"])
 
     def test_summary_keeps_its_facts_and_length(self):
         ok = "Backend engineer with **7+ years** building Go and Python services for logistics and payments."
@@ -325,6 +344,59 @@ class Checks(unittest.TestCase):
         self.assertEqual(p["text"]["r0b0"], ok)
 
 
+class ChecksPdfSkills(unittest.TestCase):
+    """A PDF's fixed skill lines (chips) get no planned reorder: only a .tex line is never fixed."""
+    def setUp(self):
+        path = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(path), skills="chips")
+        self.doc = style_pdf.find(str(path), pdf_samples.pieces(skills=True))
+        self.jd = tailor.analyze_jd(JD_TEXT, "Senior Python Engineer", "Acme")
+
+    def test_default_plan_leaves_fixed_skill_lines_as_printed(self):
+        p = keep_style.default_plan(self.doc, self.jd)
+        self.assertEqual(p["skills"], {l["id"]: l["items"] for l in self.doc["skills"]})
+        self.assertEqual(p["skill_lines"], [])
+
+    def test_claudes_reorder_of_a_fixed_line_is_ignored(self):
+        p = keep_style.check(self.doc, {"skills": {"s0": ["Go", "Python", "SQL", "TypeScript"]},
+                                        "skill_lines": ["s2", "s0", "s1"]}, PROFILE, self.jd)
+        self.assertEqual(p["skills"]["s0"], self.doc["skills"][0]["items"])
+        self.assertEqual(p["skill_lines"], [])
+
+
+class ChecksPdfBreaks(unittest.TestCase):
+    """A word a PDF breaks at a line's end reads "night- ly" in the text Claude gets. A rewording that repeats it would
+    show it inside a line (style_pdf would then leave the whole job as printed): only that piece keeps its text."""
+    ECHO = "Moved 30 cron jobs into Airflow, ending missed night- ly runs and cutting manual reruns to zero."
+    OTHER = "Added Go unit tests to 6 backend services, raising coverage to 85% across the shipping platform."
+
+    def setUp(self):
+        path = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(path), broken=True)
+        self.doc = style_pdf.find(str(path), pdf_samples.PIECES)
+        self.jd = tailor.analyze_jd(JD_TEXT, "Senior Python Engineer", "Acme")
+
+    def plan(self, doc=None, **reply):
+        return keep_style.check(doc or self.doc, reply, PROFILE, self.jd)
+
+    def test_a_rewording_that_repeats_a_broken_word_keeps_only_that_bullets_text(self):
+        self.assertIn("night- ly", self.doc["jobs"][1]["bullets"][0]["text"])
+        p = self.plan(order={"r1": ["r1b1", "r1b0"]}, bullets={"r1b0": self.ECHO, "r1b1": self.OTHER})
+        self.assertEqual((p["text"], p["order"]["r1"]), ({"r1b1": self.OTHER}, ["r1b1", "r1b0"]))
+        whole = self.ECHO.replace("night- ly", "nightly")
+        p = self.plan(order={"r1": ["r1b1", "r1b0"]}, bullets={"r1b0": whole, "r1b1": self.OTHER})
+        self.assertEqual((p["text"], p["order"]["r1"]), ({"r1b0": whole, "r1b1": self.OTHER}, ["r1b1", "r1b0"]))
+
+    def test_a_summary_that_repeats_a_broken_word_keeps_its_text(self):
+        doc = dict(self.doc, summary={"fixed": False,
+                                      "text": "Backend engineer with eight years of Python and Go, de- ploying payment "
+                                              "services that banks rely on daily."})
+        echo = "Backend engineer with eight years of Python and Go, de- ploying payment systems banks rely on daily."
+        self.assertIsNone(self.plan(doc, summary=echo)["summary"])
+        whole = echo.replace("de- ploying", "deploying")
+        self.assertEqual(self.plan(doc, summary=whole)["summary"], whole)
+
+
 class TailorPrompt(unittest.TestCase):
     def test_sends_every_piece_with_its_id(self):
         doc = style_tex.locate(S.SAMPLE, S.PIECES)
@@ -334,10 +406,31 @@ class TailorPrompt(unittest.TestCase):
         self.assertEqual(reply, {"bullets": {}})
         system, user, max_tokens, model = call.call_args[0]
         self.assertEqual((system, max_tokens, model), (llm.TAILOR_RULES, 8000, "claude-haiku-5-5"))
+        # every free bullet comes back reworded, sized to fit the same lines (a "return it unchanged" let Claude skip
+        # them all)
+        self.assertIn("Return EVERY bullet not marked (fixed)", system)
+        self.assertNotIn("return it unchanged", system)
         for needle in ("HEADLINE: SENIOR BACKEND ENGINEER", "r0: Senior Backend Engineer at Northwind Labs",
                        "r0b0: Built a payments API in **Python**", "r0b2 (fixed): Wrote the public API docs",
                        "s1 - Cloud & Data: AWS, Docker"):
             self.assertIn(needle, user)
+
+    def test_marks_a_fixed_headline_and_skill_line(self):
+        path = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(path), headline="mixed", skills="chips")
+        doc = style_pdf.find(str(path), pdf_samples.pieces(headline=True, skills=True))
+        self.assertTrue(doc["headline"]["fixed"])
+        self.assertTrue(doc["skills"][0]["fixed"])
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "_call", return_value='Sure: {"bullets": {}}') as call:
+            llm.tailor_in_place(doc, "We need Go.", "claude-haiku-5-5")
+        user = call.call_args[0][1]
+        self.assertIn(f"HEADLINE (fixed): {pdf_samples.HEADLINE}", user)
+        self.assertIn("s0 (fixed) - Languages: Python, Go", user)
+
+    def test_asks_for_words_broken_at_a_line_end_to_be_written_whole(self):
+        # a PDF's text reads such a word "de- ploying"; drawn inside a line it would show so (style_pdf._wrong keeps it)
+        self.assertIn('"de- ploying": always write it whole ("deploying"', llm.TAILOR_RULES)
 
 
 def fake_compile(src, out_dir, name):
@@ -526,6 +619,105 @@ class ApplyWithPdf(TempWorkspace):
         self.assertEqual(r["spec"]["roles"][0]["bullets"][0], pdf_samples.PIECES["jobs"][0]["bullets"][0])
 
 
+class ApplyWithPdfParts(TempWorkspace):
+    """The note and report tell only what the PDF handler really drew of the headline, summary and skills."""
+    NEW_SUMMARY = "Backend engineer with eight years of **Python** and Go, building payment systems banks rely on daily."
+    TOO_LONG_SUMMARY = ("Backend engineer with seven years of **Python** and Go, building payment systems that banks "
+                         "and card networks rely on daily.")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src), headline=True, summary=True, skills=True)
+        reading = json.loads(json.dumps(pdf_samples.pieces(True, True, True)))
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(reading, "read")):
+            cls.slug = service.onboard("Dana Parts", resume_path=src)["slug"]
+
+    def _apply(self, reply):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            return service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+
+    def test_a_new_summary_headline_and_skill_order_are_all_drawn(self):
+        r = self._apply({"headline": "Senior Python Engineer", "summary": self.NEW_SUMMARY,
+                          "skill_lines": ["s2", "s0", "s1"]})
+        self.assertIn("summary reworded", r["resume_ai"])
+        self.assertIn("headline reworded", r["resume_ai"])
+        self.assertIn("skills reordered (3 lines)", r["resume_ai"])
+        import fitz
+        with fitz.open(r["files"]["pdf"]) as d:
+            text = key("".join(p.get_text() for p in d))
+        self.assertIn(key(self.NEW_SUMMARY.replace("**", "")), text)
+        self.assertEqual(r["problems"], [])
+
+    def test_a_summary_too_long_to_fit_is_reported_as_kept(self):
+        r = self._apply({"summary": self.TOO_LONG_SUMMARY,
+                          "order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
+        self.assertIn("the summary kept its text: it didn't fit", r["resume_ai"])
+        self.assertNotIn("summary reworded", r["resume_ai"])
+        self.assertNotIn("redraw cleanly", r["resume_ai"])
+        self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
+
+    def test_a_summary_that_doesnt_redraw_cleanly_is_reported_so(self):
+        real = style_pdf._wrong
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: (["xsb0"] if "xsb0" in a[3] else []) + real(*a)):
+            r = self._apply({"summary": self.NEW_SUMMARY,
+                             "order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
+        self.assertIn("the summary left as printed: it didn't redraw cleanly", r["resume_ai"])
+        self.assertNotIn("didn't fit", r["resume_ai"])
+        self.assertNotIn("summary reworded", r["resume_ai"])
+        self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
+
+    def test_a_headline_its_font_cant_draw_is_reported_so(self):
+        real = style_pdf.build
+
+        def build(doc, plan, folder, base):              # as if the headline's own font lacked a letter of the new one
+            f = real(doc, dict(plan, headline=None), folder, base)
+            return dict(f, parts_kept=dict(f["parts_kept"], headline="font"))
+        with mock.patch.object(style_pdf, "build", build):
+            r = self._apply({"headline": "Senior Python Engineer"})
+        self.assertIn("the headline kept its text: its font can't draw the new one", r["resume_ai"])
+        self.assertNotIn("headline reworded", r["resume_ai"])
+        self.assertEqual(r["spec"]["headline"], pdf_samples.HEADLINE)
+
+    def test_items_only_spelled_another_way_are_no_change(self):
+        # Claude echoes each line's items in printed order, lower-cased: nothing is drawn for skills, so the note claims
+        # no skills change, and a PDF where nothing else changes gets the tailored template
+        printed = {f"s{i}": list(items) for i, (_, items) in enumerate(pdf_samples.SKILLS)}
+        lower = {sid: [x.lower() for x in items] for sid, items in printed.items()}
+        same = {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}
+        r = self._apply({"order": same, "skills": lower, "skill_lines": ["s0", "s1", "s2"]})
+        self.assertIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
+        r = self._apply({"order": dict(same, r0=["r0b2", "r0b0", "r0b1"]), "skills": lower,
+                         "skill_lines": ["s0", "s1", "s2"]})
+        self.assertIn("order changed in 1 jobs", r["resume_ai"])
+        self.assertNotIn("skills reordered", r["resume_ai"])
+        self.assertEqual(r["spec"]["style"]["plan"]["skills"], printed)
+
+    def test_a_pdf_where_only_the_skills_change_keeps_its_own_style(self):
+        r = self._apply({"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
+        # the job weights (Go, Redis, PostgreSQL) swap Data and Languages; Cloud (no match) stays put
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
+        self.assertNotIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
+        self.assertIn("Resume style: original (.pdf)", r["resume_ai"])
+        self.assertNotIn("docx", r["files"])
+
+    def test_a_block_move_counts_only_the_lines_that_changed_position(self):
+        # s0 (Languages) and s1 (Data) swap places, each keeping its own printed items; s2 (Cloud) keeps both its
+        # position and its items, so only 2 of the 3 lines really changed
+        reply = {"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]},
+                 "skills": {f"s{i}": list(items) for i, (_, items) in enumerate(pdf_samples.SKILLS)},
+                 "skill_lines": ["s1", "s0", "s2"]}
+        r = self._apply(reply)
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
+        self.assertNotIn("(3 lines)", r["resume_ai"])
+        self.assertEqual(r["problems"], [])
+
+
 class ApplyWithRulePieces(TempWorkspace):
     """Pieces Claude didn't read (the rule-based parse, or saved before pieces said who read them) are only reordered
     in a PDF: a rule-based "bullet" can be half of one, and Claude isn't asked to reword it."""
@@ -556,6 +748,36 @@ class ApplyWithRulePieces(TempWorkspace):
 
     def test_pieces_saved_before_they_said_who_read_them_too(self):
         self._apply(None, "Python Engineer")
+
+
+class ApplyWithRulePiecesSkills(TempWorkspace):
+    """Free (non-fixed) skill lines go through the same parts_kept mapping in the rule-based (no Claude) path:
+    they're still reordered by job weight (default_plan), while the headline and summary stay untouched."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src), headline=True, summary=True, skills=True)
+        with mock.patch.object(llm, "available", return_value=False):
+            cls.slug = service.onboard("Dana Rules Skills", resume_path=src)["slug"]
+        # the rule-based resume parser doesn't read the headline/summary/skills sections the way Claude's reading
+        # does; write the confirmed pieces directly, as pieces_for() would have saved them from a real reading
+        pieces = dict(pdf_samples.pieces(True, True, True), by="rules")
+        keep_style.save_pieces(cls.slug, config.member_dir(cls.slug) / "resume" / "dana.pdf", pieces)
+
+    def test_skills_are_reordered_by_weight_while_headline_and_summary_stay(self):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place") as ask, \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            r = service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+        self.assertFalse(ask.called)                             # Claude is never asked for a rule-based reading
+        self.assertIn("(read without Claude: reordered only)", r["resume_ai"])
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
+        self.assertNotIn("summary reworded", r["resume_ai"])
+        self.assertNotIn("headline reworded", r["resume_ai"])
+        self.assertEqual(r["spec"]["headline"], pdf_samples.HEADLINE)
+        self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
 
 
 if __name__ == "__main__":
