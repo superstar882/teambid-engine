@@ -247,7 +247,20 @@ def headline_ok(new, old, profile, job_title):
     have = set(profile.get("skills", {}).get("all", []))
     if [s for s in SK.find(new) if s not in have]:
         return None
+    # never a step down from the member's own headline (owner, 2026-11-07): not a lower level ("Principal ..." ->
+    # "Senior ..."), and no technology it names dropped ("... .NET DEVELOPER" -> "... DEVELOPER")
+    if _rank(new) < _rank(old) or set(SK.find(old, trusted=True)) - set(SK.find(new, trusted=True)):
+        return None
     return new.upper() if old.isupper() else new
+
+
+RANKS = [(r"intern|trainee", 0), (r"junior|jr|associate|entry", 1), (r"senior|sr", 3), (r"lead|staff|manager", 4),
+         (r"principal|architect", 5), (r"head|director", 6), (r"vp|chief|cto|cio", 7)]
+
+
+def _rank(title):
+    """A title's level: its highest level word, 2 (mid) when it has none."""
+    return max((n for pat, n in RANKS if re.search(rf"(?i)\b({pat})\b", title)), default=2)
 
 
 def default_plan(doc, jd):

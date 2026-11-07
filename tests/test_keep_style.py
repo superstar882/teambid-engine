@@ -303,6 +303,18 @@ class Checks(unittest.TestCase):
         for bad in ("Staff Python Engineer", "Senior Rust Engineer", "Principal Engineer"):
             self.assertIsNone(self.plan(headline=bad)["headline"], bad)
 
+    def test_a_headline_never_steps_down(self):
+        # owner, 2026-11-07: not a lower level than the member's own headline, and no technology it names dropped
+        profile = {"roles": [{"title": "Principal DevOps Engineer"}, {"title": "Senior DevOps Engineer"}],
+                   "skills": {"all": [".NET", "Go"]}}
+        ok = lambda new, old, job: keep_style.headline_ok(new, old, profile, job)
+        self.assertIsNone(ok("Senior DevOps Engineer", "Principal DevOps & Cloud Engineer", "Senior DevOps Engineer"))
+        self.assertIsNone(ok("SENIOR DEVOPS ENGINEER", "SENIOR DEVOPS .NET ENGINEER", "DevOps Engineer"))
+        self.assertEqual(ok("Principal DevOps Engineer", "Senior DevOps Engineer", "Principal DevOps Engineer"),
+                         "Principal DevOps Engineer")                                    # the same level or higher
+        self.assertEqual(ok("Senior DevOps .NET Engineer", "Senior .NET Engineer", "Senior DevOps .NET Engineer"),
+                         "Senior DevOps .NET Engineer")                                  # its technology kept
+
     def test_skills_can_only_be_reordered(self):
         p = self.plan(skills={"s0": ["SQL", "C#", "Python", "Go"], "s1": ["AWS", "Docker", "Kubernetes", "Redis", "Airflow"]},
                       skill_lines=["s0", "s1"])
