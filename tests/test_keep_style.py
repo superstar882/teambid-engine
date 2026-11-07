@@ -354,6 +354,10 @@ class TailorPrompt(unittest.TestCase):
         self.assertEqual(reply, {"bullets": {}})
         system, user, max_tokens, model = call.call_args[0]
         self.assertEqual((system, max_tokens, model), (llm.TAILOR_RULES, 8000, "claude-haiku-5-5"))
+        # every free bullet comes back reworded, sized to fit the same lines (a "return it unchanged" let Claude skip
+        # them all)
+        self.assertIn("Return EVERY bullet not marked (fixed)", system)
+        self.assertNotIn("return it unchanged", system)
         for needle in ("HEADLINE: SENIOR BACKEND ENGINEER", "r0: Senior Backend Engineer at Northwind Labs",
                        "r0b0: Built a payments API in **Python**", "r0b2 (fixed): Wrote the public API docs",
                        "s1 - Cloud & Data: AWS, Docker"):
