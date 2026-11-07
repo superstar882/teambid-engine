@@ -278,6 +278,12 @@ class TextParts(unittest.TestCase):
         got = self.parts(pieces=pieces, skills=True)
         self.assertEqual(([l["label"] for l in got["skills"]], got["skills_move"]), (["Languages", "Cloud"], False))
 
+    def test_lines_with_something_beside_a_row_dont_move(self):
+        # "8 yrs" or a rating bar to the right of a row belongs to that row: moving the lines would leave it behind
+        for kind in ("years", "bar"):
+            got = self.parts(skills=kind)
+            self.assertEqual(([l["fixed"] for l in got["skills"]], got["skills_move"]), ([False] * 3, False), kind)
+
     def test_pieces_not_in_the_pdf_are_absent(self):
         none = {"headline": None, "summary": None, "skills": [], "skills_move": False}
         self.assertEqual(self.parts(), none)
@@ -889,7 +895,8 @@ class BuildParts(unittest.TestCase):
         longest = "Principal Backend Engineer for Payment Platforms and Card Networks"
         long = "Senior Backend Engineer for Payment Platforms"           # fits up to the page's text edge only
         for kw, title in (({"headline": "left"}, longest), ({"headline": "center"}, longest),
-                          ({"headline": "left", "beside": "Remote"}, long)):
+                          ({"headline": "left", "beside": "Remote"}, long),
+                          ({"headline": "left", "badge": "box"}, long), ({"headline": "left", "badge": "photo"}, long)):
             f = self.build({"headline": title}, **kw)
             self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True), kw)
             self.assertEqual(placed(f["pdf"]), placed(self.src), kw)
@@ -974,6 +981,82 @@ class BuildParts(unittest.TestCase):
                 self.build({"summary": NEW_SUMMARY, "headline": "Backend Engineer"}, headline="left", summary=True)
         self.assertEqual(len(calls), 2)
 
+    def test_a_word_broken_at_a_line_end_never_stands_inside_a_line(self):
+        # "pay- ment" as the PDF's text reads a word broken at a line's end: drawn inside a line it reads back (key()
+        # drops the hyphen) but shows "pay- ment"; the summary is kept
+        broken = NEW_SUMMARY.replace("payment", "pay- ment")
+        f = self.build({"summary": broken, "order": {"r0": ["r0b2", "r0b0", "r0b1"]}}, summary=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(f["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
+        r = self.area("summary", wide=True)
+        self.assertEqual(inside(placed(f["pdf"]), r), inside(placed(self.src), r))
+
+    def other(self, maker, plan, **parts):
+        """Build one of pdf_samples' other PDFs (make_sidebar, make_wrap) with only the first job and these parts."""
+        tmp = Path(tempfile.mkdtemp())
+        self.src = maker(str(tmp / "in.pdf"))
+        doc = style_pdf.find(self.src, PS.pieces_of_first_job(**parts))
+        return style_pdf.build(doc, {"order": {}, "text": {}, **plan}, tmp, "out")
+
+    def test_a_headline_in_a_sidebar_stays_inside_it(self):
+        real, seen = style_pdf._wrong, []
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: seen.append(real(*a)) or seen[-1]):
+            f = self.other(PS.make_sidebar, {"headline": "Senior Backend Engineer for Payment Platforms"},
+                           headline=PS.SIDEBAR_HEADLINE)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True))         # white on white past x=200
+        self.assertEqual(seen, [[]])                     # its room ends inside the box: never drawn, nothing to spare
+        self.assertEqual(placed(f["pdf"]), placed(self.src))
+        f = self.other(PS.make_sidebar, {"headline": "Staff Engineer"}, headline=PS.SIDEBAR_HEADLINE)
+        self.assertEqual(f["parts_kept"], self.NONE)
+        got = inside(placed(f["pdf"]), fitz.Rect(0, 68, 595, 84))                # the headline's line
+        self.assertEqual([w[5] for w in got], ["Staff", "Engineer"])
+        self.assertTrue(20 - 0.6 < got[0][1] and got[-1][3] <= 198)
+
+    def test_a_summary_never_runs_onto_the_photo_it_wrapped_around(self):
+        real, seen = style_pdf._wrong, []
+        new = ("Backend engineer with eight years of Python and Go, building payment systems that banks and card "
+               "networks use daily, focused on ledgers, reconciliation and fraud checks for card schemes, and the "
+               "on-call rota that keeps the platform up for partner banks across Europe and the UK all year.")
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: seen.append(real(*a)) or seen[-1]):
+            f = self.other(PS.make_wrap, {"summary": new}, summary=" ".join(PS.WRAP_SUMMARY))
+        self.assertIn("drawn onto art (xsb0)", seen[0])
+        self.assertEqual((f["parts_kept"], seen[-1]), (dict(self.NONE, summary=True), []))
+        self.assertEqual(placed(f["pdf"]), placed(self.src))
+        self.assertEqual(inside(placed(f["pdf"]), PS.WRAP_PHOTO), [])
+
+    def test_skill_lines_with_something_beside_a_row_stay_in_their_rows(self):
+        # "8 yrs" or a rating bar beside the first row belongs to it: the lines don't move, the items still may
+        for kind in ("years", "bar"):
+            f = self.build({"skill_lines": ["s2", "s1", "s0"], "skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}},
+                           skills=kind)
+            self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines=True), kind)
+            row = sorted(inside(placed(f["pdf"]), self.area("s0", wide=True)), key=lambda w: w[1])
+            self.assertEqual(" ".join(w[5] for w in row),
+                             "Languages: TypeScript, SQL, Go, Python" + (" 8 yrs" if kind == "years" else ""), kind)
+            self.assertEqual(self.text_in(f["pdf"], self.area("s2", wide=True)),
+                             "Cloud: AWS, Docker, Kubernetes, Terraform")
+
+    def test_skill_lines_no_flow_fits_keep_their_order_and_reorder_their_items_in_place(self):
+        real = style_pdf._flow
+        no_skills = lambda job, *a, **k: None if job["id"] == "xk" else real(job, *a, **k)
+        with mock.patch.object(style_pdf, "_flow", no_skills):
+            f = self.build({"skill_lines": ["s2", "s1", "s0"],
+                            "skills": {"s1": ["Airflow", "Kafka", "Redis", "PostgreSQL"]}}, skills=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines=True))
+        self.assertEqual([self.text_in(f["pdf"], self.area(f"s{n}", wide=True)) for n in range(3)],
+                         ["Languages: Python, Go, SQL, TypeScript", "Data: Airflow, Kafka, Redis, PostgreSQL",
+                          "Cloud: AWS, Docker, Kubernetes, Terraform"])
+
+    def test_skill_lines_that_dont_read_back_are_left_as_they_were(self):
+        real = style_pdf._wrong
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: (["xkb0"] if "xkb0" in a[3] else []) + real(*a)):
+            f = self.build({"skill_lines": ["s2", "s1", "s0"], "skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]},
+                            "summary": NEW_SUMMARY}, summary=True, skills=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skills=["s0"], skill_lines=True))
+        rows = self.area("s0", wide=True) | self.area("s2", wide=True)
+        self.assertEqual(inside(placed(f["pdf"]), rows), inside(placed(self.src), rows))
+        self.assertEqual(self.text_in(f["pdf"], self.area("summary", wide=True)), NEW_SUMMARY.replace("**", ""))
+
     # --- no change
     def test_a_plan_that_changes_no_part_draws_nothing(self):
         same = {"headline": PS.HEADLINE, "summary": " ".join(PS.SUMMARY),
@@ -1019,6 +1102,41 @@ class Parts(unittest.TestCase):
             self.assertEqual(check(fitz.Rect(49.5, 92.5, 200, 102.5)), ["text over the sign of r0b1"])
             self.assertEqual(check(fitz.Rect(61.5, 92.5, 200, 102.5)), [])           # starts after the sign
             self.assertEqual(check(fitz.Rect(49.5, 103.4, 200, 113.4)), [])          # the next line down
+
+    def test_a_word_broken_at_a_line_end_counts_only_inside_a_line_its_own_lines_didnt_have(self):
+        with fitz.open() as d:
+            pg = d.new_page()
+            for y, text in ((100, "Built the front- and back-end of the app"), (200, "Built the front-"),
+                            (212.5, "and back-end of the app")):
+                pg.insert_text((50, y), text, fontname="helv", fontsize=10)
+            ls = style_pdf._lines(d)
+            check = lambda lines: style_pdf._wrong(
+                d, [([{"id": "r0b0", "text": ls[0]["text"], "fixed": False, "lines": lines, "mark": None}], [])], [],
+                {"r0b0": [(0, ls[0]["bbox"])]}, {}, 0, {}, {})
+            self.assertEqual(check([ls[0]]), [])                  # "front-" stood inside its line: a word of its own
+            self.assertEqual(check(ls[1:]), ["r0b0"])             # it ended a line: "front- and" is a split word now
+
+    def test_text_drawn_onto_art_or_out_of_its_box_counts(self):
+        with fitz.open() as d:
+            pg = d.new_page()
+            pg.draw_rect(fitz.Rect(0, 0, 400, 400), color=None, fill=(0.9, 0.9, 0.9))     # a background
+            pg.draw_rect(fitz.Rect(10, 60, 200, 90), color=None, fill=(0.2, 0.2, 0.3))     # a box around the line
+            pg.insert_image(fitz.Rect(300, 120, 340, 160), pixmap=PS._photo())
+            pg.insert_text((20, 80), "Backend Engineer", fontname="helv", fontsize=11, color=(1, 1, 1))
+            pg.insert_text((20, 140), "Wrote the docs", fontname="helv", fontsize=10)
+            pg.insert_text((20, 152), "Ran the on-call rota and incident reviews for the whole platform team",
+                           fontname="helv", fontsize=10)                           # it runs onto the photo already
+            ls = {l["text"].split()[0]: l for l in style_pdf._lines(d)}
+            line = lambda x0, x1, y, size: fitz.Rect(x0 - 0.5, y - 0.75 * size, x1 + 0.5, y + 0.25 * size)
+            off = lambda bid, lines, r: style_pdf._off_art(d, [([{"id": bid, "lines": lines}], [])], {bid: [(0, r)]})
+            self.assertEqual(off("xhb0", [ls["Backend"]], line(20, 190, 80, 11)), [])           # inside its box
+            self.assertEqual(off("xhb0", [ls["Backend"]], line(20, 260, 80, 11)), ["drawn out of its box (xhb0)"])
+            self.assertEqual(off("xsb0", [ls["Wrote"]], line(20, 290, 140, 10)), [])    # the background holds both
+            self.assertEqual(off("xsb0", [ls["Wrote"]], line(20, 320, 140, 10)), ["drawn onto art (xsb0)"])
+            # a line of its own met the photo, but lower down: that doesn't let another line onto it
+            both = [ls["Wrote"], ls["Ran"]]
+            self.assertEqual(off("xsb0", both, line(20, 320, 140, 10)), ["drawn onto art (xsb0)"])
+            self.assertEqual(off("xsb0", both, line(20, 320, 152, 10)), [])
 
     def test_a_drawn_dot_left_alone_must_still_be_there(self):
         with fitz.open() as d:

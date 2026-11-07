@@ -609,7 +609,7 @@ def read_text_parts(doc, pieces, jobs, scan=None):
     it, one line, and never a job's own title line: each job's title it holds must show again below it (a reading can
     give a job's title as the headline when the header has none; rewording it would change the member's job history).
     Skill lines may move as a whole (skills_move) when two or more are found, none is fixed, they start in one column,
-    and nothing else is between them (_runs)."""
+    nothing else is between them (_runs) and nothing is beside them on their rows (_beside_rows)."""
     lines, drawings, marks = scan or _scan(doc)
     place = lambda l: (l["page"], tuple(l["bbox"]))    # jobs may come from another read of the same PDF
     claimed = {place(l) for j in jobs for b in j["bullets"] for l in b["lines"]}
@@ -667,8 +667,34 @@ def read_text_parts(doc, pieces, jobs, scan=None):
         ordered = sorted(sk, key=lambda l: (l["lines"][0]["page"], l["lines"][0]["bbox"].y0))
         pseudo = {"bullets": [{"id": l["id"], "lines": l["lines"], "mark": None, "fixed": False} for l in ordered],
                   "_lines": lines}
-        out["skills_move"] = len(_runs(pseudo)) == 1
+        out["skills_move"] = len(_runs(pseudo)) == 1 and not _beside_rows(doc, sk, lines, drawings)
     return out
+
+
+def _beside_rows(doc, sk, lines, drawings):
+    """Whether any skill line has something to its right on its own row: text, a drawing or an image level with one
+    of its lines or within the row's height (a level, years, a rating bar). It belongs to the row, so moving the
+    lines would leave it under another one. A column of other text beside them pins them too (the safe side)."""
+    fitz = _fitz()
+    own = {id(l) for s in sk for l in s["lines"]}
+    band = lambda l: (l["spans"][0]["origin"][1] - 0.62 * max(s["size"] for s in l["spans"]),
+                      l["spans"][0]["origin"][1] - 0.08 * max(s["size"] for s in l["spans"]))
+    images = {}
+    for s in sk:
+        start = min(_ink(l)[0] for l in s["lines"])
+        for pno in {l["page"] for l in s["lines"]}:
+            ls = [l for l in s["lines"] if l["page"] == pno]
+            top, bottom = min(l["bbox"].y0 for l in ls), max(l["bbox"].y1 for l in ls)
+            on_row = lambda y0, y1: top <= (y0 + y1) / 2 <= bottom or \
+                any(y0 < band(l)[1] and y1 > band(l)[0] for l in ls)
+            if any(o["page"] == pno and id(o) not in own and o["text"].strip() and _ink(o)[0] > start + 1
+                   and on_row(*band(o)) for o in lines):
+                return True
+            if pno not in images:
+                images[pno] = [fitz.Rect(i["bbox"]) for i in doc[pno].get_image_info()]
+            if any(r.x0 > start + 1 and on_row(r.y0, r.y1) for r in [d["rect"] for d in drawings[pno]] + images[pno]):
+                return True
+    return False
 
 
 def find(path, pieces):
@@ -1013,7 +1039,8 @@ def _headline_flow(doc, b, align, text, fonts, lines, drawings):
     """The new headline on its own line, in its own style: [(page, y, items, b)], or None when it doesn't fit the room
     it has. Left-aligned it starts where its text did, and may run to the page's text edge or to 4 pt before anything
     else on its line to its right (text, a drawing, an image). Centred it keeps its centre and has as much room each
-    way: the page's text, clear of anything else on its line by 4 pt."""
+    way: the page's text, clear of anything else on its line by 4 pt. Either way it stays 2 pt inside every drawing or
+    image behind its whole line (a sidebar, a pill)."""
     fitz = _fitz()
     l = b["lines"][0]
     st = _style({"bullets": [b], "_lines": lines})
@@ -1025,10 +1052,14 @@ def _headline_flow(doc, b, align, text, fonts, lines, drawings):
     page = [o for o in lines if o["page"] == l["page"]]
     lo = min(_ink(o)[0] for o in page if not o["furniture"] and o["text"].strip())
     hi = max(_ink(o)[1] for o in page if not o["furniture"] and o["text"].strip())
-    # what else is on its line: text, and drawings or images that aren't behind the whole line (a background)
-    things = [_ink(o) for o in page if o is not l and key(o["text"]) and on(*band(o))]
+    # what else is on its line: text (a lone "|" too), and drawings or images; one behind the whole line (a sidebar,
+    # a pill, a header band) is a box it must stay inside, 2 pt from its edges
+    things = [_ink(o) for o in page if o is not l and o["text"].strip() and on(*band(o))]
     rects = [dr["rect"] for dr in drawings[l["page"]]] + [fitz.Rect(i["bbox"]) for i in doc[l["page"]].get_image_info()]
-    things += [(r.x0, r.x1) for r in rects if on(r.y0, r.y1) and not (r.x0 <= x0 + 0.5 and r.x1 >= x1 - 0.5)]
+    behind = lambda r: r.x0 <= x0 + 0.5 and r.x1 >= x1 - 0.5
+    things += [(r.x0, r.x1) for r in rects if on(r.y0, r.y1) and not behind(r)]
+    boxes = [r for r in rects if on(r.y0, r.y1) and behind(r)]
+    lo, hi = max([lo] + [r.x0 + 2 for r in boxes]), min([hi] + [r.x1 - 2 for r in boxes])
     if align == "center":
         centre = (x0 + x1) / 2
         if any(a < centre < z for a, z in things):
@@ -1396,26 +1427,83 @@ def _render(path, pieces, plan, allow_embedded):
         raise
 
 
+def _off_art(doc, todo, drawn):
+    """Each redrawn piece now drawn onto art (a photo its summary wrapped around, a rating bar beside a row) or out of
+    a box that held one of its lines (a sidebar, a card), naming it. Art a drawn line meets is fine only when one of
+    the piece's own lines met it too, and either it holds the drawn line (a background) or that line was at the same
+    height (it ran onto it already). Art is every drawing but a sign's dot, and every image; one the size of the page
+    is its background. Lines are compared by their letters' x-height band; the same box on another page (a sidebar on
+    every page) counts as the same art."""
+    fitz = _fitz()
+    art = {}
+
+    def on(p):
+        if p not in art:
+            pg = doc[p]
+            rs = [fitz.Rect(d["rect"]) for d in pg.get_drawings() if not _is_dot(d)]
+            rs += [fitz.Rect(i["bbox"]) for i in pg.get_image_info()]
+            art[p] = [r for r in rs if r.width < 0.9 * pg.rect.width or r.height < 0.9 * pg.rect.height]
+        return art[p]
+    shape = lambda r: tuple(round(v) for v in r)
+    # by coordinates: a rule's box has no height, and Rect.intersects never counts it
+    meets = lambda r, c: r.x0 < c.x1 and r.x1 > c.x0 and r.y0 < c.y1 and r.y1 > c.y0
+    holds = lambda r, c: r.x0 <= c.x0 + 0.5 and r.x1 >= c.x1 - 0.5 and r.y0 <= c.y0 + 0.5 and r.y1 >= c.y1 - 0.5
+    size = lambda l: max(s["size"] for s in l["spans"])
+    was_band = lambda l: fitz.Rect(_ink(l)[0], l["spans"][0]["origin"][1] - 0.62 * size(l), _ink(l)[1],
+                                   l["spans"][0]["origin"][1] - 0.08 * size(l))
+    # a drawn line's rect runs 0.5 pt past its words, from 0.75 of its size above the baseline to 0.25 below (_draw)
+    now_band = lambda r: fitz.Rect(r.x0 + 0.5, r.y1 - 0.87 * r.height, r.x1 - 0.5, r.y1 - 0.33 * r.height)
+    bad = []
+    for bullets, _ in todo:
+        for b in bullets:
+            if b["id"] not in drawn:
+                continue
+            was = [(l["page"], was_band(l)) for l in b["lines"]]
+            met = {shape(r) for p, c in was for r in on(p) if meets(r, c)}
+            held = {shape(r) for p, c in was for r in on(p) if holds(r, c)}
+            level = lambda p, c, a: any(q == p and o.y0 < c.y1 and o.y1 > c.y0 and meets(a, o) for q, o in was)
+            for p, r in drawn[b["id"]]:
+                c = now_band(r)
+                if any(meets(a, c) and not (shape(a) in met and (holds(a, c) or level(p, c, a))) for a in on(p)):
+                    bad.append(f"drawn onto art ({b['id']})")
+                    break
+                if any(not any(shape(a) == s and holds(a, c) for a in on(p)) for s in held):
+                    bad.append(f"drawn out of its box ({b['id']})")
+                    break
+    return bad
+
+
+BROKEN = re.compile(r"\w[-\u2010\u00ad]$")     # a word broken at a line's end: "de-" of "de- ploying"
+
+
 def _wrong(doc, todo, kept, drawn, plan, links_before, before, signs):
     """What doesn't read back as it should: each redrawn bullet (a part's pseudo-bullet too: its text is in plan, see
     _render) whose words, read from where they were drawn, aren't exactly its text's words (so two words glued
-    together or one split apart count), "links" if one was lost, each word outside the redrawn bullets that's gone,
-    moved or drawn over (_disturbed), and each sign drawn over or lost (_signs_hit). Clip rects make this independent
-    of reading order, so two-column resumes check right too."""
+    together or one split apart count), or that holds a word broken at a line's end ("de-" of "de- ploying", as the
+    PDF's text reads) inside a line now: key() can't see the hyphen, the reader can. A word its own lines had inside a
+    line too ("front- and back-end") stays allowed. Also "links" if one was lost, each word outside the redrawn
+    bullets that's gone, moved or drawn over (_disturbed), each sign drawn over or lost (_signs_hit), and each piece
+    drawn onto art or out of its box (_off_art). Clip rects make this independent of reading order, so two-column
+    resumes check right too."""
     bad = []
     for bullets, _ in todo:
         for b in bullets:
             if b["id"] not in drawn:
                 continue
             new = plan.get("text", {}).get(b["id"]) if b["id"] not in kept and not b["fixed"] else None
-            got = [key(w[4]) for p, r in drawn[b["id"]] for w in doc[p].get_text("words", clip=r)]
+            rows = [doc[p].get_text("words", clip=r) for p, r in drawn[b["id"]]]
+            got = [key(w[4]) for row in rows for w in row]
             want = [key(w) for w in _plain((new or b["text"]).replace("**", "")).split()]
-            if [g for g in got if g] != [w for w in want if w]:
+            own = {w for l in b["lines"] for w in l["text"].split()[:-1] if BROKEN.search(w)}
+            inside = [w[4] for row in rows for w in sorted(row, key=lambda w: w[0])[:-1]]
+            broken = any(BROKEN.search(w) and w not in own for w in inside)
+            if [g for g in got if g] != [w for w in want if w] or broken:
                 bad.append(b["id"])
     if sum(len(p.get_links()) for p in doc) != links_before:
         bad.append("links")
     erased = {b["id"]: [(l["page"], l["bbox"]) for l in b["lines"]] for bullets, _ in todo for b in bullets}
-    return bad + _disturbed(doc, before, drawn, erased) + _signs_hit(doc, drawn, signs, erased)
+    return bad + _disturbed(doc, before, drawn, erased) + _signs_hit(doc, drawn, signs, erased) + \
+        _off_art(doc, todo, drawn)
 
 
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")

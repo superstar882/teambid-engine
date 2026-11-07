@@ -339,6 +339,10 @@ class TailorPrompt(unittest.TestCase):
                        "s1 - Cloud & Data: AWS, Docker"):
             self.assertIn(needle, user)
 
+    def test_asks_for_words_broken_at_a_line_end_to_be_written_whole(self):
+        # a PDF's text reads such a word "de- ploying"; drawn inside a line it would show so (style_pdf._wrong keeps it)
+        self.assertIn('"de- ploying": always write it whole ("deploying"', llm.TAILOR_RULES)
+
 
 def fake_compile(src, out_dir, name):
     """Stands in for pdflatex: a one-page A4 PDF holding the text of the source, line by line."""
