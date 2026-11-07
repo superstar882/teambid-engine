@@ -320,6 +320,8 @@ TAILOR_RULES = (
     "headline, in the same capital-letter style as the original. Never a higher level (lead, staff, principal, "
     "manager, architect, head) than a title they have held.\n"
     "summary: the same facts, aimed at this job's main need, about the same length.\n"
+    "A word broken at a line end in the file shows as \"de- ploying\": always write it whole (\"deploying\", or "
+    "\"database-driven\" for a compound).\n"
     "skills: every line with exactly the same items, the ones this job asks for first. skill_lines: every line ID "
     "once, the lines this job cares about first.\n"
     "Hard rules: keep every number exactly as written. Keep the same facts, scope and seniority (no 'led' if they "
