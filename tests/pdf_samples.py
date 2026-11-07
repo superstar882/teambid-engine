@@ -79,7 +79,7 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
          blank=False, subhead=False, mailto="mailto:dana@example.com", subhead_page=False, labels=False, sidebar=False,
          bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None, topline=None,
-         beside=None, badge=None):
+         beside=None, badge=None, headline_font=False, broken=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -115,10 +115,14 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     italics.
     skills: a Skills heading and SKILLS as "**Label:** a, b, c" lines under Education; 'chips': each item in a small
     drawn box; 'gap': two spaces after each label; 'years' / 'bar': "8 yrs" / a rating bar at x=420 beside the first
-    line (on its row).
+    line (on its row); 'heading': the Skills heading in the labels' style (bold, body size) a row's pitch above the
+    first line, which has no label of its own; 'plain': the first line's label not bold (in its items' style).
     topline: a line of small text at the top of page 1, above the name (a sentence that holds the headline's words).
     beside: a word on the headline's line, at x=290 in 10 pt (other text on its line, to its right).
-    badge: 'box' (a filled box) or 'photo' (an image) at x=290 to 320 on the headline's line."""
+    badge: 'box' (a filled box) or 'photo' (an image) at x=290 to 320 on the headline's line.
+    headline_font: the headline in font_file's regular font (embedded, as the bullets' text is) instead of Helvetica.
+    broken: the second job's first bullet breaks "nightly" at its first line's end ("night-" / "ly runs"), as a PDF's
+    text then reads it: "night- ly"."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -177,6 +181,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     line = line.replace("Built", "##Built##", 1)
                 if tracked and (ji, bi, n) == (0, 2, 0):
                     line = line.replace("public", "%%public%%")
+                if broken and (ji, bi) == (1, 0):
+                    line = line.replace("nightly", "night-") if n == 0 else "ly " + line
                 if bold_start and (ji, bi, n) == (0, 0, 1):
                     line = "**2M requests a day for card and bank** transfers." if bold_start == "most" else                         line.replace("2M", "**2M**", 1)
                 if space_in_bold:
@@ -227,11 +233,15 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     if skills:
         if y > BOTTOM - 100:
             page, y = new_page(), 20.0
-        page.insert_text((50, y + 50), "Skills", fontname="hebo", fontsize=13)
+        heading = skills == "heading"
+        page.insert_text((50, y + 56 if heading else y + 50), "Skills", fontname="hebo", fontsize=10 if heading else 13)
         body, bold = faces["body"][1], faces["bold"][1]
         for n, (label, items) in enumerate(SKILLS):
             sy = y + 70 + 14 * n
-            _runs(page, 50, sy, f"**{label}:**{'  ' if skills == 'gap' else ' '}" + ", ".join(items), faces)
+            head = "" if heading and n == 0 else f"**{label}:**{'  ' if skills == 'gap' else ' '}"
+            if skills == "plain" and n == 0:
+                head = head.replace("**", "")
+            _runs(page, 50, sy, head + ", ".join(items), faces)
             if n == 0 and skills == "years":
                 page.insert_text((420, sy), "8 yrs", fontname="helv", fontsize=10)
             if n == 0 and skills == "bar":
@@ -245,12 +255,13 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     if headline:                              # last: a centred one is centred over all the text on its page
         hp = page if page.number == 0 else doc[0]
         text = PIECES["jobs"][0]["title"] if headline == "title" else HEADLINE
-        x, ws, width = 50.0, hp.get_text("words"), fitz.Font("helv").text_length(text, fontsize=12)
+        heads = faces if headline_font else {"body": ("helv", fitz.Font("helv")), "bold": ("hebo", fitz.Font("hebo")),
+                                             "italic": faces["italic"]}
+        x, ws, width = 50.0, hp.get_text("words"), heads["body"][1].text_length(text, fontsize=12)
         if headline == "center":
             x = (min(w[0] for w in ws) + max(w[2] for w in ws) - width) / 2
         elif headline == "right":
             x = max(w[2] for w in ws) - width
-        heads = {"body": ("helv", fitz.Font("helv")), "bold": ("hebo", fitz.Font("hebo")), "italic": faces["italic"]}
         _runs(hp, x, 78, text.replace("Payment", "**Payment**") if headline == "mixed" else text, heads, size=12)
         if beside:
             hp.insert_text((290, 78), beside, fontname="helv", fontsize=10)

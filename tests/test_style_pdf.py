@@ -284,6 +284,19 @@ class TextParts(unittest.TestCase):
             got = self.parts(skills=kind)
             self.assertEqual(([l["fixed"] for l in got["skills"]], got["skills_move"]), ([False] * 3, False), kind)
 
+    def test_a_heading_read_as_a_rows_label_keeps_the_lines_from_moving(self):
+        # "Skills" in the labels' own style over an unlabeled row, read as that row's label: that line is the heading
+        # and its items, and moving it would carry the heading below the other rows (every check would pass)
+        pieces = PS.pieces(skills=True)
+        pieces["skills"][0]["label"] = "Skills"
+        got = self.parts(pieces=pieces, skills="heading")
+        self.assertEqual([(l["label"], l["fixed"], len(l["lines"])) for l in got["skills"]],
+                         [("Skills", False, 2), ("Data", False, 1), ("Cloud", False, 1)])
+        self.assertIs(got["skills_move"], False)
+        # a label in another style than the others' isn't in the same place either
+        got = self.parts(skills="plain")
+        self.assertEqual(([l["fixed"] for l in got["skills"]], got["skills_move"]), ([False] * 3, False))
+
     def test_pieces_not_in_the_pdf_are_absent(self):
         none = {"headline": None, "summary": None, "skills": [], "skills_move": False}
         self.assertEqual(self.parts(), none)
@@ -799,7 +812,7 @@ class Build(unittest.TestCase):
 
     def test_a_pdf_without_these_parts_reports_none_kept(self):
         f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}})
-        self.assertEqual(f["parts_kept"], {"headline": False, "summary": False, "skills": [], "skill_lines": False})
+        self.assertEqual(f["parts_kept"], {"headline": "", "summary": "", "skills": {}, "skill_lines": ""})
 
 
 def placed(pdf):
@@ -818,19 +831,20 @@ NEW_SUMMARY = "Backend engineer with eight years of **Python** and Go, building 
 
 class BuildParts(unittest.TestCase):
     """The headline, summary and skill lines redrawn in place as pseudo-jobs: read back word for word, the rest of
-    the page untouched, and anything that doesn't fit or read back kept as it was (parts_kept)."""
-    NONE = {"headline": False, "summary": False, "skills": [], "skill_lines": False}
+    the page untouched, and anything that doesn't fit or read back kept as it was (parts_kept, with why)."""
+    NONE = {"headline": "", "summary": "", "skills": {}, "skill_lines": ""}
 
-    def build(self, plan, **kw):
+    def build(self, plan, pieces=None, **kw):
         tmp = Path(tempfile.mkdtemp())
         self.src = PS.make(str(tmp / "in.pdf"), **kw)
         self.plan = {"order": {}, "text": {}, **plan}
-        return style_pdf.build(style_pdf.find(self.src, PS.pieces(True, True, True)), self.plan, tmp, "out")
+        self.pieces = pieces or PS.pieces(True, True, True)
+        return style_pdf.build(style_pdf.find(self.src, self.pieces), self.plan, tmp, "out")
 
     def area(self, name, wide=False):
         """Where the source's part (or skill line, by id) was printed: its lines' boxes together; wide: across the
         page."""
-        pieces = PS.pieces(True, True, True)
+        pieces = getattr(self, "pieces", None) or PS.pieces(True, True, True)
         with fitz.open(self.src) as d:
             scan = style_pdf._scan(d)
             parts = style_pdf.read_text_parts(d, pieces, style_pdf.read(d, pieces, scan), scan)
@@ -857,7 +871,7 @@ class BuildParts(unittest.TestCase):
     def test_a_summary_that_needs_another_line_is_kept_and_nothing_is_drawn(self):
         longer = NEW_SUMMARY + " It also covers fraud checks, ledgers, reconciliation and the on-call rota."
         f = self.build({"summary": longer}, summary=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary="fit"))
         self.assertEqual(placed(f["pdf"]), placed(self.src))
         with fitz.open(f["pdf"]) as a, fitz.open(self.src) as b:
             self.assertEqual([pg.get_text() for pg in a], [pg.get_text() for pg in b])
@@ -898,11 +912,30 @@ class BuildParts(unittest.TestCase):
                           ({"headline": "left", "beside": "Remote"}, long),
                           ({"headline": "left", "badge": "box"}, long), ({"headline": "left", "badge": "photo"}, long)):
             f = self.build({"headline": title}, **kw)
-            self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True), kw)
+            self.assertEqual(f["parts_kept"], dict(self.NONE, headline="fit"), kw)
             self.assertEqual(placed(f["pdf"]), placed(self.src), kw)
         f = self.build({"headline": long}, headline="left")
         self.assertEqual(f["parts_kept"], self.NONE)
         self.assertEqual(self.text_in(f["pdf"], self.area("headline", wide=True)), long)
+
+    @unittest.skipUnless(FONT_FILES, "no TrueType font to embed here")
+    def test_a_headline_its_own_font_cant_draw_is_kept(self):
+        # the PDF's own font lacks "S" (a subset of the letters it printed, as display fonts often are): "Senior ..."
+        # isn't drawn in a stand-in font next to the member's name, unless that same family is installed
+        real = style_pdf.Fonts.own
+        no_s = lambda fonts, pno, name, text, sign=False: None if "S" in text else real(fonts, pno, name, text, sign)
+        kw = dict(headline="left", font_file=FONT_FILES, headline_font=True)
+        with mock.patch.object(style_pdf.Fonts, "own", no_s):
+            with mock.patch.object(style_pdf, "system_font", return_value=None):
+                f = self.build({"headline": "Senior Backend Engineer"}, **kw)
+                self.assertEqual(f["parts_kept"], dict(self.NONE, headline="font"))
+                self.assertEqual(placed(f["pdf"]), placed(self.src))
+                f = self.build({"headline": "Backend Engineer"}, **kw)           # its own letters: its own font
+                self.assertEqual(f["parts_kept"], self.NONE)
+            with mock.patch.object(style_pdf, "system_font", side_effect=lambda name, bold: FONT_FILES[bool(bold)]):
+                f = self.build({"headline": "Senior Backend Engineer"}, **kw)    # its family installed
+        self.assertEqual(f["parts_kept"], self.NONE)
+        self.assertEqual(self.text_in(f["pdf"], self.area("headline", wide=True)), "Senior Backend Engineer")
 
     # --- skills
     def test_reordered_skills_read_back_in_order_with_their_separators_and_bold_label(self):
@@ -939,13 +972,13 @@ class BuildParts(unittest.TestCase):
     def test_skills_in_chips_are_left_alone(self):
         f = self.build({"skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}, "skill_lines": ["s2", "s1", "s0"]},
                        skills="chips")
-        self.assertEqual(f["parts_kept"], dict(self.NONE, skills=["s0"], skill_lines=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skills={"s0": "fixed"}, skill_lines="fixed"))
         self.assertEqual(placed(f["pdf"]), placed(self.src))
 
     def test_a_fixed_headline_or_summary_is_never_drawn(self):
         # a headline in two styles, a summary with an italic word: the plan's changes are reported as kept
         f = self.build({"headline": "Backend Engineer", "summary": NEW_SUMMARY}, headline="mixed", summary="italic")
-        self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True, summary=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, headline="fixed", summary="fixed"))
         self.assertEqual(placed(f["pdf"]), placed(self.src))
 
     # --- safety
@@ -957,7 +990,7 @@ class BuildParts(unittest.TestCase):
             return (["xsb0"] if "xsb0" in a[3] else []) + real(*a)
         with mock.patch.object(style_pdf, "_wrong", wrong):
             f = self.build({"summary": NEW_SUMMARY, "order": {"r0": ["r0b2", "r0b0", "r0b1"]}}, summary=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary="check"))
         self.assertEqual((f["order"]["r0"], f["left"], f["kept"]), (["r0b2", "r0b0", "r0b1"], [], []))
         self.assertEqual(len(calls), 3)                  # both font passes with the summary, then once without it
         r = self.area("summary", wide=True)
@@ -971,7 +1004,7 @@ class BuildParts(unittest.TestCase):
         with mock.patch.object(style_pdf, "_wrong",
                                lambda *a: (["lost 'Summary' (xsb0)"] if "xsb0" in a[3] else []) + real(*a)):
             f = self.build({"summary": NEW_SUMMARY, "headline": "Backend Engineer"}, headline="left", summary=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary="check"))
         self.assertEqual(self.text_in(f["pdf"], self.area("headline", wide=True)), "Backend Engineer")
 
     def test_a_problem_no_bullet_or_part_answers_for_still_fails(self):
@@ -986,7 +1019,7 @@ class BuildParts(unittest.TestCase):
         # drops the hyphen) but shows "pay- ment"; the summary is kept
         broken = NEW_SUMMARY.replace("payment", "pay- ment")
         f = self.build({"summary": broken, "order": {"r0": ["r0b2", "r0b0", "r0b1"]}}, summary=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary="check"))
         self.assertEqual(f["order"]["r0"], ["r0b2", "r0b0", "r0b1"])
         r = self.area("summary", wide=True)
         self.assertEqual(inside(placed(f["pdf"]), r), inside(placed(self.src), r))
@@ -1003,7 +1036,7 @@ class BuildParts(unittest.TestCase):
         with mock.patch.object(style_pdf, "_wrong", lambda *a: seen.append(real(*a)) or seen[-1]):
             f = self.other(PS.make_sidebar, {"headline": "Senior Backend Engineer for Payment Platforms"},
                            headline=PS.SIDEBAR_HEADLINE)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True))         # white on white past x=200
+        self.assertEqual(f["parts_kept"], dict(self.NONE, headline="fit"))        # white on white past x=200
         self.assertEqual(seen, [[]])                     # its room ends inside the box: never drawn, nothing to spare
         self.assertEqual(placed(f["pdf"]), placed(self.src))
         f = self.other(PS.make_sidebar, {"headline": "Staff Engineer"}, headline=PS.SIDEBAR_HEADLINE)
@@ -1020,7 +1053,7 @@ class BuildParts(unittest.TestCase):
         with mock.patch.object(style_pdf, "_wrong", lambda *a: seen.append(real(*a)) or seen[-1]):
             f = self.other(PS.make_wrap, {"summary": new}, summary=" ".join(PS.WRAP_SUMMARY))
         self.assertIn("drawn onto art (xsb0)", seen[0])
-        self.assertEqual((f["parts_kept"], seen[-1]), (dict(self.NONE, summary=True), []))
+        self.assertEqual((f["parts_kept"], seen[-1]), (dict(self.NONE, summary="check"), []))
         self.assertEqual(placed(f["pdf"]), placed(self.src))
         self.assertEqual(inside(placed(f["pdf"]), PS.WRAP_PHOTO), [])
 
@@ -1029,12 +1062,22 @@ class BuildParts(unittest.TestCase):
         for kind in ("years", "bar"):
             f = self.build({"skill_lines": ["s2", "s1", "s0"], "skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}},
                            skills=kind)
-            self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines=True), kind)
+            self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines="fixed"), kind)
             row = sorted(inside(placed(f["pdf"]), self.area("s0", wide=True)), key=lambda w: w[1])
             self.assertEqual(" ".join(w[5] for w in row),
                              "Languages: TypeScript, SQL, Go, Python" + (" 8 yrs" if kind == "years" else ""), kind)
             self.assertEqual(self.text_in(f["pdf"], self.area("s2", wide=True)),
                              "Cloud: AWS, Docker, Kubernetes, Terraform")
+
+    def test_a_heading_read_as_a_rows_label_stays_on_top_and_labelled_rows_still_reorder_their_items(self):
+        pieces = PS.pieces(True, True, True)
+        pieces["skills"][0]["label"] = "Skills"
+        f = self.build({"skill_lines": ["s2", "s1", "s0"],
+                        "skills": {"s1": ["Airflow", "Kafka", "Redis", "PostgreSQL"]}}, pieces=pieces, skills="heading")
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines="fixed"))
+        self.assertEqual([self.text_in(f["pdf"], self.area(f"s{n}", wide=True)) for n in range(3)],
+                         ["Skills Python, Go, SQL, TypeScript", "Data: Airflow, Kafka, Redis, PostgreSQL",
+                          "Cloud: AWS, Docker, Kubernetes, Terraform"])
 
     def test_skill_lines_no_flow_fits_keep_their_order_and_reorder_their_items_in_place(self):
         real = style_pdf._flow
@@ -1042,7 +1085,7 @@ class BuildParts(unittest.TestCase):
         with mock.patch.object(style_pdf, "_flow", no_skills):
             f = self.build({"skill_lines": ["s2", "s1", "s0"],
                             "skills": {"s1": ["Airflow", "Kafka", "Redis", "PostgreSQL"]}}, skills=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skill_lines="fit"))
         self.assertEqual([self.text_in(f["pdf"], self.area(f"s{n}", wide=True)) for n in range(3)],
                          ["Languages: Python, Go, SQL, TypeScript", "Data: Airflow, Kafka, Redis, PostgreSQL",
                           "Cloud: AWS, Docker, Kubernetes, Terraform"])
@@ -1052,7 +1095,7 @@ class BuildParts(unittest.TestCase):
         with mock.patch.object(style_pdf, "_wrong", lambda *a: (["xkb0"] if "xkb0" in a[3] else []) + real(*a)):
             f = self.build({"skill_lines": ["s2", "s1", "s0"], "skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]},
                             "summary": NEW_SUMMARY}, summary=True, skills=True)
-        self.assertEqual(f["parts_kept"], dict(self.NONE, skills=["s0"], skill_lines=True))
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skills={"s0": "check"}, skill_lines="check"))
         rows = self.area("s0", wide=True) | self.area("s2", wide=True)
         self.assertEqual(inside(placed(f["pdf"]), rows), inside(placed(self.src), rows))
         self.assertEqual(self.text_in(f["pdf"], self.area("summary", wide=True)), NEW_SUMMARY.replace("**", ""))
