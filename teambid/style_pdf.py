@@ -9,14 +9,18 @@ reordered only when no bullet is fixed (each found whole with its own sign, no l
 fixed bullets are never erased or redrawn; a job nothing changes in is left alone; links are put back after erasing;
 every redrawn bullet must read back word for word, and every other word of the PDF must still be where it was, or the
 build fails (and the RenderCV resume is used).
-Bullets only for now: the headline, summary and skills of a PDF stay as they are.
-Design: docs/superpowers/specs/2026-11-05-keep-original-style-design.md (PDF in place).
+The headline, summary and skill lines are found the same way, on whole lines (read_text_parts), but not redrawn yet:
+they stay as they are.
+Design: docs/superpowers/specs/2026-11-05-keep-original-style-design.md (PDF in place; PDF headline, summary and
+skills).
 """
+import bisect
 import functools
 import re
 import shutil
 import subprocess
 import unicodedata
+from collections import Counter
 from pathlib import Path
 from statistics import median
 
@@ -295,21 +299,24 @@ def _art_in(line, drawings):
                for dr in drawings[line["page"]] for r in [dr["rect"]])
 
 
-def read(doc, pieces):
-    """The confirmed bullets (keep_style.confirm) found in the PDF, by job.
-    -> [{"id", "reorder", "bullets": [{"id", "text" (with **bold**), "piece", "lines", "mark", "link", "fixed"}], "_lines"}]
-    A bullet is found only when it starts and ends exactly on line boundaries, over lines no other bullet claimed;
-    anything else stays as it is. A bullet is fixed (never reworded, its job never reordered) when it holds a link,
-    italics or mixed sizes or colors, a drawing (_art_in), or has no sign of its own."""
+def _scan(doc):
+    """What finding the pieces needs, read once: (text lines with the pages' furniture flagged, each page's drawings,
+    the bullet signs that aren't part of their line)."""
     lines = _lines(doc)
     drawings = [page.get_drawings() for page in doc]
     marks = _marks(doc, lines, drawings)
-    # a typed sign ("* Built") isn't part of the bullet's words: key() drops "-" and "•" but not "*" or "►"; a page
-    # number or repeated footer between a bullet's two halves at a page break isn't part of them either
     _mark_furniture(lines)
-    keyed = [(l, key(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"]))
+    return lines, drawings, marks
+
+
+def _hay(lines, kf=key):
+    """The text lines a piece can be found on, their keys (kf) run together: -> (text lines, hay, starts, {where a
+    line's key starts in hay: its index}, {where it ends: its index}). A typed sign ("* Built") isn't part of a line's
+    words: key() drops "-" and "•" but not "*" or "►"; a page number or repeated footer between a piece's two halves
+    at a page break isn't part of it either, and a line with no letters (a lone space at the foot of a page) would end
+    a piece just as well as its own last line."""
+    keyed = [(l, kf(l["text"][_after_sign(l["spans"][0]["chars"]):] if _is_lead(l["spans"][0]) else l["text"]))
              for l in lines if not _is_sign(l["text"]) and not l["furniture"]]
-    # a line with no letters (a lone space at the foot of a page) would end a bullet just as well as its own last line
     text_lines, keys = [l for l, k in keyed if k], [k for l, k in keyed if k]
     starts, pos = [], 0
     for k in keys:
@@ -317,18 +324,46 @@ def read(doc, pieces):
         pos += len(k)
     by_start = {s: n for n, s in enumerate(starts)}
     by_end = {s + len(k): n for n, (s, k) in enumerate(zip(starts, keys))}
-    hay = "".join(keys)
+    return text_lines, "".join(keys), starts, by_start, by_end
+
+
+def _spot(hay, by_start, by_end, used, k, start):
+    """Where k sits in hay on whole lines that no other piece claimed (used), searching from start; -1 if nowhere."""
+    i = hay.find(k, start)
+    while i >= 0:
+        if i in by_start and i + len(k) in by_end and used.isdisjoint(range(by_start[i], by_end[i + len(k)] + 1)):
+            return i
+        i = hay.find(k, i + 1)
+    return -1
+
+
+def _shown(ls, mark):
+    """The text of these lines as shown, bold runs in **marks**, without the bullet's own sign (mark) -> (text, the
+    first span with letters: a space after the sign can come in the sign's own color)."""
+    runs, first = [], None
+    for n in range(len(ls)):
+        for s, cs in _body(ls, mark, n):
+            if first is None and "".join(c["c"] for c in cs).strip():
+                first = s
+            runs.append(("".join(c["c"] for c in cs), _is_bold(s)))
+        runs.append((" ", False))
+    # a bold run's own spaces stay outside its marks: some exporters draw "using" then " C#" (space in bold)
+    shown = "".join(f"{' ' if t[:1].isspace() else ''}**{t.strip()}**{' ' if t[-1:].isspace() else ''}"
+                    if b and t.strip() else t for t, b in runs)
+    return re.sub(r"\*\*(\s*)\*\*", r"\1", re.sub(r"\s+", " ", shown)).strip(), first
+
+
+def read(doc, pieces, scan=None):
+    """The confirmed bullets (keep_style.confirm) found in the PDF, by job.
+    -> [{"id", "reorder", "bullets": [{"id", "text" (with **bold**), "piece", "lines", "mark", "link", "fixed"}], "_lines"}]
+    A bullet is found only when it starts and ends exactly on line boundaries, over lines no other bullet claimed;
+    anything else stays as it is. A bullet is fixed (never reworded, its job never reordered) when it holds a link,
+    italics or mixed sizes or colors, a drawing (_art_in), or has no sign of its own. scan: _scan(doc), when the
+    caller has it already."""
+    lines, drawings, marks = scan or _scan(doc)
+    text_lines, hay, _, by_start, by_end = _hay(lines)
     used = set()
-
-    def spot(k, start):
-        """Where k sits on whole lines that no other bullet claimed, searching from start; -1 if nowhere."""
-        i = hay.find(k, start)
-        while i >= 0:
-            if i in by_start and i + len(k) in by_end and used.isdisjoint(range(by_start[i], by_end[i + len(k)] + 1)):
-                return i
-            i = hay.find(k, i + 1)
-        return -1
-
+    spot = lambda k, start: _spot(hay, by_start, by_end, used, k, start)
     jobs, at = [], 0
     for ji, job in enumerate(pieces.get("jobs", [])):
         found = []
@@ -358,18 +393,7 @@ def read(doc, pieces):
                             and lb.x0 - m["rect"].x1 < 25:
                         mark = m
                         break
-            runs, first = [], None
-            for n in range(len(ls)):
-                for s, cs in _body(ls, mark, n):
-                    # the first span with letters: a space after the sign can come in the sign's own color
-                    if first is None and "".join(c["c"] for c in cs).strip():
-                        first = s
-                    runs.append(("".join(c["c"] for c in cs), _is_bold(s)))
-                runs.append((" ", False))
-            # a bold run's own spaces stay outside its marks: some exporters draw "using" then " C#" (space in bold)
-            shown = "".join(f"{' ' if t[:1].isspace() else ''}**{t.strip()}**{' ' if t[-1:].isspace() else ''}"
-                            if b and t.strip() else t for t, b in runs)
-            shown = re.sub(r"\*\*(\s*)\*\*", r"\1", re.sub(r"\s+", " ", shown)).strip()
+            shown, first = _shown(ls, mark)
             spans = [s for l in ls for s in l["spans"] if s["text"].strip() and not _is_sign(s["text"])]
             styled = any(s["flags"] & 2 or abs(s["size"] - first["size"]) > 0.6 or s["color"] != first["color"] for s in spans)
             link = any(l["link"] for l in ls)
@@ -425,14 +449,190 @@ def _goes_on(b, lines, claimed, marks, cont=None):
         return True
     return False
 
+
+def _ink(l):
+    """Where a line's letters start and end (its box can take in a space at either end)."""
+    xs = [c["bbox"] for s in l["spans"] for c in s["chars"] if not c["c"].isspace()]
+    return (min(b[0] for b in xs), max(b[2] for b in xs)) if xs else (l["bbox"].x0, l["bbox"].x1)
+
+
+def _headline(l, lines, drawings, marks):
+    """The headline's line as a part. Centred when its middle is within 3 pt of the middle of its page's text, left
+    when it starts within 2 pt of where its page's text starts or where the line above or below it in its column
+    does. Fixed (never redrawn) when it's neither or both (it can't say which it is), holds more than one style, a
+    link, a drawing or a bullet sign."""
+    page = [o for o in lines if o["page"] == l["page"] and not o["furniture"] and o["text"].strip()]
+    x0, x1 = _ink(l)
+    left = min(_ink(o)[0] for o in page)
+    centred = abs((x0 + x1) / 2 - (left + max(_ink(o)[1] for o in page)) / 2) <= 3
+    base = lambda o: o["spans"][0]["origin"][1]
+    column = [o for o in page if o is not l and key(o["text"]) and _ink(o)[0] < x1 and _ink(o)[1] > x0]
+    near = [max((o for o in column if base(o) < base(l) - 1), key=base, default=None),
+            min((o for o in column if base(o) > base(l) + 1), key=base, default=None)]
+    starts = abs(x0 - left) <= 2 or any(o and abs(x0 - _ink(o)[0]) <= 2 for o in near)
+    styles = {(s["font"], round(s["size"], 1), s["color"], _is_bold(s)) for s in l["spans"] if s["text"].strip()}
+    fixed = (centred == starts or len(styles) > 1 or l["link"] or _art_in(l, drawings) or _starts_bullet(l, marks))
+    return {"text": _shown([l], None)[0].replace("**", ""), "fixed": bool(fixed), "lines": [l],
+            "align": "center" if centred else "left"}
+
+
+def _summary(ls, drawings, marks):
+    """The summary's lines as a part. Fixed (never redrawn) for a link, italics, sizes more than 0.6 pt apart, more
+    than one text color (bold may differ), a drawing in its lines, or a bullet sign (a list isn't a paragraph)."""
+    spans = [s for l in ls for s in l["spans"] if s["text"].strip()]
+    sizes = [s["size"] for s in spans]
+    fixed = (any(l["link"] for l in ls) or any(s["flags"] & 2 for s in spans) or max(sizes) - min(sizes) > 0.6
+             or len({s["color"] for s in spans}) > 1 or any(_art_in(l, drawings) for l in ls)
+             or any(_starts_bullet(l, marks) for l in ls))
+    return {"text": _shown(ls, None)[0], "fixed": bool(fixed), "lines": ls, "align": None}
+
+
+def _skill_spans(text, label, items):
+    """Where the label and each item stand in a skill line's printed text, in that order: [(start, end)]; None when
+    the text isn't the label, then the items, with nothing but spaces and punctuation around and between them."""
+    ks, at = [], []                       # each key letter, and which printed character it comes from
+    for i, c in enumerate(text):
+        for k in key(c):
+            ks.append(k)
+            at.append(i)
+    ks, out, pos = "".join(ks), [], 0
+    for want in [key(label)] + [key(x) for x in items]:
+        i = ks.find(want, pos) if want else -1
+        if i < 0 or any(c.isalnum() for c in ks[pos:i]):
+            return None
+        out.append((at[i], at[i + len(want) - 1] + 1))
+        pos = i + len(want)
+    return None if any(c.isalnum() for c in ks[pos:]) else out
+
+
+def _skill_parts(text, label, items):
+    """'Languages: Python, Go | SQL' -> ('Languages', ['Python', 'Go', 'SQL'], [', ', ' | ']) as printed (the
+    separators between the items), or None (see _skill_spans)."""
+    at = _skill_spans(text, label, items)
+    if not at:
+        return None
+    one = lambda t: re.sub(r"\s+", " ", t)
+    return (text[at[0][0]:at[0][1]], [one(text[a:b]) for a, b in at[1:]],
+            [one(text[b:a]) for (_, b), (a, _) in zip(at[1:], at[2:])])
+
+
+def _skill_line(ls, label, items, drawings, marks):
+    """A skill line ("Label: a, b, c" on one or more lines) as {"label", "items" (as printed, in printed order),
+    "fixed", "lines", "sep"}. Fixed (never redrawn or moved) when its items aren't all set apart by the same
+    separator, an item breaks with a hyphen at a line's end, it's in chips (a drawing in its lines: boxed items show
+    so), or for a link, italics, a bullet sign, or more than one style beyond a bold label: the label in one style, the
+    rest in one, and those two differ at most in being bold."""
+    chars, joins = [], set()              # (character, its span), the lines run together with one space between
+    for l in ls:
+        cs = [(c["c"], s) for s in l["spans"] for c in s["chars"]]
+        while cs and cs[0][0].isspace():
+            cs.pop(0)
+        while cs and cs[-1][0].isspace():
+            cs.pop()
+        if chars:
+            joins.add(len(chars))
+            chars.append((" ", None))
+        chars += cs
+    text = "".join(c for c, _ in chars)
+    at = _skill_spans(text, label, items)
+    if not at:
+        return {"label": label, "items": list(items), "fixed": True, "lines": ls, "sep": ""}
+    got_label, got_items, seps = _skill_parts(text, label, items)
+    style = lambda a, b: {(s["font"], round(s["size"], 1), s["color"], _is_bold(s))
+                          for c, s in chars[a:b] if s and not c.isspace()}
+    lab, rest, gap = style(*at[0]), style(at[1][0], len(chars)), style(at[0][1], at[1][0])
+    plain = len(lab) == 1 and len(rest) == 1 and gap <= lab | rest
+    if plain:
+        (lf, lsz, lc, lb), (f, sz, c, _) = next(iter(lab)), next(iter(rest))
+        plain = abs(lsz - sz) <= 0.6 and lc == c and (lf == f or lb)
+    split = any(a < j < b and text[j - 1] == "-" for a, b in at[1:] for j in joins)
+    fixed = (len(set(seps)) != 1 or split or not plain or any(s["flags"] & 2 for c, s in chars if s and not c.isspace())
+             or any(l["link"] for l in ls) or any(_art_in(l, drawings) for l in ls) or _starts_bullet(ls[0], marks))
+    return {"label": got_label, "items": got_items, "fixed": bool(fixed), "lines": ls, "sep": seps[0] if seps else ""}
+
+
+def read_text_parts(doc, pieces, jobs, scan=None):
+    """The confirmed headline, summary and skill lines (keep_style.confirm) found in the PDF, on whole lines that no
+    bullet of jobs (read) holds and that aren't the pages' furniture. scan: _scan(doc), when the caller has it.
+    -> {"headline": part or None, "summary": part or None, "skills": [line], "skills_move": bool}
+    part = {"text" (the summary's with **bold**), "fixed", "lines", "align" (the headline's: "left" or "center")};
+    line = {"id" ("s0"... in reading order), "label", "items", "fixed", "lines", "sep"} (_skill_line).
+    A piece not on whole lines isn't found, and stays as it is. The headline is the topmost line its text shows on,
+    one line, and never a job's own title line (a reading can give a job's title as the headline when the header has
+    none; rewording it would change the member's job history). Skill lines may move as a whole (skills_move) when
+    two or more are found, none is fixed, they start in one column, and nothing else is between them (_runs)."""
+    lines, drawings, marks = scan or _scan(doc)
+    place = lambda l: (l["page"], tuple(l["bbox"]))    # jobs may come from another read of the same PDF
+    claimed = {place(l) for j in jobs for b in j["bullets"] for l in b["lines"]}
+    text_lines, hay, starts, by_start, by_end = _hay(lines)
+    used = {n for n, l in enumerate(text_lines) if place(l) in claimed}
+    line_at = lambda p: bisect.bisect_right(starts, p) - 1
+    every = lambda k: [m.start() for m in re.finditer(f"(?={re.escape(k)})", hay)]
+    out = {"headline": None, "summary": None, "skills": [], "skills_move": False}
+    k = key(pieces.get("headline"))
+    seen = every(k) if len(k) >= 3 else []
+    if seen:
+        i = min(seen, key=lambda p: (text_lines[line_at(p)]["page"], text_lines[line_at(p)]["bbox"].y0))
+        n = line_at(i)
+        ok = i in by_start and by_end.get(i + len(k)) == n and n not in used
+        # every job whose title this line holds must still show that title on a line of its own besides this one
+        for t, count in Counter(key(j.get("title")) for j in pieces.get("jobs", [])).items():
+            if ok and len(t) >= 3 and t in k:
+                ok = sum(line_at(p) != n and line_at(p) not in used for p in every(t)) >= count
+        if ok:
+            used.add(n)
+            out["headline"] = _headline(text_lines[n], lines, drawings, marks)
+    k = key(pieces.get("summary"))
+    i = _spot(hay, by_start, by_end, used, k, 0) if len(k) >= 8 else -1
+    if i >= 0:
+        a, z = by_start[i], by_end[i + len(k)]
+        used.update(range(a, z + 1))
+        out["summary"] = _summary(text_lines[a:z + 1], drawings, marks)
+    # skill lines: by their letters alone, as key() keeps the ":" and "," between label and items
+    taken = {id(text_lines[n]) for n in used}
+    loose = lambda t: re.sub(r"\W", "", key(t))
+    s_lines, s_hay, _, s_start, s_end = _hay(lines, loose)
+    s_used = {n for n, l in enumerate(s_lines) if id(l) in taken}
+    found, at = [], 0
+    for sk in pieces.get("skills") or []:
+        label, items = str(sk.get("label") or ""), [str(x) for x in sk.get("items") or []]
+        k = loose(label + "".join(items))
+        if not label or len(items) < 2 or len(k) < 8:
+            continue
+        i = _spot(s_hay, s_start, s_end, s_used, k, at)
+        if i < 0:
+            i = _spot(s_hay, s_start, s_end, s_used, k, 0)
+        if i < 0:
+            continue
+        a, z = s_start[i], s_end[i + len(k)]
+        s_used.update(range(a, z + 1))
+        at = i + len(k)
+        found.append((i, _skill_line(s_lines[a:z + 1], label, items, drawings, marks)))
+    out["skills"] = [dict(l, id=f"s{n}") for n, (_, l) in enumerate(sorted(found, key=lambda f: f[0]))]
+    sk = out["skills"]
+    if len(sk) >= 2 and not any(l["fixed"] for l in sk) and \
+            max(_ink(l["lines"][0])[0] for l in sk) - min(_ink(l["lines"][0])[0] for l in sk) <= 2:
+        ordered = sorted(sk, key=lambda l: (l["lines"][0]["page"], l["lines"][0]["bbox"].y0))
+        pseudo = {"bullets": [{"id": l["id"], "lines": l["lines"], "mark": None, "fixed": False} for l in ordered],
+                  "_lines": lines}
+        out["skills_move"] = len(_runs(pseudo)) == 1
+    return out
+
+
 def find(path, pieces):
-    """The confirmed pieces found in the member's PDF, as the doc keep_style works with (bullets only for now)."""
+    """The confirmed pieces found in the member's PDF, as the doc keep_style works with: the jobs' bullets (read), the
+    headline, summary and skill lines (read_text_parts), in the shape style_tex.locate gives."""
     fitz = _fitz()
     with fitz.open(path) as d:
-        jobs, pages = read(d, pieces), d.page_count
+        scan = _scan(d)
+        jobs = read(d, pieces, scan)
+        parts, pages = read_text_parts(d, pieces, jobs, scan), d.page_count
     meta = pieces.get("jobs", [])
-    return {"ext": ".pdf", "_path": str(path), "_pieces": pieces, "pages": pages, "headline": None, "summary": None,
-            "skills": [], "skills_move": False,
+    part = lambda p: {"text": p["text"], "fixed": p["fixed"]} if p else None
+    return {"ext": ".pdf", "_path": str(path), "_pieces": pieces, "pages": pages, "headline": part(parts["headline"]),
+            "summary": part(parts["summary"]),
+            "skills": [{k: l[k] for k in ("id", "label", "items", "fixed")} for l in parts["skills"]],
+            "skills_move": parts["skills_move"],
             "jobs": [{"id": j["id"], "reorder": j["reorder"],
                       **{k: meta[int(j["id"][1:])].get(k, "") for k in ("title", "company", "start", "end")},
                       "bullets": [{"id": b["id"], "text": b["text"], "fixed": b["fixed"], "piece": b["piece"]}
