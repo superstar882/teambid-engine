@@ -412,8 +412,8 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         skill_ids = [l["id"] for l in doc["skills"]]
         skill_changed = {sid for sid in skill_ids if plan["skills"].get(sid, skill_by_id[sid]["items"])
                           != skill_by_id[sid]["items"]}
-        if plan.get("skill_lines") and plan["skill_lines"] != skill_ids:
-            skill_changed |= set(skill_ids)
+        order = plan.get("skill_lines") or skill_ids
+        skill_changed |= {sid for i, sid in enumerate(order) if sid != skill_ids[i]}      # only the ones that moved
         kept = [b for b in kept if b.split("b")[0] not in left]          # those left with their job are told apart
         used = files.pop("order", None)            # the PDF handler says the order it really drew (.tex builds don't)
         if used is not None:

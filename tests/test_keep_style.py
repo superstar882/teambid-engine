@@ -607,10 +607,22 @@ class ApplyWithPdfParts(TempWorkspace):
 
     def test_a_pdf_where_only_the_skills_change_keeps_its_own_style(self):
         r = self._apply({"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
-        self.assertIn("skills reordered", r["resume_ai"])
+        # the job weights (Go, Redis, PostgreSQL) swap Data and Languages; Cloud (no match) stays put
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
         self.assertNotIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
         self.assertIn("Resume style: original (.pdf)", r["resume_ai"])
         self.assertNotIn("docx", r["files"])
+
+    def test_a_block_move_counts_only_the_lines_that_changed_position(self):
+        # s0 (Languages) and s1 (Data) swap places, each keeping its own printed items; s2 (Cloud) keeps both its
+        # position and its items, so only 2 of the 3 lines really changed
+        reply = {"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]},
+                 "skills": {f"s{i}": list(items) for i, (_, items) in enumerate(pdf_samples.SKILLS)},
+                 "skill_lines": ["s1", "s0", "s2"]}
+        r = self._apply(reply)
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
+        self.assertNotIn("(3 lines)", r["resume_ai"])
+        self.assertEqual(r["problems"], [])
 
 
 class ApplyWithRulePieces(TempWorkspace):
@@ -643,6 +655,36 @@ class ApplyWithRulePieces(TempWorkspace):
 
     def test_pieces_saved_before_they_said_who_read_them_too(self):
         self._apply(None, "Python Engineer")
+
+
+class ApplyWithRulePiecesSkills(TempWorkspace):
+    """Free (non-fixed) skill lines go through the same parts_kept mapping in the rule-based (no Claude) path:
+    they're still reordered by job weight (default_plan), while the headline and summary stay untouched."""
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src), headline=True, summary=True, skills=True)
+        with mock.patch.object(llm, "available", return_value=False):
+            cls.slug = service.onboard("Dana Rules Skills", resume_path=src)["slug"]
+        # the rule-based resume parser doesn't read the headline/summary/skills sections the way Claude's reading
+        # does; write the confirmed pieces directly, as pieces_for() would have saved them from a real reading
+        pieces = dict(pdf_samples.pieces(True, True, True), by="rules")
+        keep_style.save_pieces(cls.slug, config.member_dir(cls.slug) / "resume" / "dana.pdf", pieces)
+
+    def test_skills_are_reordered_by_weight_while_headline_and_summary_stay(self):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place") as ask, \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            r = service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+        self.assertFalse(ask.called)                             # Claude is never asked for a rule-based reading
+        self.assertIn("(read without Claude: reordered only)", r["resume_ai"])
+        self.assertIn("skills reordered (2 lines)", r["resume_ai"])
+        self.assertNotIn("summary reworded", r["resume_ai"])
+        self.assertNotIn("headline reworded", r["resume_ai"])
+        self.assertEqual(r["spec"]["headline"], pdf_samples.HEADLINE)
+        self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
 
 
 if __name__ == "__main__":
