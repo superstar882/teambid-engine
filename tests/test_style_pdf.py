@@ -791,6 +791,200 @@ class Build(unittest.TestCase):
                 style_pdf._render(src, PS.PIECES, {}, True)
         self.assertTrue(opened and opened[-1].is_closed)
 
+    def test_a_pdf_without_these_parts_reports_none_kept(self):
+        f = self.build({"order": {"r0": ["r0b2", "r0b0", "r0b1"]}, "text": {}})
+        self.assertEqual(f["parts_kept"], {"headline": False, "summary": False, "skills": [], "skill_lines": False})
+
+
+def placed(pdf):
+    """Every word with its box, as printed: [(page, x0, y0, x1, y1, text)]."""
+    with fitz.open(pdf) as d:
+        return [(pg.number, *w[:5]) for pg in d for w in pg.get_text("words")]
+
+
+def inside(ws, rect, yes=True):
+    """The words (placed) whose middle is in rect on page 1, or (yes False) every other word."""
+    return [w for w in ws if (w[0] == 0 and rect.contains(fitz.Point((w[1] + w[3]) / 2, (w[2] + w[4]) / 2))) == yes]
+
+
+NEW_SUMMARY = "Backend engineer with eight years of **Python** and Go, building payment systems for banks."
+
+
+class BuildParts(unittest.TestCase):
+    """The headline, summary and skill lines redrawn in place as pseudo-jobs: read back word for word, the rest of
+    the page untouched, and anything that doesn't fit or read back kept as it was (parts_kept)."""
+    NONE = {"headline": False, "summary": False, "skills": [], "skill_lines": False}
+
+    def build(self, plan, **kw):
+        tmp = Path(tempfile.mkdtemp())
+        self.src = PS.make(str(tmp / "in.pdf"), **kw)
+        self.plan = {"order": {}, "text": {}, **plan}
+        return style_pdf.build(style_pdf.find(self.src, PS.pieces(True, True, True)), self.plan, tmp, "out")
+
+    def area(self, name, wide=False):
+        """Where the source's part (or skill line, by id) was printed: its lines' boxes together; wide: across the
+        page."""
+        pieces = PS.pieces(True, True, True)
+        with fitz.open(self.src) as d:
+            scan = style_pdf._scan(d)
+            parts = style_pdf.read_text_parts(d, pieces, style_pdf.read(d, pieces, scan), scan)
+        part = parts.get(name) or next(l for l in parts["skills"] if l["id"] == name)
+        r = fitz.Rect(part["lines"][0]["bbox"])
+        for l in part["lines"][1:]:
+            r |= l["bbox"]
+        return fitz.Rect(0, r.y0, 595, r.y1) if wide else r
+
+    def text_in(self, pdf, rect):
+        return " ".join(w[5] for w in inside(placed(pdf), rect))
+
+    # --- summary
+    def test_a_shorter_summary_reads_back_on_its_own_lines_and_nothing_else_moves(self):
+        f = self.build({"summary": NEW_SUMMARY}, summary=True)
+        self.assertEqual(f["parts_kept"], self.NONE)
+        self.assertEqual(self.plan["text"], {})                 # the expected texts stay in build's own copy
+        r = self.area("summary", wide=True)
+        got = inside(placed(f["pdf"]), r)
+        self.assertEqual(" ".join(w[5] for w in got), NEW_SUMMARY.replace("**", ""))
+        self.assertAlmostEqual(got[0][1], 50, delta=0.6)        # from where its text started
+        self.assertEqual(inside(placed(f["pdf"]), r, False), inside(placed(self.src), r, False))
+
+    def test_a_summary_that_needs_another_line_is_kept_and_nothing_is_drawn(self):
+        longer = NEW_SUMMARY + " It also covers fraud checks, ledgers, reconciliation and the on-call rota."
+        f = self.build({"summary": longer}, summary=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(placed(f["pdf"]), placed(self.src))
+        with fitz.open(f["pdf"]) as a, fitz.open(self.src) as b:
+            self.assertEqual([pg.get_text() for pg in a], [pg.get_text() for pg in b])
+
+    def test_bold_stays_on_a_phrase_that_was_bold(self):
+        f = self.build({"summary": NEW_SUMMARY}, summary=True)
+        r = self.area("summary", wide=True)
+        sp = [s for s in spans(f["pdf"]) if r.contains(fitz.Point(s["origin"][0] + 1, s["origin"][1] - 2))]
+        self.assertTrue([s for s in sp if s["text"].strip() == "Python"])
+        for s in sp:
+            self.assertEqual(style_pdf._is_bold(s), s["text"].strip() == "Python", s["text"])
+
+    # --- headline
+    def test_a_left_headline_takes_a_shorter_title_at_the_same_x(self):
+        f = self.build({"headline": "Backend Engineer"}, headline="left")
+        self.assertEqual(f["parts_kept"], self.NONE)
+        r = self.area("headline", wide=True)
+        got = inside(placed(f["pdf"]), r)
+        self.assertEqual([w[5] for w in got], ["Backend", "Engineer"])
+        self.assertAlmostEqual(got[0][1], 50, delta=0.6)
+        self.assertEqual(inside(placed(f["pdf"]), r, False), inside(placed(self.src), r, False))
+        heads = [s for s in spans(f["pdf"]) if s["text"].strip() == "Backend Engineer"]
+        self.assertEqual([(round(s["size"]), s["color"], style_pdf._is_bold(s)) for s in heads], [(12, 0, False)])
+
+    def test_a_centred_headline_stays_centred(self):
+        f = self.build({"headline": "Backend Engineer"}, headline="center")
+        self.assertEqual(f["parts_kept"], self.NONE)
+        r = self.area("headline", wide=True)
+        old, new = inside(placed(self.src), r), inside(placed(f["pdf"]), r)
+        self.assertEqual([w[5] for w in new], ["Backend", "Engineer"])
+        centre = lambda ws: (min(w[1] for w in ws) + max(w[3] for w in ws)) / 2
+        self.assertAlmostEqual(centre(new), centre(old), delta=1)
+
+    def test_a_headline_that_doesnt_fit_its_room_is_kept(self):
+        longest = "Principal Backend Engineer for Payment Platforms and Card Networks"
+        long = "Senior Backend Engineer for Payment Platforms"           # fits up to the page's text edge only
+        for kw, title in (({"headline": "left"}, longest), ({"headline": "center"}, longest),
+                          ({"headline": "left", "beside": "Remote"}, long)):
+            f = self.build({"headline": title}, **kw)
+            self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True), kw)
+            self.assertEqual(placed(f["pdf"]), placed(self.src), kw)
+        f = self.build({"headline": long}, headline="left")
+        self.assertEqual(f["parts_kept"], self.NONE)
+        self.assertEqual(self.text_in(f["pdf"], self.area("headline", wide=True)), long)
+
+    # --- skills
+    def test_reordered_skills_read_back_in_order_with_their_separators_and_bold_label(self):
+        f = self.build({"skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}}, skills=True)
+        self.assertEqual(f["parts_kept"], self.NONE)
+        r = self.area("s0", wide=True)
+        self.assertEqual(self.text_in(f["pdf"], r), "Languages: TypeScript, SQL, Go, Python")
+        sp = [s for s in spans(f["pdf"]) if r.contains(fitz.Point(s["origin"][0] + 1, s["origin"][1] - 2))]
+        self.assertEqual([style_pdf._is_bold(s) for s in sp if s["text"].strip() == "Languages:"], [True])
+        self.assertFalse(any(style_pdf._is_bold(s) for s in sp if "TypeScript" in s["text"]))
+        self.assertEqual(inside(placed(f["pdf"]), r, False), inside(placed(self.src), r, False))
+
+    def test_a_reordered_skill_line_keeps_the_labels_own_gap(self):
+        # two spaces after each label: the label stays as printed and the items start where they did
+        f = self.build({"skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}}, skills="gap")
+        self.assertEqual(f["parts_kept"], self.NONE)
+        r = self.area("s0", wide=True)
+        old, new = inside(placed(self.src), r), inside(placed(f["pdf"]), r)
+        self.assertEqual([w[5] for w in new], ["Languages:", "TypeScript,", "SQL,", "Go,", "Python"])
+        self.assertEqual(new[0][1:5], old[0][1:5])
+        self.assertAlmostEqual(new[1][1], old[1][1], delta=0.05)
+
+    def test_skill_lines_move_whole_into_the_lines_they_had(self):
+        f = self.build({"skill_lines": ["s2", "s1", "s0"],
+                        "skills": {"s1": ["Airflow", "Kafka", "Redis", "PostgreSQL"]}}, skills=True)
+        self.assertEqual(f["parts_kept"], self.NONE)
+        rows = [self.area(f"s{n}", wide=True) for n in range(3)]
+        self.assertEqual([self.text_in(f["pdf"], r) for r in rows],
+                         ["Cloud: AWS, Docker, Kubernetes, Terraform", "Data: Airflow, Kafka, Redis, PostgreSQL",
+                          "Languages: Python, Go, SQL, TypeScript"])
+        whole = rows[0] | rows[2]
+        self.assertEqual(inside(placed(f["pdf"]), whole, False), inside(placed(self.src), whole, False))
+
+    def test_skills_in_chips_are_left_alone(self):
+        f = self.build({"skills": {"s0": ["TypeScript", "SQL", "Go", "Python"]}, "skill_lines": ["s2", "s1", "s0"]},
+                       skills="chips")
+        self.assertEqual(f["parts_kept"], dict(self.NONE, skills=["s0"], skill_lines=True))
+        self.assertEqual(placed(f["pdf"]), placed(self.src))
+
+    def test_a_fixed_headline_or_summary_is_never_drawn(self):
+        # a headline in two styles, a summary with an italic word: the plan's changes are reported as kept
+        f = self.build({"headline": "Backend Engineer", "summary": NEW_SUMMARY}, headline="mixed", summary="italic")
+        self.assertEqual(f["parts_kept"], dict(self.NONE, headline=True, summary=True))
+        self.assertEqual(placed(f["pdf"]), placed(self.src))
+
+    # --- safety
+    def test_a_summary_that_doesnt_read_back_is_left_as_it_was_and_the_bullets_still_change(self):
+        real, calls = style_pdf._wrong, []
+
+        def wrong(*a):
+            calls.append(sorted(a[3]))
+            return (["xsb0"] if "xsb0" in a[3] else []) + real(*a)
+        with mock.patch.object(style_pdf, "_wrong", wrong):
+            f = self.build({"summary": NEW_SUMMARY, "order": {"r0": ["r0b2", "r0b0", "r0b1"]}}, summary=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual((f["order"]["r0"], f["left"], f["kept"]), (["r0b2", "r0b0", "r0b1"], [], []))
+        self.assertEqual(len(calls), 3)                  # both font passes with the summary, then once without it
+        r = self.area("summary", wide=True)
+        self.assertEqual(inside(placed(f["pdf"]), r), inside(placed(self.src), r))
+        ws = words(f["pdf"])
+        self.assertLess(first(ws, "Wrote"), first(ws, "Built"))
+
+    def test_a_word_lost_beside_a_part_spares_that_part(self):
+        # a problem that names the part (as _disturbed names the bullets erased beside a lost word) spares it
+        real = style_pdf._wrong
+        with mock.patch.object(style_pdf, "_wrong",
+                               lambda *a: (["lost 'Summary' (xsb0)"] if "xsb0" in a[3] else []) + real(*a)):
+            f = self.build({"summary": NEW_SUMMARY, "headline": "Backend Engineer"}, headline="left", summary=True)
+        self.assertEqual(f["parts_kept"], dict(self.NONE, summary=True))
+        self.assertEqual(self.text_in(f["pdf"], self.area("headline", wide=True)), "Backend Engineer")
+
+    def test_a_problem_no_bullet_or_part_answers_for_still_fails(self):
+        calls = []
+        with mock.patch.object(style_pdf, "_wrong", lambda *a: calls.append(1) or ["links"]):
+            with self.assertRaises(ValueError):
+                self.build({"summary": NEW_SUMMARY, "headline": "Backend Engineer"}, headline="left", summary=True)
+        self.assertEqual(len(calls), 2)
+
+    # --- no change
+    def test_a_plan_that_changes_no_part_draws_nothing(self):
+        same = {"headline": PS.HEADLINE, "summary": " ".join(PS.SUMMARY),
+                "skills": {f"s{n}": list(items) for n, (_, items) in enumerate(PS.SKILLS)},
+                "skill_lines": ["s0", "s1", "s2"]}
+        real = fitz.Page.add_redact_annot
+        for plan in ({}, same):
+            with mock.patch.object(fitz.Page, "add_redact_annot", autospec=True, side_effect=real) as redact:
+                f = self.build(plan, headline="left", summary=True, skills=True)
+            self.assertEqual((redact.call_count, f["parts_kept"]), (0, self.NONE))
+
 
 class Parts(unittest.TestCase):
     def test_tounicode_fix_leaves_glyph_runs_alone(self):

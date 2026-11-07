@@ -393,6 +393,7 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         for bid in kept:                           # rewordings the file couldn't fit kept their original text
             plan["text"].pop(bid, None)
         left, mailto = files.pop("left", []), files.pop("mailto", 0)     # the PDF handler's (see style_pdf.build)
+        files.pop("parts_kept", None)              # the PDF handler's too: the parts it didn't draw (not mapped yet)
         kept = [b for b in kept if b.split("b")[0] not in left]          # those left with their job are told apart
         used = files.pop("order", None)            # the PDF handler says the order it really drew (.tex builds don't)
         if used is not None:
