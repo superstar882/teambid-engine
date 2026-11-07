@@ -557,10 +557,11 @@ def read_text_parts(doc, pieces, jobs, scan=None):
     -> {"headline": part or None, "summary": part or None, "skills": [line], "skills_move": bool}
     part = {"text" (the summary's with **bold**), "fixed", "lines", "align" (the headline's: "left" or "center")};
     line = {"id" ("s0"... in reading order), "label", "items", "fixed", "lines", "sep"} (_skill_line).
-    A piece not on whole lines isn't found, and stays as it is. The headline is the topmost line its text shows on,
-    one line, and never a job's own title line (a reading can give a job's title as the headline when the header has
-    none; rewording it would change the member's job history). Skill lines may move as a whole (skills_move) when
-    two or more are found, none is fixed, they start in one column, and nothing else is between them (_runs)."""
+    A piece not on whole lines isn't found, and stays as it is. The headline is the topmost line that reads exactly as
+    it, one line, and never a job's own title line: each job's title it holds must show again below it (a reading can
+    give a job's title as the headline when the header has none; rewording it would change the member's job history).
+    Skill lines may move as a whole (skills_move) when two or more are found, none is fixed, they start in one column,
+    and nothing else is between them (_runs)."""
     lines, drawings, marks = scan or _scan(doc)
     place = lambda l: (l["page"], tuple(l["bbox"]))    # jobs may come from another read of the same PDF
     claimed = {place(l) for j in jobs for b in j["bullets"] for l in b["lines"]}
@@ -570,16 +571,19 @@ def read_text_parts(doc, pieces, jobs, scan=None):
     every = lambda k: [m.start() for m in re.finditer(f"(?={re.escape(k)})", hay)]
     out = {"headline": None, "summary": None, "skills": [], "skills_move": False}
     k = key(pieces.get("headline"))
-    seen = every(k) if len(k) >= 3 else []
-    if seen:
-        i = min(seen, key=lambda p: (text_lines[line_at(p)]["page"], text_lines[line_at(p)]["bbox"].y0))
-        n = line_at(i)
-        ok = i in by_start and by_end.get(i + len(k)) == n and n not in used
-        # every job whose title this line holds must still show that title on a line of its own besides this one
-        for t, count in Counter(key(j.get("title")) for j in pieces.get("jobs", [])).items():
-            if ok and len(t) >= 3 and t in k:
-                ok = sum(line_at(p) != n and line_at(p) not in used for p in every(t)) >= count
-        if ok:
+    where = lambda n: (text_lines[n]["page"], text_lines[n]["bbox"].y0)
+    # the lines that read exactly as the headline, each one whole line no bullet holds (a sentence holding its words
+    # isn't one, wherever it is)
+    whole = [by_start[p] for p in (every(k) if len(k) >= 3 else [])
+             if p in by_start and by_end.get(p + len(k)) == by_start[p] and by_start[p] not in used]
+    if whole:
+        n = min(whole, key=where)
+        # every job whose title this line holds must still show that title as often on lines no bullet holds below it,
+        # where the jobs are: a job's own title line has none (a sentence above saying it too doesn't count)
+        below = lambda p: line_at(p) not in used and where(line_at(p)) > (where(n)[0], where(n)[1] + 1)
+        if all(sum(below(p) for p in every(t)) >= count
+               for t, count in Counter(key(j.get("title")) for j in pieces.get("jobs", [])).items()
+               if len(t) >= 3 and t in k):
             used.add(n)
             out["headline"] = _headline(text_lines[n], lines, drawings, marks)
     k = key(pieces.get("summary"))

@@ -78,7 +78,7 @@ def _one_name(doc):
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
          blank=False, subhead=False, mailto="mailto:dana@example.com", subhead_page=False, labels=False, sidebar=False,
-         bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None):
+         bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None, topline=None):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -113,7 +113,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     summary: a Summary heading and SUMMARY's two lines (one word in bold) above Experience; 'italic': one word of it in
     italics.
     skills: a Skills heading and SKILLS as "**Label:** a, b, c" lines under Education; 'chips': each item in a small
-    drawn box."""
+    drawn box.
+    topline: a line of small text at the top of page 1, above the name (a sentence that holds the headline's words)."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -133,6 +134,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
 
     page, side = new_page(), []
     top = 14.0 if headline else 0.0              # room for the headline under the name
+    if topline:
+        page.insert_text((50, 34), topline, fontname="helv", fontsize=8)
     page.insert_text((50, 60), "DANA REYES", fontname="hebo", fontsize=18)
     page.insert_text((50, 80 + top), "dana@example.com", fontname="helv", fontsize=10)
     page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 71 + top, 140, 83 + top), "uri": mailto})

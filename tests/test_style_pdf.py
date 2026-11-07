@@ -223,6 +223,16 @@ class TextParts(unittest.TestCase):
                          ("Senior Backend Engineer", 0, True))
         self.assertIsNone(self.parts(pieces=PS.pieces(headline="Senior Backend Engineer, Northwind Labs"))["headline"])
 
+    def test_a_headline_is_found_on_its_own_line_under_a_sentence_holding_its_words(self):
+        h = self.parts(headline="left", topline=f"Experienced {PS.HEADLINE} today")["headline"]
+        self.assertEqual((h["text"], h["align"], h["fixed"], round(h["lines"][0]["spans"][0]["origin"][1])),
+                         (PS.HEADLINE, "left", False, 78))
+
+    def test_a_jobs_title_line_isnt_a_headline_because_a_sentence_above_says_it_too(self):
+        # the title shows again only above that line, not below it, where the job's own line would be
+        pieces = PS.pieces(headline="Senior Backend Engineer, Northwind Labs")
+        self.assertIsNone(self.parts(pieces=pieces, topline="Now: Senior Backend Engineer, Northwind Labs")["headline"])
+
     def test_a_two_line_summary_is_found_with_its_bold(self):
         s = self.parts(summary=True)["summary"]
         self.assertEqual((s["text"], s["fixed"], len(s["lines"])),
