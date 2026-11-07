@@ -893,8 +893,10 @@ class BuildParts(unittest.TestCase):
         self.assertEqual([w[5] for w in got], ["Backend", "Engineer"])
         self.assertAlmostEqual(got[0][1], 50, delta=0.6)
         self.assertEqual(inside(placed(f["pdf"]), r, False), inside(placed(self.src), r, False))
-        heads = [s for s in spans(f["pdf"]) if s["text"].strip() == "Backend Engineer"]
-        self.assertEqual([(round(s["size"]), s["color"], style_pdf._is_bold(s)) for s in heads], [(12, 0, False)])
+        # its words may come in several spans (online an installed stand-in draws them, with real spaces between)
+        heads = [s for s in spans(f["pdf"]) if s["text"].strip() in ("Backend Engineer", "Backend", "Engineer")]
+        self.assertTrue(heads)
+        self.assertEqual({(round(s["size"]), s["color"], style_pdf._is_bold(s)) for s in heads}, {(12, 0, False)})
 
     def test_a_centred_headline_stays_centred(self):
         f = self.build({"headline": "Backend Engineer"}, headline="center")
@@ -955,7 +957,11 @@ class BuildParts(unittest.TestCase):
         r = self.area("s0", wide=True)
         old, new = inside(placed(self.src), r), inside(placed(f["pdf"]), r)
         self.assertEqual([w[5] for w in new], ["Languages:", "TypeScript,", "SQL,", "Go,", "Python"])
-        self.assertEqual(new[0][1:5], old[0][1:5])
+        # the label where it was printed (online it may be redrawn in an installed stand-in whose letters reach a little
+        # higher or lower, so its box's height can differ by a point)
+        self.assertAlmostEqual(new[0][1], old[0][1], delta=0.6)
+        self.assertAlmostEqual(new[0][3], old[0][3], delta=0.6)
+        self.assertAlmostEqual((new[0][2] + new[0][4]) / 2, (old[0][2] + old[0][4]) / 2, delta=1.5)
         self.assertAlmostEqual(new[1][1], old[1][1], delta=0.05)
 
     def test_skill_lines_move_whole_into_the_lines_they_had(self):
