@@ -9,8 +9,9 @@ reordered only when no bullet is fixed (each found whole with its own sign, no l
 fixed bullets are never erased or redrawn; a job nothing changes in is left alone; links are put back after erasing;
 every redrawn bullet must read back word for word, and every other word of the PDF must still be where it was, or the
 build fails (and the RenderCV resume is used).
-The headline, summary and skill lines are found the same way, on whole lines (read_text_parts), but not redrawn yet:
-they stay as they are.
+The headline, summary and skill lines are found the same way, on whole lines (read_text_parts), and redrawn as
+pseudo-jobs with the same erase, draw and checks (_lay_out_parts): in place, never in more lines (the headline within
+the room on its line), skill lines moved whole only as one run; what isn't drawn is reported (build's parts_kept).
 Design: docs/superpowers/specs/2026-11-05-keep-original-style-design.md (PDF in place; PDF headline, summary and
 skills).
 """
@@ -337,6 +338,14 @@ def _spot(hay, by_start, by_end, used, k, start):
     return -1
 
 
+def _marked(runs):
+    """[(text, bold)] -> the text with its bold runs in **marks**, spaces run together. A bold run's own spaces stay
+    outside its marks: some exporters draw "using" then " C#" (space in bold)."""
+    shown = "".join(f"{' ' if t[:1].isspace() else ''}**{t.strip()}**{' ' if t[-1:].isspace() else ''}"
+                    if b and t.strip() else t for t, b in runs)
+    return re.sub(r"\*\*(\s*)\*\*", r"\1", re.sub(r"\s+", " ", shown))
+
+
 def _shown(ls, mark):
     """The text of these lines as shown, bold runs in **marks**, without the bullet's own sign (mark) -> (text, the
     first span with letters: a space after the sign can come in the sign's own color)."""
@@ -347,10 +356,7 @@ def _shown(ls, mark):
                 first = s
             runs.append(("".join(c["c"] for c in cs), _is_bold(s)))
         runs.append((" ", False))
-    # a bold run's own spaces stay outside its marks: some exporters draw "using" then " C#" (space in bold)
-    shown = "".join(f"{' ' if t[:1].isspace() else ''}**{t.strip()}**{' ' if t[-1:].isspace() else ''}"
-                    if b and t.strip() else t for t, b in runs)
-    return re.sub(r"\*\*(\s*)\*\*", r"\1", re.sub(r"\s+", " ", shown)).strip(), first
+    return _marked(runs).strip(), first
 
 
 def read(doc, pieces, scan=None):
@@ -516,23 +522,40 @@ def _skill_parts(text, label, items):
             [one(text[b:a]) for (_, b), (a, _) in zip(at[1:], at[2:])])
 
 
+def _bold_runs(chars):
+    """[(character, its span or None)] -> [(text, bold)], a run per change of bold."""
+    out = []
+    for c, s in chars:
+        b = bool(s) and _is_bold(s)
+        if out and out[-1][1] == b:
+            out[-1] = (out[-1][0] + c, b)
+        else:
+            out.append((c, b))
+    return out
+
+
 def _skill_line(ls, label, items, drawings, marks):
     """A skill line ("Label: a, b, c" on one or more lines) as {"label", "items" (as printed, in printed order),
-    "fixed", "lines", "sep"}. Fixed (never redrawn or moved) when its items aren't all set apart by the same
-    separator, an item breaks with a hyphen at a line's end, it's in chips (a drawing in its lines: boxed items show
-    so), or for a link, italics, a bullet sign, or more than one style beyond a bold label: the label in one style, the
-    rest in one, and those two differ at most in being bold."""
-    chars, joins = [], set()              # (character, its span), the lines run together with one space between
+    "fixed", "lines", "sep", "head", "tail", "bold", "item_x"}: head and tail are what's printed before the first item
+    and after the last as [(text, bold)], bold whether the items are, item_x where the first item starts (None when
+    it isn't on the first line): _skill_text and _skill_lines_new redraw the line from them. Fixed (never redrawn or
+    moved) when its items aren't all set apart by the same separator, an item breaks with a hyphen at a line's end,
+    it's in chips (a drawing in its lines: boxed items show so), or for a link, italics, a bullet sign, or more than
+    one style beyond a bold label: the label in one style, the rest in one, and those two differ at most in being
+    bold."""
+    chars, xs, joins = [], [], set()      # (character, its span), the lines run together with one space between
     for l in ls:
-        cs = [(c["c"], s) for s in l["spans"] for c in s["chars"]]
-        while cs and cs[0][0].isspace():
+        cs = [(c, s) for s in l["spans"] for c in s["chars"]]
+        while cs and cs[0][0]["c"].isspace():
             cs.pop(0)
-        while cs and cs[-1][0].isspace():
+        while cs and cs[-1][0]["c"].isspace():
             cs.pop()
         if chars:
             joins.add(len(chars))
             chars.append((" ", None))
-        chars += cs
+            xs.append(None)
+        chars += [(c["c"], s) for c, s in cs]
+        xs += [c["origin"][0] for c, _ in cs]
     text = "".join(c for c, _ in chars)
     at = _skill_spans(text, label, items)
     if not at:
@@ -548,7 +571,32 @@ def _skill_line(ls, label, items, drawings, marks):
     split = any(a < j < b and text[j - 1] == "-" for a, b in at[1:] for j in joins)
     fixed = (len(set(seps)) != 1 or split or not plain or any(s["flags"] & 2 for c, s in chars if s and not c.isspace())
              or any(l["link"] for l in ls) or any(_art_in(l, drawings) for l in ls) or _starts_bullet(ls[0], marks))
-    return {"label": got_label, "items": got_items, "fixed": bool(fixed), "lines": ls, "sep": seps[0] if seps else ""}
+    return {"label": got_label, "items": got_items, "fixed": bool(fixed), "lines": ls, "sep": seps[0] if seps else "",
+            "head": _bold_runs(chars[:at[1][0]]), "tail": _bold_runs(chars[at[-1][1]:]),
+            "bold": any(t[3] for t in rest),
+            "item_x": xs[at[1][0]] if at[1][0] < min(joins, default=len(chars)) else None}
+
+
+def _skill_text(line, items):
+    """A skill line's text with its items in this order, as printed: what came before the first item (the label, bold
+    if it was), the items set apart by the line's separator, then what came after the last."""
+    return _marked(line["head"] + [(line["sep"].join(items), line["bold"])] + line["tail"]).strip()
+
+
+def _skill_lines_new(line, b, items, st, fonts):
+    """Skill line b (its pseudo-bullet) with its items in this order, laid out like _new_lines: what's printed before
+    the first item stays as it was (_old_lines: the label, and its own gap to the items, which can be wider than a
+    space), the items and what came after the last wrap anew from where the first item started. None when the first
+    item doesn't start on the first line, or a part can't be set (_old_lines, _new_lines)."""
+    if line["item_x"] is None:
+        return None
+    old = _old_lines(b, fonts)
+    x_next = median(_text_x(b, n) for n in range(1, len(b["lines"]))) if len(b["lines"]) > 1 else st["x_next"]
+    new = _new_lines(_marked([(line["sep"].join(items), line["bold"])] + line["tail"]).strip(),
+                     dict(st, x_first=line["item_x"], x_next=x_next), fonts)
+    if not old or not new:
+        return None
+    return [[it for it in old[0] if it[0] < line["item_x"] - 0.01] + new[0]] + new[1:]
 
 
 def read_text_parts(doc, pieces, jobs, scan=None):
@@ -806,15 +854,17 @@ def _old_lines(bullet, fonts):
     return out
 
 
-def _flow(job, order, texts, changed, st, fonts):
+def _flow(job, order, texts, changed, st, fonts, made=None):
     """The job's bullets in this order through its own lines and page breaks: [(page, y, items, bullet or None)],
-    bullet set on a bullet's first line. None when they don't fit (or a bullet can't be set: _new_lines/_old_lines)."""
+    bullet set on a bullet's first line. None when they don't fit (or a bullet can't be set: _new_lines/_old_lines).
+    made: {bullet id: its lines laid out already} (a skill line with its items reordered, _skill_lines_new)."""
     pages = sorted(st["regions"])
     by_id = {b["id"]: b for b in job["bullets"]}
     pi, y, first, out = 0, st["regions"][pages[0]][0], True, []
     for bid in order:
         b = by_id[bid]
-        lines = _new_lines(texts[bid], st, fonts, b) if bid in changed else _old_lines(b, fonts)
+        lines = (made or {}).get(bid) or \
+            (_new_lines(texts[bid], st, fonts, b) if bid in changed else _old_lines(b, fonts))
         if lines is None:
             return None
         for n, items in enumerate(lines):
@@ -938,6 +988,138 @@ def _runs(job):
         else:
             runs[-1].append(b)
     return runs
+
+
+def _part_asks(parts, plan):
+    """What the plan changes in the headline, summary and skill lines (parts: read_text_parts, or find's doc) ->
+    {"headline": its new text or None, "summary": the same, "skills": {line id: its items in the new order},
+    "skill_lines": [line ids in the new order] or None}. Only what differs from what's printed counts: the same words
+    in the same order need nothing drawn."""
+    words = lambda t: str(t or "").split()
+    out = {"skills": {}, "skill_lines": None}
+    for k in ("headline", "summary"):
+        new, old = plan.get(k), parts.get(k)
+        out[k] = new if new and (not old or words(new) != words(old["text"])) else None
+    lines = {l["id"]: l for l in parts.get("skills") or []}
+    for sid, items in (plan.get("skills") or {}).items():
+        if items and (sid not in lines or [key(x) for x in items] != [key(x) for x in lines[sid]["items"]]):
+            out["skills"][sid] = [str(x) for x in items]
+    order = [str(x) for x in plan.get("skill_lines") or []]
+    out["skill_lines"] = order if order and order != list(lines) else None
+    return out
+
+
+def _headline_flow(doc, b, align, text, fonts, lines, drawings):
+    """The new headline on its own line, in its own style: [(page, y, items, b)], or None when it doesn't fit the room
+    it has. Left-aligned it starts where its text did, and may run to the page's text edge or to 4 pt before anything
+    else on its line to its right (text, a drawing, an image). Centred it keeps its centre and has as much room each
+    way: the page's text, clear of anything else on its line by 4 pt."""
+    fitz = _fitz()
+    l = b["lines"][0]
+    st = _style({"bullets": [b], "_lines": lines})
+    band = lambda o: (o["spans"][0]["origin"][1] - 0.62 * max(s["size"] for s in o["spans"]),
+                      o["spans"][0]["origin"][1] - 0.08 * max(s["size"] for s in o["spans"]))
+    top, bottom = band(l)
+    on = lambda y0, y1: y0 < bottom and y1 > top
+    x0, x1 = _ink(l)
+    page = [o for o in lines if o["page"] == l["page"]]
+    lo = min(_ink(o)[0] for o in page if not o["furniture"] and o["text"].strip())
+    hi = max(_ink(o)[1] for o in page if not o["furniture"] and o["text"].strip())
+    # what else is on its line: text, and drawings or images that aren't behind the whole line (a background)
+    things = [_ink(o) for o in page if o is not l and key(o["text"]) and on(*band(o))]
+    rects = [dr["rect"] for dr in drawings[l["page"]]] + [fitz.Rect(i["bbox"]) for i in doc[l["page"]].get_image_info()]
+    things += [(r.x0, r.x1) for r in rects if on(r.y0, r.y1) and not (r.x0 <= x0 + 0.5 and r.x1 >= x1 - 0.5)]
+    if align == "center":
+        centre = (x0 + x1) / 2
+        if any(a < centre < z for a, z in things):
+            return None
+        lo = max([lo] + [z + 4 for a, z in things if z <= centre])
+        half = min(centre - lo, min([hi] + [a - 4 for a, z in things if a >= centre]) - centre)
+        left, right = centre - half, centre + half
+    else:
+        left = _text_x(b, 0)
+        if any(a <= left < z for a, z in things):
+            return None
+        right = min([hi] + [a - 4 for a, z in things if a > left])
+    plain = text.replace("**", "").strip()
+    bold = _main_style([s for s in l["spans"] if s["text"].strip()])[0]
+    new = _new_lines(f"**{plain}**" if bold else plain, dict(st, x_first=left, x_next=left, right=right,
+                                                             justified=False), fonts)
+    if right <= left or not new or len(new) != 1:
+        return None
+    items = new[0]
+    if align == "center":
+        end = max(x + f[0].text_length(t, fontsize=size) * sx for x, t, f, size, _, sx, _ in items)
+        items = [(x + (right - end) / 2, *rest) for x, *rest in items]
+    return [(l["page"], l["spans"][0]["origin"][1], items, b)]
+
+
+def _lay_out_parts(doc, parts, plan, fonts, scan):
+    """Where the headline, summary and skill lines (read_text_parts) go, each found, free part the plan changes being
+    a pseudo-job ("xh", "xs", "xk") of pseudo-bullets ("xhb0", "xsb0", "xkb<n>" for skill line s<n>) that the erase,
+    draw and read-back handle like bullets. -> (todo, applied, texts): todo as _lay_out has it, applied = {"headline",
+    "summary", "skill_lines": bool, "skills": {line ids drawn in their new order}}, texts = {pseudo-bullet id: the
+    text it must read back as}. In place: the summary on its own baselines, in no more lines than it had; a skill line
+    with its items reordered on its own lines, in exactly as many (_skill_lines_new, within its column's longest
+    skill line); the headline on its line (_headline_flow). Skill lines move whole (skills_move) through _flow, like a
+    job's bullets; if no flow fits they stay in their order."""
+    lines, drawings, _ = scan
+    asks = _part_asks(parts, plan)
+    todo, texts = [], {}
+    applied = {"headline": False, "summary": False, "skills": set(), "skill_lines": False}
+    base = lambda l: l["spans"][0]["origin"][1]
+    pseudo = lambda bid, ls: {"id": bid, "text": _shown(ls, None)[0], "piece": None, "lines": ls, "mark": None,
+                              "link": False, "fixed": False}
+    in_place = lambda b, new: [(l["page"], base(l), items, b if n == 0 else None)
+                               for n, (l, items) in enumerate(zip(b["lines"], new))]
+    h, s = parts["headline"], parts["summary"]
+    if asks["headline"] and h and not h["fixed"]:
+        b = pseudo("xhb0", h["lines"])
+        flow = _headline_flow(doc, b, h["align"], asks["headline"], fonts, lines, drawings)
+        if flow:
+            todo.append(([b], flow))
+            texts[b["id"]], applied["headline"] = asks["headline"].replace("**", ""), True
+    if asks["summary"] and s and not s["fixed"]:
+        b = pseudo("xsb0", s["lines"])
+        st = dict(_style({"bullets": [b], "_lines": lines}), right=max(_ink(l)[1] for l in b["lines"]))
+        new = _new_lines(asks["summary"], st, fonts, b)
+        if new and len(new) <= len(b["lines"]):
+            todo.append(([b], in_place(b, new)))
+            texts[b["id"]], applied["summary"] = asks["summary"], True
+    free = [l for l in parts["skills"] if not l["fixed"]]
+    if not free or not (asks["skills"] or asks["skill_lines"]):
+        return todo, applied, texts
+    by_line = {l["id"]: pseudo(f"xkb{l['id'][1:]}", l["lines"]) for l in free}
+    job = {"id": "xk", "bullets": list(by_line.values()), "_lines": lines}
+    st = _style(job)
+    # the right edge: where the skill lines in its column end (the column's longest line)
+    span = lambda l: (min(_ink(o)[0] for o in l["lines"]), max(_ink(o)[1] for o in l["lines"]))
+    edge = lambda l: max(span(o)[1] for o in free if span(o)[0] < span(l)[1] and span(o)[1] > span(l)[0])
+    made, drawn_as = {}, {}
+    for l in free:
+        order = asks["skills"].get(l["id"])
+        pos = {key(t): t for t in l["items"]}
+        if not order or sorted(map(key, order)) != sorted(map(key, l["items"])):
+            continue                                   # not asked, or not exactly this line's items
+        b, items = by_line[l["id"]], [pos[key(t)] for t in order]
+        got = _skill_lines_new(l, b, items, dict(st, right=edge(l)), fonts)
+        if got and len(got) == len(b["lines"]):        # a line keeps its line count
+            made[b["id"]], drawn_as[b["id"]] = got, _skill_text(l, items)
+    ids = [l["id"] for l in parts["skills"]]
+    where = lambda l: (l["lines"][0]["page"], l["lines"][0]["bbox"].y0)
+    flow = None
+    if asks["skill_lines"] and parts["skills_move"] and sorted(asks["skill_lines"]) == sorted(ids) \
+            and [l["id"] for l in sorted(parts["skills"], key=where)] == ids:
+        flow = _flow(job, [by_line[i]["id"] for i in asks["skill_lines"]], {}, set(), st, fonts, made=made)
+    if flow:
+        todo.append((job["bullets"], flow))
+        applied["skill_lines"] = True
+    else:
+        todo += [([b], in_place(b, made[b["id"]])) for b in job["bullets"] if b["id"] in made]
+    texts.update(drawn_as)
+    applied["skills"] = {l["id"] for l in free if by_line[l["id"]]["id"] in drawn_as}
+    return todo, applied, texts
+
 
 def _words_at(page):
     """The page's words as [(Rect, text)], each box the letters' own outline: the font's line-height box would reach
@@ -1183,15 +1365,22 @@ def _draw(doc, todo, fonts, signs):
 
 
 def _render(path, pieces, plan, allow_embedded):
-    """Draw the plan into a fresh copy of the PDF. -> (doc, todo, kept, drawn, order, before, signs): todo, kept and
-    order as _lay_out has them, drawn as _draw has it, before = the words left alone (_untouched), signs = every
-    job's signs as they stand now (_signs)."""
+    """Draw the plan into a fresh copy of the PDF. -> (doc, todo, kept, drawn, order, before, signs, plan, applied):
+    todo, kept and order as _lay_out has them (todo with the parts' pseudo-jobs, _lay_out_parts), drawn as _draw has
+    it, before = the words left alone (_untouched), signs = every job's signs as they stand now (_signs), plan = a copy
+    of the plan whose "text" also holds what each pseudo-bullet must read back as (_wrong checks it; the caller's plan
+    never gets those), applied = the parts' changes laid out (_lay_out_parts)."""
     fitz = _fitz()
     doc = fitz.open(path)
     try:
-        jobs = read(doc, pieces)
-        fonts = Fonts(doc, jobs[0]["_lines"] if jobs else [], allow_embedded)
+        scan = _scan(doc)
+        jobs = read(doc, pieces, scan)
+        parts = read_text_parts(doc, pieces, jobs, scan)
+        fonts = Fonts(doc, scan[0], allow_embedded)
         todo, kept, order = _lay_out(jobs, plan, fonts)
+        more, applied, texts = _lay_out_parts(doc, parts, plan, fonts, scan)
+        todo = todo + more
+        plan = {**plan, "text": {**plan.get("text", {}), **texts}}
         for bullets, _ in todo:
             for b in bullets:
                 if b["mark"] and b["mark"].get("span"):     # read each sign's font now: erasing can drop it
@@ -1201,17 +1390,18 @@ def _render(path, pieces, plan, allow_embedded):
         drawn, inserted = _draw(doc, todo, fonts, signs)
         doc.subset_fonts()
         _fix_tounicode(doc, inserted)
-        return doc, todo, kept, drawn, order, before, signs
+        return doc, todo, kept, drawn, order, before, signs, plan, applied
     except Exception:
         doc.close()                                 # Windows keeps an open file locked
         raise
 
 
 def _wrong(doc, todo, kept, drawn, plan, links_before, before, signs):
-    """What doesn't read back as it should: each redrawn bullet whose words, read from where they were drawn, aren't
-    exactly its text's words (so two words glued together or one split apart count), "links" if one was lost, each
-    word outside the redrawn bullets that's gone, moved or drawn over (_disturbed), and each sign drawn over or lost
-    (_signs_hit). Clip rects make this independent of reading order, so two-column resumes check right too."""
+    """What doesn't read back as it should: each redrawn bullet (a part's pseudo-bullet too: its text is in plan, see
+    _render) whose words, read from where they were drawn, aren't exactly its text's words (so two words glued
+    together or one split apart count), "links" if one was lost, each word outside the redrawn bullets that's gone,
+    moved or drawn over (_disturbed), and each sign drawn over or lost (_signs_hit). Clip rects make this independent
+    of reading order, so two-column resumes check right too."""
     bad = []
     for bullets, _ in todo:
         for b in bullets:
@@ -1267,22 +1457,32 @@ def build(doc, plan, folder, base):
     """Write the tailored PDF into folder. -> {"pdf", "pages", "paper", "kept": [bullet ids whose rewording isn't
     used: it didn't fit, or its job was left as it was], "order": {job id: its bullet ids as drawn (the original order
     where it stayed)}, "left": [job ids left as they were because they didn't redraw cleanly], "mailto": email links
-    set to the address they show (_fix_mailto)}.
+    set to the address they show (_fix_mailto), "parts_kept": {"headline", "summary", "skill_lines": True when the
+    plan's change wasn't drawn and the original stays, "skills": [skill line ids whose new order wasn't drawn]}}.
     Raises ValueError when the result doesn't read back, even without the PDF's own fonts.
-    When every problem names its bullet, the jobs of those bullets are left exactly as they are and the rest is tried
-    again (twice at most): one job that can't be redrawn doesn't cost the member their own PDF."""
+    When every problem names its bullet (or a part's pseudo-bullet), the jobs (or parts) of those are left exactly as
+    they are and the rest is tried again (twice at most): one job or part that can't be redrawn doesn't cost the
+    member their own PDF."""
     fitz = _fitz()
     with fitz.open(doc["_path"]) as d:
         links_before = sum(len(p.get_links()) for p in d)
     bad, spare, asked = [], set(), plan.get("text", {})
-    job_of = lambda bid: re.match(r"r\d+", bid).group(0)
+    job_of = lambda bid: bid.rsplit("b", 1)[0]            # r0b1 -> r0, xkb2 -> xk
+    asks = _part_asks(doc, plan)
     for _ in range(3):
         p = {**plan, "order": {j: o for j, o in plan.get("order", {}).items() if j not in spare},
              "text": {i: t for i, t in asked.items() if job_of(i) not in spare}}
+        if "xh" in spare:                                 # a part left as it was: the plan asks nothing of it
+            p["headline"] = None
+        if "xs" in spare:
+            p["summary"] = None
+        if "xk" in spare:
+            p["skills"], p["skill_lines"] = {}, []
         for allow in (True, False):
-            out, todo, kept, drawn, order, before, signs = _render(doc["_path"], doc["_pieces"], p, allow)
+            out, todo, kept, drawn, order, before, signs, used, applied = _render(doc["_path"], doc["_pieces"], p,
+                                                                                   allow)
             try:
-                bad = _wrong(out, todo, kept, drawn, p, links_before, before, signs)
+                bad = _wrong(out, todo, kept, drawn, used, links_before, before, signs)
                 if not bad:
                     mailto = _fix_mailto(out)
                     folder = Path(folder)
@@ -1291,11 +1491,14 @@ def build(doc, plan, folder, base):
                     out.save(pdf, garbage=3, deflate=True)
                     width, pages = out[0].rect.width, out.page_count
                     kept = kept + sorted(i for i in asked if job_of(i) in spare and i not in kept)
+                    parts_kept = {k: bool(asks[k]) and not applied[k] for k in ("headline", "summary", "skill_lines")}
+                    parts_kept["skills"] = [i for i in asks["skills"] if i not in applied["skills"]]
                     return {"pdf": str(pdf), "pages": pages, "paper": "A4" if abs(width - 595) < 6 else "Letter",
-                            "kept": kept, "order": order, "left": sorted(spare), "mailto": mailto}
+                            "kept": kept, "order": order, "left": sorted(j for j in spare if j.startswith("r")),
+                            "mailto": mailto, "parts_kept": parts_kept}
             finally:
                 out.close()
-        named = [re.findall(r"\br\d+b\d+\b", e) for e in bad]
+        named = [re.findall(r"\b(?:r\d+|x[hsk])b\d+\b", e) for e in bad]
         jobs = {job_of(i) for ids in named for i in ids}
         if not all(named) or jobs <= spare:
             break                                    # a problem no bullet answers for, or one that leaving jobs won't fix

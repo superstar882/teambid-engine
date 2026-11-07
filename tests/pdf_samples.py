@@ -78,7 +78,8 @@ def _one_name(doc):
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
          blank=False, subhead=False, mailto="mailto:dana@example.com", subhead_page=False, labels=False, sidebar=False,
-         bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None, topline=None):
+         bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None, topline=None,
+         beside=None):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -113,8 +114,9 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     summary: a Summary heading and SUMMARY's two lines (one word in bold) above Experience; 'italic': one word of it in
     italics.
     skills: a Skills heading and SKILLS as "**Label:** a, b, c" lines under Education; 'chips': each item in a small
-    drawn box.
-    topline: a line of small text at the top of page 1, above the name (a sentence that holds the headline's words)."""
+    drawn box; 'gap': two spaces after each label.
+    topline: a line of small text at the top of page 1, above the name (a sentence that holds the headline's words).
+    beside: a word on the headline's line, at x=290 in 10 pt (other text on its line, to its right)."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -227,7 +229,7 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
         body, bold = faces["body"][1], faces["bold"][1]
         for n, (label, items) in enumerate(SKILLS):
             sy = y + 70 + 14 * n
-            _runs(page, 50, sy, f"**{label}:** " + ", ".join(items), faces)
+            _runs(page, 50, sy, f"**{label}:**{'  ' if skills == 'gap' else ' '}" + ", ".join(items), faces)
             x = 50 + bold.text_length(f"{label}:", fontsize=10) + body.text_length(" ", fontsize=10)
             for item in items:
                 w = body.text_length(item, fontsize=10)
@@ -244,6 +246,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
             x = max(w[2] for w in ws) - width
         heads = {"body": ("helv", fitz.Font("helv")), "bold": ("hebo", fitz.Font("hebo")), "italic": faces["italic"]}
         _runs(hp, x, 78, text.replace("Payment", "**Payment**") if headline == "mixed" else text, heads, size=12)
+        if beside:
+            hp.insert_text((290, 78), beside, fontname="helv", fontsize=10)
     if font_file:
         from teambid import style_pdf
         style_pdf._fix_tounicode(doc, {"F0", "F1"})        # hyphens and spaces read back as "-" and " "
