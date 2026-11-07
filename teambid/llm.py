@@ -340,7 +340,7 @@ def tailor_in_place(doc, jd_text, model=None):
         return None, "no Claude API key"
     lines = [f"JOB POST:\n{jd_text[:12000]}", ""]
     if doc.get("headline"):
-        lines.append(f"HEADLINE: {doc['headline']['text']}")
+        lines.append(f"HEADLINE{' (fixed)' if doc['headline']['fixed'] else ''}: {doc['headline']['text']}")
     if doc.get("summary"):
         lines.append(f"SUMMARY{' (fixed)' if doc['summary']['fixed'] else ''}: {doc['summary']['text']}")
     lines.append("\nJOBS:")
@@ -349,7 +349,8 @@ def tailor_in_place(doc, jd_text, model=None):
         lines += [f"  {b['id']}{' (fixed)' if b['fixed'] else ''}: {b['text']}" for b in j["bullets"]]
     if doc.get("skills"):
         lines.append("\nSKILLS:")
-        lines += [f"{l['id']} - {l['label']}: {', '.join(l['items'])}" for l in doc["skills"]]
+        lines += [f"{l['id']}{' (fixed)' if l.get('fixed') else ''} - {l['label']}: {', '.join(l['items'])}"
+                  for l in doc["skills"]]
     try:
         out = _call(TAILOR_RULES, "\n".join(lines), 8000, model, timeout=300)
         return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "ok"

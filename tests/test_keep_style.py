@@ -325,6 +325,26 @@ class Checks(unittest.TestCase):
         self.assertEqual(p["text"]["r0b0"], ok)
 
 
+class ChecksPdfSkills(unittest.TestCase):
+    """A PDF's fixed skill lines (chips) get no planned reorder: only a .tex line is never fixed."""
+    def setUp(self):
+        path = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(path), skills="chips")
+        self.doc = style_pdf.find(str(path), pdf_samples.pieces(skills=True))
+        self.jd = tailor.analyze_jd(JD_TEXT, "Senior Python Engineer", "Acme")
+
+    def test_default_plan_leaves_fixed_skill_lines_as_printed(self):
+        p = keep_style.default_plan(self.doc, self.jd)
+        self.assertEqual(p["skills"], {l["id"]: l["items"] for l in self.doc["skills"]})
+        self.assertEqual(p["skill_lines"], [])
+
+    def test_claudes_reorder_of_a_fixed_line_is_ignored(self):
+        p = keep_style.check(self.doc, {"skills": {"s0": ["Go", "Python", "SQL", "TypeScript"]},
+                                        "skill_lines": ["s2", "s0", "s1"]}, PROFILE, self.jd)
+        self.assertEqual(p["skills"]["s0"], self.doc["skills"][0]["items"])
+        self.assertEqual(p["skill_lines"], [])
+
+
 class TailorPrompt(unittest.TestCase):
     def test_sends_every_piece_with_its_id(self):
         doc = style_tex.locate(S.SAMPLE, S.PIECES)
@@ -338,6 +358,19 @@ class TailorPrompt(unittest.TestCase):
                        "r0b0: Built a payments API in **Python**", "r0b2 (fixed): Wrote the public API docs",
                        "s1 - Cloud & Data: AWS, Docker"):
             self.assertIn(needle, user)
+
+    def test_marks_a_fixed_headline_and_skill_line(self):
+        path = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(path), headline="mixed", skills="chips")
+        doc = style_pdf.find(str(path), pdf_samples.pieces(headline=True, skills=True))
+        self.assertTrue(doc["headline"]["fixed"])
+        self.assertTrue(doc["skills"][0]["fixed"])
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "_call", return_value='Sure: {"bullets": {}}') as call:
+            llm.tailor_in_place(doc, "We need Go.", "claude-haiku-5-5")
+        user = call.call_args[0][1]
+        self.assertIn(f"HEADLINE (fixed): {pdf_samples.HEADLINE}", user)
+        self.assertIn("s0 (fixed) - Languages: Python, Go", user)
 
     def test_asks_for_words_broken_at_a_line_end_to_be_written_whole(self):
         # a PDF's text reads such a word "de- ploying"; drawn inside a line it would show so (style_pdf._wrong keeps it)
@@ -528,6 +561,56 @@ class ApplyWithPdf(TempWorkspace):
         self.assertIn("order changed in 1 jobs", r["resume_ai"])
         self.assertEqual(r["spec"]["style"]["plan"]["order"]["r0"], ["r0b0", "r0b1", "r0b2"])
         self.assertEqual(r["spec"]["roles"][0]["bullets"][0], pdf_samples.PIECES["jobs"][0]["bullets"][0])
+
+
+class ApplyWithPdfParts(TempWorkspace):
+    """The note and report tell only what the PDF handler really drew of the headline, summary and skills."""
+    NEW_SUMMARY = "Backend engineer with eight years of **Python** and Go, building payment systems banks rely on daily."
+    TOO_LONG_SUMMARY = ("Backend engineer with seven years of **Python** and Go, building payment systems that banks "
+                         "and card networks rely on daily.")
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = Path(tempfile.mkdtemp()) / "dana.pdf"
+        pdf_samples.make(str(src), headline=True, summary=True, skills=True)
+        reading = json.loads(json.dumps(pdf_samples.pieces(True, True, True)))
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(reading, "read")):
+            cls.slug = service.onboard("Dana Parts", resume_path=src)["slug"]
+
+    def _apply(self, reply):
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")), \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            return service.apply(self.slug, jd_text=JD_TEXT, company="Acme", title="Senior Python Engineer", ai="haiku")
+
+    def test_a_new_summary_headline_and_skill_order_are_all_drawn(self):
+        r = self._apply({"headline": "Senior Python Engineer", "summary": self.NEW_SUMMARY,
+                          "skill_lines": ["s2", "s0", "s1"]})
+        self.assertIn("summary reworded", r["resume_ai"])
+        self.assertIn("headline reworded", r["resume_ai"])
+        self.assertIn("skills reordered (3 lines)", r["resume_ai"])
+        import fitz
+        with fitz.open(r["files"]["pdf"]) as d:
+            text = key("".join(p.get_text() for p in d))
+        self.assertIn(key(self.NEW_SUMMARY.replace("**", "")), text)
+        self.assertEqual(r["problems"], [])
+
+    def test_a_summary_too_long_to_fit_is_reported_as_kept(self):
+        r = self._apply({"summary": self.TOO_LONG_SUMMARY,
+                          "order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
+        self.assertIn("the summary kept its text to fit", r["resume_ai"])
+        self.assertNotIn("summary reworded", r["resume_ai"])
+        self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
+
+    def test_a_pdf_where_only_the_skills_change_keeps_its_own_style(self):
+        r = self._apply({"order": {"r0": ["r0b0", "r0b1", "r0b2"], "r1": ["r1b0", "r1b1"]}})
+        self.assertIn("skills reordered", r["resume_ai"])
+        self.assertNotIn("original style skipped: nothing in the file could be tailored safely", r["resume_ai"])
+        self.assertIn("Resume style: original (.pdf)", r["resume_ai"])
+        self.assertNotIn("docx", r["files"])
 
 
 class ApplyWithRulePieces(TempWorkspace):
