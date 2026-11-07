@@ -211,6 +211,16 @@ def _chars_ok(new, old):
     return all(" " <= c <= "~" or c in old for c in new)
 
 
+BREAK = re.compile(r"(?=(\w- \w))")     # a word a PDF broke at a line's end, as its text reads: "e- p" of "de- ploying"
+
+
+def _echoes_break(new, old):
+    """Whether new repeats a word broken at a line's end the way old's shown text has it ("de- ploying"). Drawn inside
+    a line it would show so, and style_pdf would leave the whole job as printed: only this piece keeps its text."""
+    frags = set(BREAK.findall(old.replace("**", "")))
+    return any(f in frags for f in BREAK.findall(new.replace("**", "")))
+
+
 def _bullet_new(new, old, have):
     """Claude's rewording of one bullet if it passes the fact checks and the length limits, else None."""
     new = clean_bold(new, old)
@@ -237,12 +247,26 @@ def headline_ok(new, old, profile, job_title):
     have = set(profile.get("skills", {}).get("all", []))
     if [s for s in SK.find(new) if s not in have]:
         return None
+    # never a step down from the member's own headline (owner, 2026-11-07): not a lower level ("Principal ..." ->
+    # "Senior ..."), and no technology it names dropped ("... .NET DEVELOPER" -> "... DEVELOPER")
+    if _rank(new) < _rank(old) or set(SK.find(old, trusted=True)) - set(SK.find(new, trusted=True)):
+        return None
     return new.upper() if old.isupper() else new
+
+
+RANKS = [(r"intern|trainee", 0), (r"junior|jr|associate|entry", 1), (r"senior|sr", 3), (r"lead|staff|manager", 4),
+         (r"principal|architect", 5), (r"head|director", 6), (r"vp|chief|cto|cio", 7)]
+
+
+def _rank(title):
+    """A title's level: its highest level word, 2 (mid) when it has none."""
+    return max((n for pat, n in RANKS if re.search(rf"(?i)\b({pat})\b", title)), default=2)
 
 
 def default_plan(doc, jd):
     """What changes without Claude: bullets ordered by relevance to the job (tailor's score), skills by the job's
-    weights. Ties keep the original order."""
+    weights. Ties keep the original order. A fixed skill line (a PDF's chips, or one that starts with a sign) is
+    never reordered; a .tex line has no "fixed" key, so it's never fixed here."""
     w = TL.jd_weights(jd)
     weight = lambda item: sum(w.get(s, 0) for s in SK.find(item, trusted=True))
     plan = {"headline": None, "summary": None, "text": {}, "order": {}, "skills": {}, "skill_lines": []}
@@ -251,44 +275,52 @@ def default_plan(doc, jd):
             ranked = sorted(j["bullets"], key=lambda b: -TL._bullet_score(b["text"].replace("**", ""), w))
             plan["order"][j["id"]] = [b["id"] for b in ranked]
     for line in doc["skills"]:
-        plan["skills"][line["id"]] = sorted(line["items"], key=lambda x: -weight(x))
-    if doc.get("skills_move"):
+        items = line["items"]
+        plan["skills"][line["id"]] = items if line.get("fixed") else sorted(items, key=lambda x: -weight(x))
+    if doc.get("skills_move") and not any(l.get("fixed") for l in doc["skills"]):
         plan["skill_lines"] = [l["id"] for l in sorted(doc["skills"], key=lambda l: -sum(weight(x) for x in l["items"]))]
     return plan
 
 
 def check(doc, reply, profile, jd):
     """Claude's reply -> the plan that passed every check. A piece that fails keeps its original text, and an order
-    that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added)."""
+    that isn't exactly the original IDs keeps the relevance order (so no bullet is ever lost or added). In a PDF a
+    rewording that repeats a word broken at a line's end ("de- ploying", _echoes_break) keeps its text too. Skill items
+    keep their printed spelling, in Claude's order: only the order is drawn, so "github" for "GitHub" is no change."""
     plan = default_plan(doc, jd)
     reply = reply if isinstance(reply, dict) else {}
     texts = reply.get("bullets") if isinstance(reply.get("bullets"), dict) else {}
     orders = reply.get("order") if isinstance(reply.get("order"), dict) else {}
     have = set(profile.get("skills", {}).get("all", []))
+    broken = _echoes_break if doc.get("ext") == ".pdf" else (lambda new, old: False)
     for j in doc["jobs"]:
         got = [str(x) for x in _list(orders.get(j["id"]))]
         if j["reorder"] and sorted(got) == sorted(b["id"] for b in j["bullets"]):
             plan["order"][j["id"]] = got
         for b in j["bullets"]:
             new = _bullet_new(texts.get(b["id"]), b["text"], have)
-            if new and not b["fixed"]:
+            if new and not b["fixed"] and not broken(new, b["text"]):
                 plan["text"][b["id"]] = new
     s = doc.get("summary")
     if s and not s["fixed"]:
         new = clean_bold(reply.get("summary"), s["text"])
         n, o = new.replace("**", ""), s["text"].replace("**", "")
-        if _chars_ok(n, o) and llm._summary_ok(n, o, profile, *LENGTH):
+        if _chars_ok(n, o) and llm._summary_ok(n, o, profile, *LENGTH) and not broken(n, o):
             plan["summary"] = new
     h = doc.get("headline")
     if h and not h["fixed"]:
         plan["headline"] = headline_ok(reply.get("headline"), h["text"], profile, TL.headline_title(jd.get("title", "")))
     lines = reply.get("skills") if isinstance(reply.get("skills"), dict) else {}
     for line in doc["skills"]:
+        if line.get("fixed"):
+            continue                     # a fixed line (chips, or one that starts with a sign) is never reordered
         got = [str(x).strip() for x in _list(lines.get(line["id"]))]
         if got and sorted(map(key, got)) == sorted(map(key, line["items"])):
-            plan["skills"][line["id"]] = got
+            printed = {key(t): t for t in line["items"]}
+            plan["skills"][line["id"]] = [printed[key(t)] for t in got]
     got = [str(x) for x in _list(reply.get("skill_lines"))]
-    if doc.get("skills_move") and got and sorted(got) == sorted(l["id"] for l in doc["skills"]):
+    if doc.get("skills_move") and got and not any(l.get("fixed") for l in doc["skills"]) \
+            and sorted(got) == sorted(l["id"] for l in doc["skills"]):
         plan["skill_lines"] = got
     return plan
 
@@ -364,6 +396,16 @@ def report_spec(doc, plan):
             "rewritten": rewritten, "style": {"source": doc["ext"], "plan": plan}}
 
 
+def _kept_note(name, why, they=False):
+    """How the note says a part's change wasn't drawn, by style_pdf.build's reason (parts_kept): it didn't fit, its
+    font can't draw the new text, or it didn't read back and was left as printed."""
+    it, its = ("they", "their") if they else ("it", "its")
+    if why == "check":
+        return f", {name} left as printed: {it} didn't redraw cleanly"
+    reason = {"fit": f"{it} didn't fit", "font": f"{its} font can't draw the new one"}.get(why)
+    return f", {name} {'kept their order' if they else 'kept its text'}" + (f": {reason}" if reason else "")
+
+
 def tailor(slug, member, profile, jd, jd_text, model, folder, base):
     """Tailor the member's own resume file for one job post. model None = no Claude: bullets and skills are only
     reordered. -> {"files", "spec", "note"}; {"note": why} when it fell back; {} when there's no file to edit."""
@@ -393,12 +435,29 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         for bid in kept:                           # rewordings the file couldn't fit kept their original text
             plan["text"].pop(bid, None)
         left, mailto = files.pop("left", []), files.pop("mailto", 0)     # the PDF handler's (see style_pdf.build)
+        parts_kept = files.pop("parts_kept", None) or {}    # the PDF handler's too: the parts it didn't draw, and why
+        skill_by_id = {l["id"]: l for l in doc["skills"]}
+        if parts_kept.get("headline"):
+            plan["headline"] = None
+        if parts_kept.get("summary"):
+            plan["summary"] = None
+        for sid in parts_kept.get("skills") or {}:
+            if sid in skill_by_id:
+                plan["skills"][sid] = skill_by_id[sid]["items"]          # its own order: that reorder wasn't drawn
+        if parts_kept.get("skill_lines"):
+            plan["skill_lines"] = []
+        skill_ids = [l["id"] for l in doc["skills"]]
+        skill_changed = {sid for sid in skill_ids if plan["skills"].get(sid, skill_by_id[sid]["items"])
+                          != skill_by_id[sid]["items"]}
+        order = plan.get("skill_lines") or skill_ids
+        skill_changed |= {sid for i, sid in enumerate(order) if sid != skill_ids[i]}      # only the ones that moved
         kept = [b for b in kept if b.split("b")[0] not in left]          # those left with their job are told apart
         used = files.pop("order", None)            # the PDF handler says the order it really drew (.tex builds don't)
         if used is not None:
             plan["order"].update(used)
             same = lambda j: used.get(j["id"], [b["id"] for b in j["bullets"]]) == [b["id"] for b in j["bullets"]]
-            if not plan["text"] and all(same(j) for j in doc["jobs"]):
+            if not plan["text"] and not plan.get("headline") and not plan.get("summary") and not skill_changed \
+                    and all(same(j) for j in doc["jobs"]):
                 Path(files["pdf"]).unlink(missing_ok=True)       # the tailored RenderCV resume is used instead
                 return {"note": "original style skipped: nothing in the file could be tailored safely"}
     except Exception as e:                       # any failure: today's RenderCV resume is used instead
@@ -414,6 +473,19 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         note += f", {len(kept)} reworded bullet(s) kept their original text to fit"
     if left:
         note += f", {len(left)} job(s) left as they were (they didn't redraw cleanly)"
+    if plan.get("summary"):
+        note += ", summary reworded"
+    elif parts_kept.get("summary"):
+        note += _kept_note("the summary", parts_kept["summary"])
+    if plan.get("headline"):
+        note += ", headline reworded"
+    elif parts_kept.get("headline"):
+        note += _kept_note("the headline", parts_kept["headline"])
+    whys = [w for w in [*(parts_kept.get("skills") or {}).values(), parts_kept.get("skill_lines")] if w]
+    if skill_changed:
+        note += f", skills reordered ({len(skill_changed)} lines)"
+    elif whys:
+        note += _kept_note("skills", next((w for w in ("check", "fit") if w in whys), whys[0]), they=True)
     if mailto:
         note += f", {mailto} email link(s) set to the address they show"
     if why:

@@ -227,8 +227,9 @@ may be dropped.
 ### PDF in place (`style_pdf.py`)
 
 Updated 2026-11-06 from a prototype run on one member's PDF and all six member PDFs (LaTeX, Word, pdfmake, ReportLab,
-two-column designs). Part 3 changes **bullets only**: a PDF's headline, summary and skills stay as they are for now (the
-owner chose bullets first). A PDF member's application gets the edited PDF only, with no DOCX.
+two-column designs). Part 3 changed the bullets (the owner chose bullets first); part 4 adds the headline, summary and
+skills with the same machinery (see "PDF headline, summary and skills (part 4)" below). A PDF member's application
+gets the edited PDF only, with no DOCX.
 
 - **Find:**
   - Text lines come from `get_text("rawdict")`, so every letter's position is known.
@@ -294,6 +295,35 @@ owner chose bullets first). A PDF member's application gets the edited PDF only,
   - Redrawn text is appended to each page's content stream. Extractors that read by position, like ours and most
     resume parsers, read it in order. A naive stream-order extractor reads a page's redrawn bullets after the page's
     other text.
+  - A redrawn headline and summary (part 4) come last in stream order too, like redrawn bullets: a stream-order
+    extractor reads the headline after the rest of its page, where it matters more than for a bullet.
+
+### PDF headline, summary and skills (part 4)
+
+Decided with the owner on 2026-11-07. They go through the same machinery as bullets: found on whole lines, erased in
+thin bands, redrawn, read back word for word, and the whole page checked; any problem keeps the original.
+
+- **Summary:** reworded toward the job post with the bullet fact rules and the length limits (75-110%). It is redrawn
+  in its own lines, with the same left and right edges, line spacing, justification and main text style. Bold stays on
+  phrases that were bold in the original (`clean_bold`). It must fit in no more lines than it had, else the original
+  stays. A summary with a link, italics, mixed sizes or colors (beyond bold) or a drawing in its lines is fixed.
+- **Headline:** may become the job's title under the headline rules (`headline_ok`). It is redrawn on its own line,
+  left-aligned or centred as it was, in its own style, only if it fits the room it has (to the page's text margin, or
+  up to other text on its line). Its own style means every letter is drawn by the PDF's own font or that family
+  installed (its metric-compatible stand-in counts); a subset font missing a letter of the new title, with no such
+  family online, keeps the original rather than show a stand-in font next to the name. A headline in mixed styles,
+  right-aligned, or with a link is fixed.
+- **Skills:** reorder only. A skills line is "Label: items" text (one or more lines, the label in its own style). The
+  job's items move first within the line, with the original separators, and the line must keep its line count. Items
+  keep their printed spelling: Claude's own ("github" for "GitHub") is no change. Lines the job cares about move up
+  when the skill lines form a run with nothing between them, each moved whole, and every label stands in the same
+  place (at one x, in one style, all on their items' line or all above them: a section heading read as a row's label
+  must never move with that row). Skills in drawn boxes (chips) are fixed.
+- **Without Claude,** or with pieces read by rules: summary and headline stay; skills are reordered by job weight.
+- A rewording of a bullet or the summary that repeats a word the PDF broke at a line's end ("de- ploying", as its text
+  reads) keeps that piece's text alone; the rest of its job still changes.
+- The handler reports which of these changes it couldn't apply and why (it didn't fit, the font can't draw it, or it
+  didn't redraw cleanly), and the note and report say only what was drawn, with that reason.
 
 ## Running online (GitHub Actions)
 
@@ -360,7 +390,7 @@ Each part can ship on its own.
 2. **PDF in place** (moved ahead of .docx on 2026-11-06, because the team uploads PDFs): `style_pdf`, bullets only.
    This covers the current members.
 3. **.docx:** `style_docx` and LibreOffice in `doc-tools`.
-4. **PDF headline, summary and skills** (later).
+4. **PDF headline, summary and skills** (built 2026-11-07, before .docx, which no member uses yet).
 
 The first implementation plan covers part 1.
 

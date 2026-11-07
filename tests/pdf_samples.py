@@ -2,7 +2,8 @@
 
 make(path, ...) draws DANA REYES's resume: a header with a mailto link, an Experience heading, the jobs in JOBS (each
 bullet on two lines, **bold** words in Helvetica-Bold) and an Education heading. Its options draw the variations the
-tests need (see make). PIECES is what keep_style.confirm keeps from Claude's reading of it."""
+tests need (see make), a headline, a summary and skill lines among them. PIECES is what keep_style.confirm keeps from
+Claude's reading of it; pieces() adds the headline, summary and skill lines to it."""
 import re
 
 import fitz
@@ -21,10 +22,29 @@ JOBS = [
 PIECES = {"headline": "", "summary": "", "skills": [],
           "jobs": [{"title": t, "company": c, "location": "", "start": "", "end": "",
                     "bullets": [f"{a} {b}".replace("**", "") for a, b in bullets]} for t, c, bullets in JOBS]}
+HEADLINE = "Backend Engineer for Payment Platforms"
+SUMMARY = ("Backend engineer with eight years of **Python** and Go, building",
+           "payment systems that banks and card networks rely on daily.")
+SKILLS = [("Languages", ["Python", "Go", "SQL", "TypeScript"]),
+          ("Data", ["PostgreSQL", "Redis", "Kafka", "Airflow"]),
+          ("Cloud", ["AWS", "Docker", "Kubernetes", "Terraform"])]
 PITCH, GAP, X_SIGN, X_TEXT = 12.5, 18.0, 52.0, 62.0
 BOTTOM = 790.0
 BLUE = (0.1, 0.3, 0.8)
 GRAY = (0.37, 0.39, 0.41)
+
+
+def pieces(headline=False, summary=False, skills=False):
+    """PIECES with the confirmed headline (HEADLINE, or a text given), summary and skill lines that make()'s options of
+    the same names draw. A fresh copy: a test may change it."""
+    out = {**PIECES, "jobs": [dict(j, bullets=list(j["bullets"])) for j in PIECES["jobs"]]}
+    if headline:
+        out["headline"] = HEADLINE if headline is True else headline
+    if summary:
+        out["summary"] = " ".join(SUMMARY).replace("**", "")
+    if skills:
+        out["skills"] = [{"label": label, "items": list(items)} for label, items in SKILLS]
+    return out
 
 
 def _runs(page, x, y, text, faces, size=10):
@@ -58,7 +78,8 @@ def _one_name(doc):
 def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, pitches=None, italic=False,
          lead_in=False, font_file=None, rule=False, intro=False, space_in_bold=False, underline=False, tracked=False,
          blank=False, subhead=False, mailto="mailto:dana@example.com", subhead_page=False, labels=False, sidebar=False,
-         bold_start=False, footer=False, header=False):
+         bold_start=False, footer=False, header=False, headline=None, summary=None, skills=None, topline=None,
+         beside=None, badge=None, headline_font=False, broken=False):
     """sign: 'inline' (a Symbol-font bullet on the line), 'circle' (a small drawn dot), 'typed' ("- " typed into the
     line's text, as Word's typed bullets and HTML-to-PDF write it), 'dash' or 'dot' (an en dash or a bullet in another
     font than the text's: Times, or the bold font of font_file), 'gray' (the inline sign and a space after it in gray,
@@ -86,7 +107,22 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     sidebar: a column of text in the left margin all along the first job, in its own line spacing (not labels).
     bold_start: the second line of the first job's first bullet starts with a bold word ("most": is mostly bold).
     footer: "Page n of N" at each page's foot, just above its bottom 5%, as Word sets it.
-    header: a gray header line on page 2 at half an inch, as Word sets it."""
+    header: a gray header line on page 2 at half an inch, as Word sets it.
+    headline: HEADLINE on a line of its own under the name (what's below moves down): 'left' (where the name starts),
+    'center' (centred over the page's text), 'right' (ending where the page's text does), 'mixed' (left, one word in
+    bold), 'title' (left, the first job's title).
+    summary: a Summary heading and SUMMARY's two lines (one word in bold) above Experience; 'italic': one word of it in
+    italics.
+    skills: a Skills heading and SKILLS as "**Label:** a, b, c" lines under Education; 'chips': each item in a small
+    drawn box; 'gap': two spaces after each label; 'years' / 'bar': "8 yrs" / a rating bar at x=420 beside the first
+    line (on its row); 'heading': the Skills heading in the labels' style (bold, body size) a row's pitch above the
+    first line, which has no label of its own; 'plain': the first line's label not bold (in its items' style).
+    topline: a line of small text at the top of page 1, above the name (a sentence that holds the headline's words).
+    beside: a word on the headline's line, at x=290 in 10 pt (other text on its line, to its right).
+    badge: 'box' (a filled box) or 'photo' (an image) at x=290 to 320 on the headline's line.
+    headline_font: the headline in font_file's regular font (embedded, as the bullets' text is) instead of Helvetica.
+    broken: the second job's first bullet breaks "nightly" at its first line's end ("night-" / "ly runs"), as a PDF's
+    text then reads it: "night- ly"."""
     pitch, gap, above, after = (11.5, 11.5, 11.5, 0.0) if tight else (PITCH, GAP, 20.0, 16.0)
     if font_file:
         faces = {"body": ("F0", fitz.Font(fontfile=font_file[0])), "bold": ("F1", fitz.Font(fontfile=font_file[1]))}
@@ -105,11 +141,22 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
         return p
 
     page, side = new_page(), []
+    top = 14.0 if headline else 0.0              # room for the headline under the name
+    if topline:
+        page.insert_text((50, 34), topline, fontname="helv", fontsize=8)
     page.insert_text((50, 60), "DANA REYES", fontname="hebo", fontsize=18)
-    page.insert_text((50, 80), "dana@example.com", fontname="helv", fontsize=10)
-    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 71, 140, 83), "uri": mailto})
-    page.insert_text((50, 110), "Experience", fontname="hebo", fontsize=13)
-    y = 708.0 if break_page else 140.0
+    page.insert_text((50, 80 + top), "dana@example.com", fontname="helv", fontsize=10)
+    page.insert_link({"kind": fitz.LINK_URI, "from": fitz.Rect(50, 71 + top, 140, 83 + top), "uri": mailto})
+    y = 110 + top
+    if summary:
+        page.insert_text((50, y), "Summary", fontname="hebo", fontsize=13)
+        for n, line in enumerate(SUMMARY):
+            if summary == "italic" and n == 1:
+                line = line.replace("daily", "//daily//")
+            _runs(page, 50, y + 20 + n * PITCH, line, faces)
+        y += 20 + len(SUMMARY) * PITCH + 30 - PITCH
+    page.insert_text((50, y), "Experience", fontname="hebo", fontsize=13)
+    y = 708.0 if break_page else y + 30
     for ji, (title, company, bullets) in enumerate(JOBS):
         if y > BOTTOM - 40:
             page, y = new_page(), 60.0
@@ -134,6 +181,8 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
                     line = line.replace("Built", "##Built##", 1)
                 if tracked and (ji, bi, n) == (0, 2, 0):
                     line = line.replace("public", "%%public%%")
+                if broken and (ji, bi) == (1, 0):
+                    line = line.replace("nightly", "night-") if n == 0 else "ly " + line
                 if bold_start and (ji, bi, n) == (0, 0, 1):
                     line = "**2M requests a day for card and bank** transfers." if bold_start == "most" else                         line.replace("2M", "**2M**", 1)
                 if space_in_bold:
@@ -181,6 +230,45 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     if y > BOTTOM - 20:
         page, y = new_page(), 60.0
     page.insert_text((50, y + 10), "Education", fontname="hebo", fontsize=13)
+    if skills:
+        if y > BOTTOM - 100:
+            page, y = new_page(), 20.0
+        heading = skills == "heading"
+        page.insert_text((50, y + 56 if heading else y + 50), "Skills", fontname="hebo", fontsize=10 if heading else 13)
+        body, bold = faces["body"][1], faces["bold"][1]
+        for n, (label, items) in enumerate(SKILLS):
+            sy = y + 70 + 14 * n
+            head = "" if heading and n == 0 else f"**{label}:**{'  ' if skills == 'gap' else ' '}"
+            if skills == "plain" and n == 0:
+                head = head.replace("**", "")
+            _runs(page, 50, sy, head + ", ".join(items), faces)
+            if n == 0 and skills == "years":
+                page.insert_text((420, sy), "8 yrs", fontname="helv", fontsize=10)
+            if n == 0 and skills == "bar":
+                page.draw_rect(fitz.Rect(420, sy - 7, 474, sy - 1), color=None, fill=BLUE)
+            x = 50 + bold.text_length(f"{label}:", fontsize=10) + body.text_length(" ", fontsize=10)
+            for item in items:
+                w = body.text_length(item, fontsize=10)
+                if skills == "chips":
+                    page.draw_rect(fitz.Rect(x - 1.5, sy - 8, x + w + 1.5, sy + 2.5), color=GRAY, width=0.5)
+                x += w + body.text_length(", ", fontsize=10)
+    if headline:                              # last: a centred one is centred over all the text on its page
+        hp = page if page.number == 0 else doc[0]
+        text = PIECES["jobs"][0]["title"] if headline == "title" else HEADLINE
+        heads = faces if headline_font else {"body": ("helv", fitz.Font("helv")), "bold": ("hebo", fitz.Font("hebo")),
+                                             "italic": faces["italic"]}
+        x, ws, width = 50.0, hp.get_text("words"), heads["body"][1].text_length(text, fontsize=12)
+        if headline == "center":
+            x = (min(w[0] for w in ws) + max(w[2] for w in ws) - width) / 2
+        elif headline == "right":
+            x = max(w[2] for w in ws) - width
+        _runs(hp, x, 78, text.replace("Payment", "**Payment**") if headline == "mixed" else text, heads, size=12)
+        if beside:
+            hp.insert_text((290, 78), beside, fontname="helv", fontsize=10)
+        if badge == "box":
+            hp.draw_rect(fitz.Rect(290, 68, 320, 80), color=None, fill=BLUE)
+        elif badge == "photo":
+            hp.insert_image(fitz.Rect(290, 68, 320, 80), pixmap=_photo())
     if font_file:
         from teambid import style_pdf
         style_pdf._fix_tounicode(doc, {"F0", "F1"})        # hyphens and spaces read back as "-" and " "
@@ -188,6 +276,78 @@ def make(path, sign="inline", break_page=False, link_bullet=False, tight=False, 
     if footer:
         for n, pg in enumerate(doc):
             pg.insert_text((270, 804), f"Page {n + 1} of {doc.page_count}", fontname="helv", fontsize=10)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _photo():
+    """A small plain image to place as a photo."""
+    pix = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 20, 20), False)
+    pix.set_rect(pix.irect, (200, 60, 60))
+    return pix
+
+
+def _first_job(page, x, y):
+    """JOBS[0] from (x, y): its heading, then each bullet's sign and two lines."""
+    faces = {"body": ("helv", fitz.Font("helv")), "bold": ("hebo", fitz.Font("hebo")),
+             "italic": ("heit", fitz.Font("heit"))}
+    title, company, bullets = JOBS[0]
+    page.insert_text((x, y), f"{title}, {company}", fontname="hebo", fontsize=11)
+    y += 20
+    for lines in bullets:
+        page.insert_text((x + 2, y), "•", fontname="symb", fontsize=10)
+        for n, line in enumerate(lines):
+            _runs(page, x + 12, y + n * PITCH, line, faces)
+        y += GAP + PITCH
+
+
+def pieces_of_first_job(**parts):
+    """PIECES with only the first job, and these headline, summary or skills."""
+    return {"headline": "", "summary": "", "skills": [], "jobs": [dict(PIECES["jobs"][0])], **parts}
+
+
+SIDEBAR_HEADLINE = "Backend Engineer"
+
+
+def make_sidebar(path):
+    """A dark sidebar 200 pt wide down the page's left, its text white: the name, SIDEBAR_HEADLINE and contacts. The
+    first job is in the main column, from x=220."""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.draw_rect(fitz.Rect(0, 0, 200, 842), color=None, fill=(0.15, 0.2, 0.3))
+    white = (1, 1, 1)
+    page.insert_text((20, 60), "DANA REYES", fontname="hebo", fontsize=18, color=white)
+    page.insert_text((20, 80), SIDEBAR_HEADLINE, fontname="helv", fontsize=11, color=white)
+    page.insert_text((20, 110), "dana@example.com", fontname="helv", fontsize=9, color=white)
+    page.insert_text((220, 140), "Experience", fontname="hebo", fontsize=13)
+    _first_job(page, 220, 165)
+    doc.save(path)
+    doc.close()
+    return path
+
+
+WRAP_SUMMARY = ["Backend engineer with eight years of Python and Go, building",
+                "payment systems that banks and card networks rely on daily,",
+                "with a focus on ledgers, reconciliation, and fraud checks for",
+                "card schemes, plus the on-call rota and incident reviews that",
+                "keep the platform running for partner banks across Europe and the United Kingdom every",
+                "single day of the year, including the busiest shopping weekends and the end of the tax year."]
+WRAP_PHOTO = fitz.Rect(430, 100, 545, 156)
+
+
+def make_wrap(path):
+    """A summary whose first four lines wrap around a photo at the right (WRAP_PHOTO); the two below it run on to
+    x=545. The first job follows."""
+    doc = fitz.open()
+    page = doc.new_page(width=595, height=842)
+    page.insert_text((50, 60), "DANA REYES", fontname="hebo", fontsize=18)
+    page.insert_text((50, 95), "Summary", fontname="hebo", fontsize=13)
+    page.insert_image(WRAP_PHOTO, pixmap=_photo())
+    for n, line in enumerate(WRAP_SUMMARY):
+        page.insert_text((50, 115 + PITCH * n), line, fontname="helv", fontsize=10)
+    page.insert_text((50, 210), "Experience", fontname="hebo", fontsize=13)
+    _first_job(page, 50, 235)
     doc.save(path)
     doc.close()
     return path
