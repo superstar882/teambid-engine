@@ -27,6 +27,7 @@ from copy import deepcopy
 from pathlib import Path
 
 import docx
+from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from lxml import etree
@@ -68,8 +69,13 @@ def paragraphs(document):
 
 
 def _styles(document):
-    """The document's styles by id, its default paragraph style and its default run properties."""
-    root = document.styles.element
+    """The document's styles by id, its default paragraph style and its default run properties. Read from its styles
+    part, never through document.styles: for a file without one (it's optional) that adds python-docx's own, and
+    build would save it into the member's file, restyling every run that doesn't set its own font and size."""
+    try:
+        root = document.part.part_related_by(RT.STYLES).element
+    except (KeyError, AttributeError):                # none, or one python-docx doesn't read as XML
+        return {"by_id": {}, "para": None, "defaults": None}
     by_id = {s.get(qn("w:styleId")): s for s in root.findall(qn("w:style"))}
     para = next((i for i, s in by_id.items()
                  if s.get(qn("w:type")) == "paragraph" and s.get(qn("w:default")) in ("1", "true", "on")), None)
@@ -288,8 +294,11 @@ def locate(document, pieces):
     if n >= 0 and all(below(t) >= c for t, c in titles.items() if len(t) >= 3 and t in k):
         used.add(n)
         x = full[n]
+        # its text goes to Claude and comes back without **: a headline partly in bold ("**Data** Engineer") would
+        # lose its bold, so it stays as printed (as a skill line with only some items bold does)
         out["headline"] = {"text": _text(x["chars"]).replace("**", ""), "_at": x["at"],
-                           "fixed": x["fixed"] or len(x["looks"]) > 1 or x["list"] or bool(x["sign"])}
+                           "fixed": x["fixed"] or len(x["looks"]) > 1 or x["list"] or bool(x["sign"])
+                           or len({b for c, b in x["chars"] if not c.isspace()}) > 1}
     # summary: one paragraph, or several in a row (a list isn't a paragraph); one new text can't go back into several
     # paragraphs without changing how many there are, so a summary over several stays as written
     starts, pos = [], 0

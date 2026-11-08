@@ -10,6 +10,7 @@ import io
 import re
 import struct
 import textwrap
+import zipfile
 import zlib
 from pathlib import Path
 
@@ -220,6 +221,23 @@ def make(path, link_bullet=False, table=False, nested=False, gap=False, typed=Fa
     d.add_heading("Education", level=1)
     d.add_paragraph("B.Sc. Computer Science, University of Bremen, 2018")
     d.save(path)
+    return path
+
+
+def without_styles(path):
+    """The file at path rewritten without its styles part (it's optional: Apache POI's new XWPFDocument() writes
+    none), its relationship and its content type gone too -> path."""
+    with zipfile.ZipFile(path) as z:
+        items = [(i, z.read(i.filename)) for i in z.infolist()]
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
+        for item, data in items:
+            if item.filename in ("word/styles.xml", "word/stylesWithEffects.xml"):
+                continue
+            if item.filename == "word/_rels/document.xml.rels":
+                data = re.sub(rb'<Relationship [^>]*Target="styles(WithEffects)?\.xml"[^>]*/>', b"", data)
+            if item.filename == "[Content_Types].xml":
+                data = re.sub(rb'<Override [^>]*PartName="/word/styles(WithEffects)?\.xml"[^>]*/>', b"", data)
+            z.writestr(item, data)
     return path
 
 
