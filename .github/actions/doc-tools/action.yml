@@ -1,9 +1,14 @@
 # TinyTeX (a small, real TeX Live: the same pdfLaTeX engine Overleaf uses) so members' own LaTeX resumes can be read
 # at upload and rebuilt for each job. The install is cached between runs; a package a resume needs that isn't in the
-# list below is installed by style_tex.compile_tex on first use. LaTeX itself runs inside a Docker sandbox, armed by
-# the first step below so a later failure (tlmgr, docker pull) can't leave it off.
+# list below is installed by style_tex.compile_tex on first use. With `libreoffice: "true"`, LibreOffice too, for Word
+# members' own .docx. Both run inside a Docker sandbox, armed by the first step below so a later failure (tlmgr,
+# docker pull) can't leave it off.
 name: Document tools
-description: TinyTeX for building members' own LaTeX resumes
+description: TinyTeX for building members' own LaTeX resumes, LibreOffice for their Word ones
+inputs:
+  libreoffice:
+    description: "Install LibreOffice too (Word members' .docx): only where documents are built or tested"
+    default: "false"
 runs:
   using: composite
   steps:
@@ -13,6 +18,7 @@ runs:
         # armed FIRST, before any step that can fail (tlmgr update, docker pull): if this action stops early,
         # style_tex must still see the sandbox on rather than silently building a member's upload on the bare runner
         echo "TEAMBID_LATEX_SANDBOX=docker" >> "$GITHUB_ENV"
+        echo "TEAMBID_DOCX_SANDBOX=docker" >> "$GITHUB_ENV"     # LibreOffice opens a member's .docx only in Docker too
 
     - name: Fonts for members' own PDFs
       shell: bash
@@ -23,6 +29,27 @@ runs:
         { sudo apt-get update -qq && sudo apt-get install -y -qq fonts-crosextra-carlito fonts-crosextra-caladea \
             fonts-liberation fonts-roboto fonts-inter fonts-open-sans fonts-lato fonts-dejavu-core; } \
           || echo "fonts didn't install this run; reworded bullets fall back to DejaVu Sans"
+
+    - name: LibreOffice for members' own Word resumes
+      if: inputs.libreoffice == 'true'
+      shell: bash
+      run: |
+        # style_docx converts a member's tailored .docx to PDF with it, inside Docker (no network). Best-effort: without
+        # it a Word member gets the RenderCV resume, with a note
+        sudo apt-get install -y -qq --no-install-recommends libreoffice-writer-nogui \
+          || echo "LibreOffice didn't install this run; Word members get the RenderCV resume"
+
+    - name: Pre-pull the LibreOffice sandbox image
+      if: inputs.libreoffice == 'true'
+      shell: bash
+      run: |
+        # the tag style_docx._image picks: Ubuntu at the runner's own version, since the container runs the runner's
+        # /usr (24.04 when that can't be read). Best-effort, like the LaTeX image: `docker run` pulls it if it's missing
+        tag=24.04
+        if . /etc/os-release && [ "${ID:-}" = ubuntu ] && [[ "${VERSION_ID:-}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+          tag="$VERSION_ID"
+        fi
+        docker pull -q "ubuntu:$tag" || echo "image pull failed; the first Word build pulls it"
 
     - name: This month
       id: month
