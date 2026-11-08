@@ -242,6 +242,19 @@ class Storage(unittest.TestCase):
             con.execute("DELETE FROM members WHERE id=?", (mid,))
 
 
+class Privacy(unittest.TestCase):
+    def test_logs_name_a_member_by_a_code_never_their_name(self):
+        # the engine repo and its Actions logs are public
+        code = config.who("dana-reyes")
+        self.assertRegex(code, r"^member [0-9a-f]{6}$")
+        self.assertEqual(code, config.who("dana-reyes"))
+        self.assertNotIn("dana", code)
+        line = config.redact("added Dana Reyes: file members/dana-reyes/resume/cv.pdf", "dana-reyes", "Dana Reyes")
+        self.assertNotIn("Dana", line)
+        self.assertNotIn("dana-reyes", line)
+        self.assertIn(code, line)
+
+
 class Audit(unittest.TestCase):
     def test_audit(self):
         a = analyze.audit(rp.parse_file(TXT))

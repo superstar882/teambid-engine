@@ -48,6 +48,21 @@ def ensure_dirs():
         p.mkdir(parents=True, exist_ok=True)
 
 
+def who(slug):
+    """A member as logs show them: a short code, never their name. The engine repo and its Actions logs are public;
+    `python tb.py members` on the owner's PC shows each member's code."""
+    import hashlib
+    return "member " + hashlib.sha1(str(slug or "").encode("utf-8")).hexdigest()[:6]
+
+
+def redact(text, *names):
+    """text with each of names (a member's name, slug) replaced by their code, for a log line."""
+    text, code = str(text), who(names[0] if names else "")
+    for n in sorted({n for n in names if n}, key=len, reverse=True):
+        text = text.replace(n, code)
+    return text
+
+
 def member_dir(slug):
     d = MEMBERS / slug
     for sub in ("resume", "vault", "applications", "reports"):
