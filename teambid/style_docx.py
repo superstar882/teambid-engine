@@ -28,7 +28,9 @@ LOCKED = {qn(t) for t in ("w:hyperlink", "w:fldSimple", "w:fldChar", "w:instrTex
                           "w:moveTo", "w:rPrChange", "w:pPrChange", "w:drawing", "w:pict", "w:object", "w:txbxContent",
                           "w:sdt", "w:sym", "w:ruby", "w:footnoteReference", "w:endnoteReference",
                           "w:commentReference", "m:oMath", "m:oMathPara")}
-# a run's children that print text: None is the element's own text (w:t)
+# a run's children that print text: None is the element's own text (w:t). A tracked deletion's w:delText is left out
+# on purpose, as python-docx's paragraph.text (the text Claude read, resume_parse.extract_text) leaves it out: its
+# paragraph still matches its piece, and is fixed anyway (w:del is LOCKED)
 TEXT = {qn("w:t"): None, qn("w:tab"): "\t", qn("w:ptab"): "\t", qn("w:br"): "\n", qn("w:cr"): "\n",
         qn("w:noBreakHyphen"): "-", qn("w:softHyphen"): ""}
 TOGGLES = {"b", "i", "caps", "smallCaps", "strike", "dstrike", "vanish", "emboss", "imprint", "outline", "shadow"}
