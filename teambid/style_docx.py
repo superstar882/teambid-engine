@@ -351,7 +351,10 @@ def _soffice_cmd(exe, name, out_dir):
             "-v", "/etc/libreoffice:/etc/libreoffice:ro",
             "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:24.04",
             "timeout", "-s", "KILL", str(TIMEOUT),
-            "soffice", "--headless", "--norestore", "--convert-to", "pdf", "--outdir", "/work", f"/work/{name}.docx"
+            # its profile in the work folder, the one place it may write ("User installation could not be completed"
+            # otherwise: the container's /tmp isn't the run's user's)
+            "soffice", "--headless", "--norestore", "-env:UserInstallation=file:///work/.libreoffice",
+            "--convert-to", "pdf", "--outdir", "/work", f"/work/{name}.docx"
             ], TIMEOUT + 15                      # + container start-up
 
 
