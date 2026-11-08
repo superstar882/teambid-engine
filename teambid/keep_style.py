@@ -11,7 +11,7 @@ import json
 import re
 from pathlib import Path, PureWindowsPath
 
-from . import config, llm, resume_parse, style_pdf, style_tex
+from . import config, llm, resume_parse, style_docx, style_pdf, style_tex
 from . import skills as SK
 from . import tailor as TL
 from .style_text import key
@@ -325,7 +325,7 @@ def check(doc, reply, profile, jd):
     return plan
 
 
-HANDLERS = {".tex": style_tex, ".pdf": style_pdf}      # .docx comes in part 2 (after PDFs: the team uploads PDFs)
+HANDLERS = {".tex": style_tex, ".pdf": style_pdf, ".docx": style_docx}     # a .txt or .md has no style to keep
 
 
 def source_file(slug, member):
@@ -370,7 +370,7 @@ def _build(handler, doc, plan, folder, base):
             plan["summary"] = None
         else:
             del plan["text"][worst]
-    for k in ("pdf", "source"):          # the RenderCV resume is used instead: no stale tailored file next to it
+    for k in ("pdf", "source", "docx"):  # the RenderCV resume is used instead: no stale tailored file next to it
         if files.get(k):
             Path(files[k]).unlink(missing_ok=True)
     raise ValueError(f"the tailored file has {files['pages']} pages, the original {doc['pages']}")
@@ -421,6 +421,8 @@ def tailor(slug, member, profile, jd, jd_text, model, folder, base):
         doc = handler.find(src, pieces)
         if not doc["jobs"]:
             return {"note": "original style skipped: couldn't find the job bullets in the file"}
+        if doc["pages"] is None:        # a .docx LibreOffice can't print here: it can't be built, so Claude isn't asked
+            return {"note": f"original style skipped: {(doc.get('_why') or 'LibreOffice is not available')[:160]}"}
         plan, why, reply = default_plan(doc, jd), "no Claude: reordered only", None
         if model and handler is style_pdf and pieces.get("by") != "claude":
             # the rule-based parse can cut a bullet in two (a wrapped line read as its own bullet): a rewording drawn

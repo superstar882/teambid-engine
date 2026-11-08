@@ -4,11 +4,14 @@ make(path, ...) writes LENA BRANDT's resume: her name and HEADLINE, a contact li
 SUMMARY (one phrase in bold), an Experience heading with the jobs in JOBS (a heading line, then each bullet as a list
 item: the first job's by the "List Bullet" style, the second's by numbering set on the paragraph itself; **bold**
 words in bold runs), and a Skills heading with SKILLS as "**Label:** a, b, c" paragraphs. Its options build the
-variations the tests need (see make). PIECES is what keep_style.confirm keeps from Claude's reading of it."""
+variations the tests need (see make). PIECES is what keep_style.confirm keeps from Claude's reading of it. fake_pdf
+stands in for LibreOffice where a test doesn't need the real one."""
 import io
 import re
 import struct
+import textwrap
 import zlib
+from pathlib import Path
 
 import docx
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
@@ -160,7 +163,7 @@ def _odd_bullet(where, odd, inner):
 
 
 def make(path, link_bullet=False, table=False, nested=False, gap=False, typed=False, italic=False, header_text=None,
-         odd=None):
+         odd=None, split_summary=False):
     """link_bullet: "Airflow" in the second job's first bullet is a link.
     table: the first job's bullets are in the right cell of a one-row table (its dates in the left cell); nested: in
     a table inside that cell.
@@ -171,7 +174,8 @@ def make(path, link_bullet=False, table=False, nested=False, gap=False, typed=Fa
     odd: the first job's first bullet holds a simple field ('fldSimple') or a complex one ('fldChar') giving its
     "40M", a tracked insertion of "the warehouse" ('ins'), a tracked deletion of "nightly " before "events" ('del'), a
     picture after its text ('drawing': DrawingML; 'pict': a VML shape), or a text box after its text holding the
-    first job's third bullet ('textbox'; that bullet is then nowhere else)."""
+    first job's third bullet ('textbox'; that bullet is then nowhere else).
+    split_summary: SUMMARY in two paragraphs, broken after "SQL,"."""
     d = docx.Document()
     if header_text:
         d.sections[0].header.paragraphs[0].text = header_text
@@ -182,7 +186,9 @@ def make(path, link_bullet=False, table=False, nested=False, gap=False, typed=Fa
     _runs(contact, CONTACT[0])
     _link(contact, CONTACT[1], "https://github.com/lenabrandt-example")
     d.add_heading("Summary", level=1)
-    _runs(d.add_paragraph(), SUMMARY)
+    cut = SUMMARY.index(" building")
+    for part in [SUMMARY[:cut], SUMMARY[cut + 1:]] if split_summary else [SUMMARY]:
+        _runs(d.add_paragraph(), part)
     d.add_heading("Experience", level=1)
     for n, (title, company, start, end, bullets) in enumerate(JOBS):
         _runs(d.add_paragraph(), f"**{title}** | {company} | {start} - {end}")
@@ -215,3 +221,20 @@ def make(path, link_bullet=False, table=False, nested=False, gap=False, typed=Fa
     d.add_paragraph("B.Sc. Computer Science, University of Bremen, 2018")
     d.save(path)
     return path
+
+
+def fake_pdf(docx_path, out_dir):
+    """Stands in for LibreOffice (style_docx.to_pdf): a Letter PDF of the text of the page header's paragraphs, then
+    every paragraph in the body, 80 short lines a page. -> (pdf path, pages)."""
+    import fitz
+    d, lines = docx.Document(str(docx_path)), []
+    header = [p._p for s in d.sections if not s.header.is_linked_to_previous for p in s.header.paragraphs]
+    for p in header + list(d.element.body.iter(qn("w:p"))):
+        lines += textwrap.wrap("".join(t.text or "" for t in p.iter(qn("w:t"))), 110) or [""]
+    pdf = fitz.open()
+    for n in range(0, len(lines), 80):
+        pdf.new_page(width=612, height=792).insert_text((36, 40), "\n".join(lines[n:n + 80]), fontsize=6)
+    out, pages = Path(out_dir) / "resume.pdf", pdf.page_count
+    pdf.save(out)
+    pdf.close()
+    return out, pages
