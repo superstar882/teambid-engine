@@ -465,9 +465,11 @@ class Converter(unittest.TestCase):
             pdf, pages = style_docx.to_pdf(self.src, self.tmp)
         want = ["docker", "run", "--rm", "--network", "none", "--user", "1001:118",
                 "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
+                "-v", "/etc/libreoffice:/etc/libreoffice:ro",
                 "-v", f"{self.tmp.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:24.04",
                 "timeout", "-s", "KILL", "90",
-                "soffice", "--headless", "--norestore", "--convert-to", "pdf", "--outdir", "/work", "/work/resume.docx"]
+                "soffice", "--headless", "--norestore", "-env:UserInstallation=file:///work/.libreoffice",
+                "--convert-to", "pdf", "--outdir", "/work", "/work/resume.docx"]
         self.assertEqual([c for c, _ in self.calls], [want])
         self.assertEqual(self.calls[0][1]["timeout"], 105)                  # + container start-up
         self.assertEqual((Path(pdf), pages), (self.tmp / "resume.pdf", 1))
