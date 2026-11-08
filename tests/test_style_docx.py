@@ -41,6 +41,19 @@ def made(**kw):
     return DS.make(str(Path(tempfile.mkdtemp()) / "lena.docx"), **kw)
 
 
+def edit(path, change):
+    """The fixture at path, changed by change(its python-docx document) and saved -> path."""
+    d = docx.Document(path)
+    change(d)
+    d.save(path)
+    return path
+
+
+def starting(d, text):
+    """The body paragraph of python-docx document d that starts with text."""
+    return next(p for p in d.paragraphs if p.text.startswith(text))
+
+
 def find(pieces=None, convert=NO_OFFICE, path=None, **kw):
     """style_docx.find on path, else a fresh fixture; convert: what the PDF converter does (raises it, or returns
     it)."""
@@ -285,6 +298,88 @@ class Find(unittest.TestCase):
         self.assertFalse(bullet(doc, "r0b2")["fixed"])          # its text may still change
         self.assertTrue(job(doc, "r1")["reorder"])
 
+    def test_a_break_or_tab_at_a_paragraphs_edge_fixes_it(self):
+        # a gap made with Shift+Enter, a page break or a tab is in no text: a rewrite would drop it, and nothing tells
+        cases = [("a Shift+Enter after a bullet", "Cut the nightly", "end", "w:br", None, "r0b1"),
+                 ("a page break after the summary", "Data engineer", "end", "w:br", "page", "summary"),
+                 ("a page break before a bullet", "Moved 25 cron", "start", "w:br", "page", "r1b0"),
+                 ("a column break after a bullet", "Added dbt", "end", "w:br", "column", "r1b1"),
+                 ("a carriage return after a bullet", "Added dbt", "end", "w:cr", None, "r1b1"),
+                 ("a tab before the headline", DS.HEADLINE, "start", "w:tab", None, "headline"),
+                 ("a tab after a bullet", "Cut the nightly", "end", "w:tab", None, "r0b1"),
+                 ("a tab after a skill line", "Cloud:", "end", "w:tab", None, "s2")]
+        for name, start, where, tag, kind, piece in cases:
+            with self.subTest(name):
+                def change(d):
+                    p, r, el = starting(d, start)._p, OxmlElement("w:r"), OxmlElement(tag)
+                    if kind:
+                        el.set(qn("w:type"), kind)
+                    r.append(el)
+                    p.insert(len(p) if where == "end" else int(p.find(qn("w:pPr")) is not None), r)
+                path = edit(made(), change)
+                doc, files = build(path, {"text": {piece: NEW_BULLET}, "summary": NEW_SUMMARY,
+                                          "headline": NEW_HEADLINE, "skills": {"s2": ["Terraform", "AWS", "Docker"]}})
+                got = doc[piece] if piece in ("headline", "summary") else \
+                    next((l for l in doc["skills"] if l["id"] == piece), None) or bullet(doc, piece)
+                self.assertTrue(got["fixed"])
+                others = [b for j in doc["jobs"] for b in j["bullets"] if b["id"] != piece]
+                self.assertFalse(any(b["fixed"] for b in others))
+                at = got["_at"][0] if piece == "summary" else got["_at"]
+                self.assertEqual(xml(files["docx"])[at], xml(path)[at])          # kept as it is, break and all
+
+    def test_bullets_formatted_apart_keep_their_order(self):
+        def sub_style(d):
+            starting(d, "Cut the nightly").style = d.styles["List Bullet 2"]
+
+        def sub_level(d):           # job 2's bullets are numbered on the paragraph itself
+            starting(d, "Added dbt tests")._p.pPr.find(f"{qn('w:numPr')}/{qn('w:ilvl')}").set(qn("w:val"), "1")
+
+        def space_after(d):
+            starting(d, "Wrote the data contracts").paragraph_format.space_after = Pt(12)
+
+        def bookmark(d):            # from the first bullet into the second
+            start, end = DS._xml('<w:bookmarkStart w:id="7" w:name="jobOne"/><w:bookmarkEnd w:id="7"/>')
+            starting(d, "Built a streaming")._p.append(start)
+            starting(d, "Cut the nightly")._p.append(end)
+        for name, change, jid, other in [("a sub-bullet by its style", sub_style, "r0", "r1"),
+                                         ("a sub-bullet by its list level", sub_level, "r1", "r0"),
+                                         ("more space after a job's last bullet", space_after, "r0", "r1"),
+                                         ("a bookmark from one bullet into the next", bookmark, "r0", "r1")]:
+            with self.subTest(name):
+                doc = find(path=edit(made(), change))
+                self.assertFalse(job(doc, jid)["reorder"])
+                self.assertTrue(job(doc, other)["reorder"])
+                self.assertFalse(any(b["fixed"] for j in doc["jobs"] for b in j["bullets"]))   # words may change
+
+    def test_what_doesnt_change_how_a_bullet_prints_still_lets_it_move(self):
+        def own_bookmark(d):        # Word's _GoBack: a bookmark that starts and ends inside one paragraph
+            for el in DS._xml('<w:bookmarkStart w:id="0" w:name="_GoBack"/><w:bookmarkEnd w:id="0"/>'):
+                starting(d, "Cut the nightly")._p.append(el)
+
+        def mark_and_rsid(d):       # the paragraph mark's own look (w:pPr/w:rPr), and Word's revision ids
+            p = starting(d, "Wrote the data contracts")._p
+            p.set(qn("w:rsidR"), "00AB12CD")
+            p.get_or_add_pPr().append(DS._xml("<w:rPr><w:b/></w:rPr>")[0])
+        for name, change in [("a bookmark inside one bullet", own_bookmark),
+                             ("the paragraph mark's look and an rsid", mark_and_rsid)]:
+            with self.subTest(name):
+                self.assertTrue(job(find(path=edit(made(), change)), "r0")["reorder"])
+
+    def test_skill_lines_formatted_apart_stay_where_they_are(self):
+        def space_after(d):
+            starting(d, "Cloud:").paragraph_format.space_after = Pt(12)
+
+        def bookmark(d):
+            start, end = DS._xml('<w:bookmarkStart w:id="8" w:name="langs"/><w:bookmarkEnd w:id="8"/>')
+            starting(d, "Languages:")._p.append(start)
+            starting(d, "Data:")._p.append(end)
+        self.assertTrue(find()["skills_move"])
+        for name, change in [("more space after the last line", space_after), ("a bookmark over two lines", bookmark)]:
+            with self.subTest(name):
+                doc = find(path=edit(made(), change))
+                self.assertFalse(doc["skills_move"])
+                self.assertFalse(any(l["fixed"] for l in doc["skills"]))        # their items may still reorder
+
 
 class Write(unittest.TestCase):
     """build puts the plan into a fresh copy of the file; LibreOffice is faked (DS.fake_pdf)."""
@@ -397,6 +492,33 @@ class Write(unittest.TestCase):
         own = lambda path: etree.tostring(para(path, bullet(doc, "r0b2")["_at"]).find(qn("w:r")))
         self.assertEqual(own(files["docx"]), own(path))         # that run is kept as it is
 
+    def test_a_sign_sharing_a_run_with_the_words_and_spaces_before_the_words_stay_exactly_as_written(self):
+        def change(d):
+            r = starting(d, "• Cut the nightly").runs[0]._r     # one run: "•", a positioned tab, then the words
+            r.set(qn("w:rsidR"), "00C0FFEE")
+            t = r.find(qn("w:t"))
+            words, t.text = t.text[2:], "•"
+            for el in DS._xml('<w:ptab w:relativeTo="margin" w:alignment="left" w:leader="none"/>'
+                              f'<w:t xml:space="preserve">{words}</w:t>'):
+                r.append(el)
+            starting(d, DS.HEADLINE).runs[0].text = "   " + DS.HEADLINE          # centred by hand
+        path = edit(made(typed=True), change)
+        doc, files = build(path, {"text": {"r0b1": NEW_BULLET}, "headline": NEW_HEADLINE})
+        at = bullet(doc, "r0b1")["_at"]
+        self.assertEqual(bullet(doc, "r0b1")["_sign"], "•\t")
+        sign = deepcopy(para(path, at).find(qn("w:r")))
+        sign.remove(sign[-1])                                   # the run as it was, without its words
+        self.assertEqual(etree.tostring(deepcopy(para(files["docx"], at).find(qn("w:r")))), etree.tostring(sign))
+        self.assertEqual(text(files["docx"], at), "•" + NEW_BULLET)
+        self.assertEqual(text(files["docx"], doc["headline"]["_at"]), "   " + NEW_HEADLINE)
+
+    def test_a_sub_bullet_never_moves_away_from_its_bullet(self):
+        path = edit(made(), lambda d: setattr(starting(d, "Cut the nightly"), "style", d.styles["List Bullet 2"]))
+        before = xml(path)
+        doc, files = build(path, {"order": {"r0": ["r0b1", "r0b0", "r0b2"]}})
+        self.assertFalse(job(doc, "r0")["reorder"])
+        self.assertEqual(xml(files["docx"]), before)
+
     def test_the_pdf_must_read_back_the_new_text(self):
         path = made()
 
@@ -453,6 +575,13 @@ class Converter(unittest.TestCase):
         one_page(self.tmp / "resume.pdf")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
+    def os_release(self, text):
+        """The host's /etc/os-release, as a file holding text (None: there is none)."""
+        path = Path(tempfile.mkdtemp()) / "os-release"
+        if text is not None:
+            path.write_text(text, encoding="utf-8")
+        return mock.patch.object(style_docx, "OS_RELEASE", path)
+
     def test_the_sandbox_has_no_network_and_sees_only_the_work_folder(self):
         tools = {"soffice": "/usr/bin/soffice", "docker": "/usr/bin/docker"}
         fake = {"TEAMBID_DOCX_SANDBOX": "docker", "ANTHROPIC_API_KEY": "sk-secret", "GH_TOKEN": "gh-secret",
@@ -461,12 +590,15 @@ class Converter(unittest.TestCase):
              mock.patch("teambid.style_docx.shutil.which", side_effect=tools.get), \
              mock.patch("teambid.style_docx.os.getuid", create=True, return_value=1001), \
              mock.patch("teambid.style_docx.os.getgid", create=True, return_value=118), \
+             self.os_release('NAME="Ubuntu"\nVERSION_ID="26.04"\nID=ubuntu\n'), \
              mock.patch("teambid.style_docx.subprocess.run", side_effect=self.run_ok):
             pdf, pages = style_docx.to_pdf(self.src, self.tmp)
-        want = ["docker", "run", "--rm", "--network", "none", "--user", "1001:118",
+        want = ["docker", "run", "--rm", "--network", "none",
+                "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--memory", "1g", "--pids-limit", "256",
+                "--user", "1001:118",
                 "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
                 "-v", "/etc/libreoffice:/etc/libreoffice:ro",
-                "-v", f"{self.tmp.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:24.04",
+                "-v", f"{self.tmp.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:26.04",
                 "timeout", "-s", "KILL", "90",
                 "soffice", "--headless", "--norestore", "-env:UserInstallation=file:///work/.libreoffice",
                 "--convert-to", "pdf", "--outdir", "/work", "/work/resume.docx"]
@@ -537,6 +669,45 @@ class Converter(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 style_docx.to_pdf(self.src, self.tmp)
         self.assertIn("source file could not be loaded", str(ctx.exception))
+
+    def test_the_sandbox_runs_the_hosts_own_ubuntu(self):
+        # the container runs the host's /usr: its /etc must be the same Ubuntu, and 24.04 is the guess when it's unknown
+        cases = {'NAME="Ubuntu"\nVERSION_ID="26.04"\nID=ubuntu\nID_LIKE=debian\n': "ubuntu:26.04",
+                 "ID=ubuntu\nVERSION_ID=24.10\n": "ubuntu:24.10",
+                 'ID=debian\nVERSION_ID="12"\n': "ubuntu:24.04",
+                 'ID=linuxmint\nVERSION_ID="22.1"\nID_LIKE="ubuntu debian"\n': "ubuntu:24.04",    # no Ubuntu 22.1
+                 'ID=ubuntu\nVERSION_ID="noble; rm -rf /"\n': "ubuntu:24.04",
+                 "ID=ubuntu\n": "ubuntu:24.04",
+                 None: "ubuntu:24.04"}
+        for text, want in cases.items():
+            with self.subTest(os_release=text), self.os_release(text):
+                self.assertEqual(style_docx._image(), want)
+
+    def produces(self, make):
+        """to_pdf where LibreOffice leaves make(path of its PDF) in the work folder -> the RuntimeError it raises."""
+        def run(cmd, **kw):
+            make(self.tmp / "resume.pdf")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with mock.patch("teambid.style_docx.shutil.which", return_value="/usr/bin/soffice"), \
+             mock.patch("teambid.style_docx.subprocess.run", side_effect=run):
+            with self.assertRaises(RuntimeError) as ctx:
+                style_docx.to_pdf(self.src, self.tmp)
+        return ctx.exception
+
+    def test_a_pdf_that_is_a_folder_is_refused(self):
+        e = self.produces(lambda path: path.mkdir())
+        self.assertEqual(str(e), "LibreOffice's PDF isn't a plain file in its work folder, so it isn't used")
+
+    def test_a_pdf_that_is_a_link_to_a_host_file_is_refused(self):
+        # a LibreOffice taken over by a hostile file could leave a link to another member's resume as its PDF
+        other = Path(tempfile.mkdtemp()) / "someone-else.pdf"
+        one_page(other)
+        try:
+            os.symlink(Path(tempfile.mkdtemp()) / "probe", Path(tempfile.mkdtemp()) / "link")
+        except OSError:
+            self.skipTest("this computer can't make symbolic links (Windows without the privilege); runs online")
+        e = self.produces(lambda path: os.symlink(other, path))
+        self.assertEqual(str(e), "LibreOffice's PDF isn't a plain file in its work folder, so it isn't used")
 
 
 @unittest.skipUnless(style_docx.available(), "LibreOffice (on GitHub Actions, in its sandbox) runs in the online Tests")

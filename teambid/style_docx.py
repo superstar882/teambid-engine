@@ -6,14 +6,15 @@ footers or text boxes. A paragraph's text is its runs' text (a tab or a line bre
 the runs printed in bold. A bullet is the whole text of one paragraph that is a list item (numbering set on it or by
 its style) or starts with a typed sign, which isn't part of its text; the headline, summary and skill lines are matched
 whole on their paragraphs too. A piece not found whole isn't in the doc, and stays as written. Safety: a paragraph with
-a link, a field, a tracked change, a picture, a text box, a tab or break inside its text, or runs in more than one style
-beyond bold is fixed (never reworded), and so is a summary over several paragraphs; a job's bullets, or the skill
-lines, move only when none is fixed or holds a section break and their paragraphs stand side by side under one parent,
-with nothing between them.
+a link, a field, a tracked change, a picture, a text box, a tab or break anywhere in its text (its edges too), or runs
+in more than one style beyond bold is fixed (never reworded), and so is a summary over several paragraphs; a job's
+bullets, or the skill lines, move only when none is fixed, ends a section or holds one end of a bookmark (or other
+range) reaching out of it, all have the same paragraph formatting (list level, indents, spacing), and they stand side
+by side under one parent, with nothing between them.
 Writing (build): a fresh copy of the file. A reworded paragraph's runs are replaced, in the look of its own first
-plain and bold runs, after its typed sign (kept as printed); its w:pPr and everything else in the file stay. Moves
-move whole w:p elements. LibreOffice prints the PDF, in a Docker sandbox on GitHub Actions (to_pdf), and the PDF must
-read back the new text.
+plain and bold runs, after its typed sign and any spaces before its words (kept exactly as written); its w:pPr and
+everything else in the file stay. Moves move whole w:p elements. LibreOffice prints the PDF, in a Docker sandbox on
+GitHub Actions (to_pdf), and the PDF must read back the new text.
 Design: docs/superpowers/specs/2026-11-05-keep-original-style-design.md (.docx)
 """
 import os
@@ -55,6 +56,8 @@ NOTHING = {("u", "none"), ("vertAlign", "baseline"), ("highlight", "none"), ("co
 LOOSE_SIGNS = set("-–—*")      # signs that also start ordinary text ("-40%"): one counts only with a space after it
 SIGN = re.compile(rf"\s*(?:[{re.escape(''.join(sorted(BULLETS)))}]\s+"
                   rf"|[{re.escape(''.join(sorted(BULLETS - LOOSE_SIGNS)))}]\s*)(?=\S)")
+# one end of a range that can reach from one paragraph into another: (what range, which end)
+RANGE = re.compile(r"(bookmark|commentRange|perm|moveFromRange|moveToRange|customXml\w*Range)(Start|End)$")
 
 
 def paragraphs(document):
@@ -139,9 +142,11 @@ def _layers(r, st, pstyles):
 
 def _read(p, st):
     """One paragraph -> {"el", "chars": [(character, bold)] with its spaces run together and without a typed sign,
-    "plain" (their text), "sign" (the typed sign and the space after it, as written), "list" (a list item), "fixed"
-    (it holds what a rewrite would lose: LOCKED, a tab or a break inside its text), "looks" (its runs' styles, bold
-    aside), "section" (it ends a section: Word keeps the break in its w:pPr, so moving it would move the break)}."""
+    "plain" (their text), "sign" (the typed sign and the space after it, as written), "lead" (what a rewrite keeps as
+    printed at its start: the sign and any spaces before the words), "list" (a list item), "fixed" (it holds what a
+    rewrite would lose: LOCKED, or a tab or a break anywhere after the sign, its edges too), "looks" (its runs'
+    styles, bold aside), "section" (it ends a section: Word keeps the break in its w:pPr, so moving it would move the
+    break), "form" (its paragraph formatting, _form), "spans" (it holds one end of a range reaching out of it)}."""
     ppr = p.find(qn("w:pPr"))
     pstyles = _pstyles(p, st)
     raw, looks = [], set()
@@ -163,16 +168,51 @@ def _read(p, st):
             chars.append((" ", b))
     while chars and chars[-1][0] == " ":
         chars.pop()
-    inner = "".join(c for c, _ in rest).strip()
+    after = "".join(c for c, _ in rest)   # all of it after the sign: a tab or break at either edge counts too
     num = _val(ppr, f"{qn('w:numPr')}/{qn('w:numId')}")
     for s in pstyles if num is None else []:
         num = _val(s.find(qn("w:pPr")), f"{qn('w:numPr')}/{qn('w:numId')}")
         if num is not None:
             break
     return {"el": p, "chars": chars, "plain": "".join(c for c, _ in chars), "sign": sign,
+            "lead": sign + after[:len(after) - len(after.lstrip())],
             "list": num not in (None, "0"),            # numId 0 turns a style's numbering off
-            "fixed": any(e.tag in LOCKED for e in p.iter()) or "\t" in inner or "\n" in inner, "looks": looks,
-            "section": ppr is not None and ppr.find(qn("w:sectPr")) is not None}
+            "fixed": any(e.tag in LOCKED for e in p.iter()) or "\t" in after or "\n" in after, "looks": looks,
+            "section": ppr is not None and ppr.find(qn("w:sectPr")) is not None,
+            "form": _form(ppr), "spans": _spans(p)}
+
+
+def _form(ppr):
+    """A paragraph's own formatting, to compare paragraphs by: its w:pPr without the paragraph mark's look (its w:rPr)
+    and Word's revision ids (w:rsid*); b"" when it says nothing."""
+    if ppr is None:
+        return b""
+    c = deepcopy(ppr)
+    for x in c.findall(qn("w:rPr")):
+        c.remove(x)
+    for e in c.iter():
+        for a in [a for a in e.attrib if etree.QName(a).localname.startswith("rsid")]:
+            del e.attrib[a]
+    return etree.tostring(c, method="c14n") if len(c) or c.attrib else b""
+
+
+def _spans(p):
+    """Whether p holds one end of a range (a bookmark, a comment's or a permission's range...) whose other end is
+    outside it: moving p could put that end before the other. A range wholly inside p (Word's _GoBack) moves with it."""
+    ends = {"Start": set(), "End": set()}
+    for e in p.iter():
+        m = RANGE.match(etree.QName(e).localname) if isinstance(e.tag, str) else None
+        if m:
+            ends[m.group(2)].add((m.group(1), e.get(qn("w:id"))))
+    return ends["Start"] != ends["End"]
+
+
+def _movable(xs):
+    """Whether these paragraphs (as _read gives them) may swap places as whole w:p elements: none ends a section or
+    holds one end of a range reaching out of it; they all have the same paragraph formatting (else a sub-bullet, or
+    the extra space after a job's last bullet, would move away from where it belongs); and they stand side by side."""
+    return (not any(x["section"] or x["spans"] for x in xs) and len({x["form"] for x in xs}) == 1
+            and _side_by_side([x["el"] for x in xs]))
 
 
 def _group(chars):
@@ -236,8 +276,8 @@ def locate(document, pieces):
                           "_at": x["at"], "_sign": x["sign"]})
         if found:
             out["jobs"].append({"id": f"r{ji}", **{k: job.get(k, "") for k in ("title", "company", "start", "end")},
-                                "reorder": not any(b["fixed"] or paras[b["_at"]]["section"] for b in found)
-                                and _side_by_side([paras[b["_at"]]["el"] for b in found]),
+                                "reorder": not any(b["fixed"] for b in found)
+                                and _movable([paras[b["_at"]] for b in found]),
                                 "bullets": found})
     # headline: the topmost paragraph that reads exactly as it, and never a job's own title line: each job's title it
     # holds must show again below it (a reading can give a job's title as the headline when the header has none)
@@ -282,9 +322,8 @@ def locate(document, pieces):
         at, x = n + 1, full[n]
         lines.append(_skill_line(x, label, items))
     out["skills"] = [dict(l, id=f"s{m}") for m, l in enumerate(sorted(lines, key=lambda l: l["_at"]))]
-    out["skills_move"] = (len(out["skills"]) >= 2
-                          and not any(l["fixed"] or paras[l["_at"]]["section"] for l in out["skills"])
-                          and _side_by_side([paras[l["_at"]]["el"] for l in out["skills"]]))
+    out["skills_move"] = (len(out["skills"]) >= 2 and not any(l["fixed"] for l in out["skills"])
+                          and _movable([paras[l["_at"]] for l in out["skills"]]))
     return out
 
 
@@ -308,6 +347,7 @@ def _skill_line(x, label, items):
 TIMEOUT = 90                     # seconds LibreOffice gets for one PDF
 SANDBOX = "TEAMBID_DOCX_SANDBOX"   # "docker" (on GitHub Actions): LibreOffice runs only in a throwaway container
 SAFE_XML = etree.XMLParser(resolve_entities=False, no_network=True)     # an upload's own XML: no entities, no fetching
+OS_RELEASE = Path("/etc/os-release")                                    # the host's version: the sandbox's image
 
 
 def _soffice():
@@ -329,11 +369,24 @@ def _env():
     return {k: v for k, v in os.environ.items() if k in ENV_KEEP}
 
 
+def _image():
+    """The sandbox's image: Ubuntu at the host's own version, since the container runs the host's /usr (programs and
+    libraries that go with that version's /etc); ubuntu:24.04 when the host's version can't be read."""
+    try:
+        info = dict(re.findall(r'^(\w+)="?([^"\n]*)"?\s*$', OS_RELEASE.read_text(encoding="utf-8"), re.M))
+    except (OSError, ValueError):
+        info = {}
+    version = info.get("VERSION_ID", "")
+    return f"ubuntu:{version}" if info.get("ID") == "ubuntu" and re.fullmatch(r"\d+\.\d+", version) else "ubuntu:24.04"
+
+
 def _soffice_cmd(exe, name, out_dir):
     """-> (command, host time limit) for LibreOffice's PDF of out_dir/<name>.docx. In the cloud (TEAMBID_DOCX_SANDBOX=
     docker) it runs in a throwaway container with no network that sees the host's programs and fonts read-only and
     nothing writable but out_dir: a Word file can link other files and pages, and LibreOffice may follow the links.
-    timeout inside the container ends LibreOffice there too: the host's limit only stops the docker client."""
+    The host's /usr holds setuid programs (sudo, su, mount), so nothing in the container may gain privileges or keep a
+    capability, and memory and processes are capped. timeout inside the container ends LibreOffice there too: the
+    host's limit only stops the docker client."""
     if os.environ.get(SANDBOX) != "docker":
         if os.environ.get("GITHUB_ACTIONS") == "true":
             # doc-tools/action.yml arms the sandbox before anything that can fail; if it's still off here, something
@@ -345,11 +398,13 @@ def _soffice_cmd(exe, name, out_dir):
                 "--convert-to", "pdf", "--outdir", str(work), str(work / f"{name}.docx")], TIMEOUT
     if not shutil.which("docker"):
         raise RuntimeError("Docker isn't available here for the LibreOffice sandbox")
-    return ["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
+    return ["docker", "run", "--rm", "--network", "none",
+            "--security-opt", "no-new-privileges", "--cap-drop", "ALL", "--memory", "1g", "--pids-limit", "256",
+            "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
             # Ubuntu's sofficerc (and the rest of LibreOffice's setup) is a link into /etc/libreoffice
             "-v", "/etc/libreoffice:/etc/libreoffice:ro",
-            "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:24.04",
+            "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", _image(),
             "timeout", "-s", "KILL", str(TIMEOUT),
             # its profile in the work folder, the one place it may write ("User installation could not be completed"
             # otherwise: the container's /tmp isn't the run's user's)
@@ -362,7 +417,7 @@ def to_pdf(docx_path, out_dir):
     """LibreOffice's PDF of a .docx -> (pdf path, pages). The file is copied into out_dir (all a sandboxed LibreOffice
     sees) as resume.docx, a name that's safe on any command line. Raises RuntimeError with a plain message when
     LibreOffice isn't installed, its sandbox is off on GitHub Actions or has no Docker, it takes longer than 90 s, or
-    it makes no PDF: then the member gets the RenderCV resume."""
+    it makes no PDF (or something else than a plain file in out_dir): then the member gets the RenderCV resume."""
     exe = _soffice()
     if not exe:
         raise RuntimeError("LibreOffice isn't installed here, so a Word resume can't be built")
@@ -380,6 +435,11 @@ def to_pdf(docx_path, out_dir):
     except OSError as e:
         raise RuntimeError(f"LibreOffice didn't start: {e}") from None
     pdf = out_dir / f"{name}.pdf"
+    # the host reads, copies and publishes it: a LibreOffice taken over by a hostile file could leave a link to a host
+    # file (another member's resume) in its place, so only a plain file that really is in out_dir is used
+    if os.path.lexists(pdf) and (pdf.is_symlink() or not pdf.is_file()
+                                 or not pdf.resolve().is_relative_to(out_dir.resolve())):
+        raise RuntimeError("LibreOffice's PDF isn't a plain file in its work folder, so it isn't used")
     if r.returncode or not pdf.exists():
         said = " / ".join([l for l in (r.stdout + r.stderr).splitlines() if l.strip()][-3:])[:300]
         raise RuntimeError("LibreOffice made no PDF of the Word file" + (f": {said}" if said else ""))
@@ -422,22 +482,41 @@ def _new_run(rpr, text):
     return r
 
 
-def _rewrite(p, st, sign, text):
-    """Put text (with **bold**) in place of p's runs, after its typed sign (sign: as _read gives it), which stays as
-    printed: the runs that hold only the sign are kept, and the part of the sign at the start of a run comes back in
-    a run in that run's look. The plain words get a copy of the first plain run's w:rPr and the bold ones the first
-    bold run's; when no run was bold all of it is plain, and when none was plain the bold run's look is the
-    paragraph's. Its w:pPr and whatever else it holds (bookmarks) stay."""
+def _head_of(r, n):
+    """A copy of run r that holds only what prints its first n characters: the end of a typed sign that shares a run
+    with the words, kept exactly as written (a w:ptab's position, a break's type, the run's rsid)."""
+    c, left = deepcopy(r), n
+    for child in list(c):
+        if child.tag == qn("w:rPr"):
+            continue
+        if left <= 0:
+            c.remove(child)
+        elif child.tag in TEXT:
+            t = (child.text or "") if TEXT[child.tag] is None else TEXT[child.tag]
+            if len(t) > left:                            # only a w:t prints more than one character
+                child.text = t[:left]
+                child.set(qn("xml:space"), "preserve")
+            left -= min(len(t), left)
+    return c
+
+
+def _rewrite(p, st, n, text):
+    """Put text (with **bold**) in place of p's runs, after its first n characters (its "lead" as _read gives it:
+    the typed sign and any spaces before the words), which stay exactly as written: the runs holding only those
+    are kept, and a run they end inside comes back cut to them (_head_of). The plain words get a copy of the first
+    plain run's w:rPr and the bold ones the first bold run's; when no run was bold all of it is plain, and when none
+    was plain the bold run's look is the paragraph's. Its w:pPr and whatever else it holds (bookmarks) stay. A tab or
+    break after the lead makes a paragraph fixed (_read), so a rewrite never drops one."""
     pstyles = _pstyles(p, st)
-    keep, gone, lead, left, first = [], [], None, len(sign), {}
+    keep, gone, lead, left, first = [], [], None, n, {}
     for r in _own_runs(p):
         t = _run_text(r)
-        if left and len(t) <= left:                  # all of it is (part of) the sign
+        if left and len(t) <= left:                  # all of it is (part of) the lead
             keep.append(r)
             left -= len(t)
             continue
         if left:
-            lead, t, left = _new_run(r.find(qn("w:rPr")), t[:left]), t[left:], 0
+            lead, t, left = _head_of(r, left), t[left:], 0
         gone.append(r)
         if t.strip():
             first.setdefault(_look(_layers(r, st, pstyles), "b"), r)      # bold or not -> the first run so
@@ -567,7 +646,7 @@ def build(doc, plan, folder, base):
         x = _read(ps[at], st)
         if key(x["plain"]) != key(old):
             raise ValueError(f"the Word file's paragraph for {name} isn't the one that was read")
-        _rewrite(ps[at], st, x["sign"], new)
+        _rewrite(ps[at], st, len(x["lead"]), new)
     for places, order in _moves(doc, plan):
         els = [ps[n] for n in places]
         if not _side_by_side(els):
