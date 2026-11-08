@@ -24,7 +24,7 @@
 ## Global Constraints
 
 - **Where it runs:** everything runs online in GitHub Actions (`ubuntu-latest`, Python 3.12). The owner's Windows machine is not a target. Tests that need `pdflatex` skip when it is missing and run for real in `tests.yml`.
-- **Privacy:** never put a real member's resume (one member's or anyone's) in the repo. All fixtures are fictional ("Dana Reyes").
+- **Privacy:** never put a real member's resume, name or details in the repo. All fixtures are fictional ("Dana Reyes").
 - **Bullet length:** a reworded bullet may be at most 10% longer and at most 25% shorter than the original (`LENGTH = (0.75, 1.10)`). The same limits apply to the summary.
 - **Rejecting Claude's reading:** throw out the whole reading when more than 25% of its bullets are not found word for word (`MAX_MISSED = 0.25`).
 - **Page count:** the tailored PDF must have no more pages than the original. Put original text back at most 5 times, then fall back to RenderCV.
@@ -54,7 +54,7 @@
 | `teambid/docs.py` | modify | ship the `.tex` source, skip files that don't exist |
 | `teambid/server.py`, `tb.py` | modify | Claude reading on by default (`--no-llm` to turn it off) |
 | `teambid/static/results.html`, `teambid/static/index.html` | modify | accept `.tex`, show the source download, the DOCX link only when it exists |
-| `tests/tex_samples.py` | create | fictional .tex resumes (an member-like layout and Jake's Resume), their pieces, the PDF-like text |
+| `tests/tex_samples.py` | create | fictional .tex resumes (a `\section*` + `itemize` layout and Jake's Resume), their pieces, the PDF-like text |
 | `tests/test_style_tex.py` | create | tests for Tasks 1-3 |
 | `tests/test_keep_style.py` | create | tests for Tasks 4-6 |
 | `.github/actions/doc-tools/action.yml` | create | shared TinyTeX setup (cached) |
@@ -2514,9 +2514,9 @@ Expected: the `Tests` run passes, and the `Build` tests from Task 3 show as run,
 
 ---
 
-### Task 8: Merge and check it end to end with a member (owner-gated)
+### Task 8: Merge and check it end to end with a real member (owner-gated)
 
-a member can't be added before this is on `main`. The live `maintain.yml`, `scan.yml` and `docs.yml` run from `main`, and today's code reads a `.tex` upload as plain text.
+The member can't be added before this is on `main`. The live `maintain.yml`, `scan.yml` and `docs.yml` run from `main`, and today's code reads a `.tex` upload as plain text.
 
 - [ ] **Step 1: Ask the owner to approve the merge.** Show them `git log --oneline main..keep-original-style` and the green `Tests` run. Merging changes the live workflows.
 
@@ -2528,7 +2528,7 @@ git merge --ff-only keep-original-style
 git push origin main
 ```
 
-- [ ] **Step 3: The owner adds a member** on the results page with "+ Add member". They upload the `.tex` that built his current PDF; the copy pasted in chat is older, with the email link going to the hotmail address.
+- [ ] **Step 3: The owner adds the member** on the results page with "+ Add member". They upload the `.tex` that built the member's current PDF, not an older copy.
 
   Then watch the Maintenance run:
 
@@ -2537,9 +2537,9 @@ git push origin main
   gh run view <run id> --log | grep -E "add |pieces|LaTeX|error"
   ```
 
-  Expected: the log shows `add a member: added a member: 5 jobs read from the resume, ...`.
+  Expected: the log shows the member added, with 5 jobs read from the resume.
 
-- [ ] **Step 4: The owner queues one real job for a member** (Documents tab, a Claude model chosen). Watch `docs.yml`:
+- [ ] **Step 4: The owner queues one real job for that member** (Documents tab, a Claude model chosen). Watch `docs.yml`:
 
   ```bash
   gh run list --workflow docs.yml --limit 1

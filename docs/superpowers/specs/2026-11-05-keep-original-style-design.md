@@ -12,7 +12,7 @@ their icons, links, fonts and layout.
 The new mode keeps the member's own file and changes only the words inside it, so the tailored resume looks exactly
 like the one they gave us.
 
-Example member: a member. His resume is a pdfLaTeX file. It has FontAwesome icons, five links, Helvetica (phv), a
+Example member: one of the team. Their resume is a pdfLaTeX file. It has FontAwesome icons, five links, Helvetica (phv), a
 custom `\section*` / `\subsection*` / `itemize` layout, and runs to 4 pages.
 
 ## Rules (what may change and what may not)
@@ -97,10 +97,10 @@ application. Members uploaded before this change get it built on their next appl
 
 **Input:** the full resume text. For .tex, that's the text of the PDF built from it. For .docx and PDF, it's the text
 `resume_parse.extract_text` already gets. Nothing is cut; today's `refine_profile` cuts at 15,000 characters, and
-one member's resume is longer than that.
+The example member's resume is longer than that.
 
 **Model:** Sonnet. It runs once per member, so accuracy matters more than cost. `max_tokens` is 16000, so a 4-page
-resume can be returned in full. one member's is about 5,000 tokens.
+resume can be returned in full. The example's is about 5,000 tokens.
 
 **Output:**
 
@@ -226,7 +226,7 @@ may be dropped.
 
 ### PDF in place (`style_pdf.py`)
 
-Updated 2026-11-06 from a prototype run on one member's PDF and all six member PDFs (LaTeX, Word, pdfmake, ReportLab,
+Updated 2026-11-06 from a prototype run on all seven member PDFs (LaTeX, Word, pdfmake, ReportLab,
 two-column designs). Part 3 changed the bullets (the owner chose bullets first); part 4 adds the headline, summary and
 skills with the same machinery (see "PDF headline, summary and skills (part 4)" below). A PDF member's application
 gets the edited PDF only, with no DOCX.
@@ -236,8 +236,8 @@ gets the edited PDF only, with no DOCX.
   - Each confirmed bullet must start and end exactly on line boundaries, over lines no other bullet claimed, or it
     isn't found and stays as written.
   - The bullet sign can be inside the line ("• text"), typed into the line's text ("- text", as Word's typed bullets
-    and HTML-to-PDF write it), a separate one-character line on the same baseline (one member's PDF), or a small drawn dot
-    (one member's pdfmake PDF). Signs are matched to a bullet's first line by position.
+    and HTML-to-PDF write it), a separate one-character line on the same baseline (one member's PDF), or a small
+    drawn dot (a pdfmake PDF). Signs are matched to a bullet's first line by position.
   - A bullet with a link, italics, mixed sizes or colors, or no sign of its own is **fixed**: it's never reworded,
     erased or redrawn. A job is **reordered** only when none of its bullets is fixed.
 - **Lay out:**
@@ -363,7 +363,7 @@ are skipped when the tool is missing, like the Ollama tests. They run for real i
 - **Step 1:** a string not in the text is dropped; more than 25% failures rejects the whole result; the profile's roles
   are replaced.
 - **.tex:**
-  - It runs on a small made-up resume in two styles, member-like (`\section*` + `itemize`) and Jake's Resume
+  - It runs on a small made-up resume in two styles, a `\section*` + `itemize` layout and Jake's Resume
     (`\resumeItem`).
   - Outside the edited spans, the output is byte-for-byte the input.
   - Every bullet ID appears exactly once.
@@ -378,7 +378,7 @@ are skipped when the tool is missing, like the Ollama tests. They run for real i
 - **`service.apply`:** a .tex member whose build fails gets the RenderCV resume and a note in the report. The cover
   letter output is unchanged.
 - **Existing tests:** `python tb.py test` keeps passing.
-- **End-to-end, online:** add a member through "+ Add member" with his .tex, queue one real job, and compare the PDF with his
+- **End-to-end, online:** add the LaTeX member through "+ Add member" with their .tex, queue one real job, and compare the PDF with their
   original side by side. This adds a real member, so the owner confirms first. His file never goes into the repo.
 
 ## Build order
@@ -386,7 +386,7 @@ are skipped when the tool is missing, like the Ollama tests. They run for real i
 Each part can ship on its own.
 
 1. **Core and .tex:** `read_resume`, `pieces.json`, `tailor_in_place` and the checks, `keep_style`, `style_tex`, `.tex`
-   upload, `doc-tools` with TinyTeX, `tests.yml`. a member works end to end.
+   upload, `doc-tools` with TinyTeX, `tests.yml`. A LaTeX member works end to end.
 2. **PDF in place** (moved ahead of .docx on 2026-11-06, because the team uploads PDFs): `style_pdf`, bullets only.
    This covers the current members.
 3. **.docx:** `style_docx` and LibreOffice in `doc-tools`.
@@ -397,8 +397,7 @@ The first implementation plan covers part 1.
 ## To check during planning
 
 - **Cost:** check the TinyTeX cache size and how long the first package installs take on the runner.
-- **one member's .tex:** upload the version that built his current PDF. The copy pasted in chat is older: its email link
-  still points to `an old address`.
+- **The LaTeX member's .tex:** upload the version that built their current PDF, not an older copy.
 
 The model IDs in `llm.MODELS` (`claude-sonnet-5-5`, `claude-haiku-5-5`) are confirmed correct by the owner.
 

@@ -225,8 +225,11 @@ class ReparseAll(TempWorkspace):
              mock.patch.object(service, "reparse", side_effect=lambda sl: {"slug": sl} if sl == "bob" else 1 / 0), \
              contextlib.redirect_stdout(out):
             tb._run(argparse.Namespace(cmd="reparse", member="all"), None)
-        self.assertIn("ann: failed: division by zero", out.getvalue())
-        self.assertIn("{'slug': 'bob'}", out.getvalue())
+        # the output is a public Actions log: each member by their code, never their slug or name
+        self.assertIn(f"{config.who('ann')}: failed: division by zero", out.getvalue())
+        self.assertIn(f"{{'slug': '{config.who('bob')}'}}", out.getvalue())
+        self.assertNotIn("ann", out.getvalue().replace(config.who("ann"), ""))
+        self.assertNotIn("bob", out.getvalue().replace(config.who("bob"), ""))
 
 
 class ReadPrompt(unittest.TestCase):

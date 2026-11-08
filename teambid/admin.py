@@ -228,7 +228,10 @@ def apply(log=print):
                     "at": config.now().isoformat(timespec="seconds")})
         applied[req["rid"]] = res
         n += 1
-        log(f"{req.get('action')} {res['member']}: {res['msg']}")
+        # the log is public (the engine repo's Actions): the member's code, never their name; the page shows the rest
+        name = (req.get("body") or {}).get("name", "")
+        log(f"{req.get('action')} {config.who(res['member'])}: "
+            f"{'done' if res.get('ok') else config.redact(res['msg'], res['member'], name)}")
     if n:
         config.ensure_dirs()
         APPLIED.write_text(json.dumps(applied, indent=1), encoding="utf-8")

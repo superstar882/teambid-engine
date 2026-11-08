@@ -18,7 +18,7 @@ Claude's reading, the rewrite and the fact checks are unchanged from Part 1.
 
 **Spec:** `docs/superpowers/specs/2026-11-05-keep-original-style-design.md`. Read the section "PDF in place", which was updated 2026-11-06, and "Build order". Part 1 is merged on `main` (`718c9c7`): `keep_style`, `style_tex`, `llm.read_resume`, `llm.tailor_in_place`, the checks, and `doc-tools`.
 
-**Prototype:** the code below ran on one member's PDF and on all six member PDFs. All 7 passed the read-back check with links kept and page counts unchanged, and page images were compared by eye. Re-running it is the last task.
+**Prototype:** the code below ran on all seven member PDFs. All 7 passed the read-back check with links kept and page counts unchanged, and page images were compared by eye. Re-running it is the last task.
 
 ## Global Constraints
 
@@ -1189,9 +1189,9 @@ If a font package name doesn't exist on the runner, `test_the_fonts_members_pdfs
 
   Watch: `gh run list --workflow maintain.yml --limit 1` and `gh run view <id> --log | grep -E "reparse|failed"`.
 
-- [ ] **Step 4: The owner adds a member** on the results page with his PDF (`their PDF`).
+- [ ] **Step 4: The owner adds the LaTeX member** on the results page with their PDF.
 
-- [ ] **Step 5: The owner queues one real job for a member and one for another member, then compares each tailored PDF with the original.**
+- [ ] **Step 5: The owner queues one real job for that member and one for another member, then compares each tailored PDF with the original.**
   - Watch: `gh run view <id> --log | grep -E "Resume style|original style skipped|failed"`.
   - Expected: `Resume style: original (.pdf). N of M bullets reworded, ...`.
   - Confirm by eye:

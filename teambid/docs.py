@@ -103,7 +103,7 @@ def run(limit=10, log=print):
     results = []
     for req in todo:
         rid, slug = req["rid"], req.get("member")
-        log(f"building documents for {slug}: {req.get('company') or '?'} / {req.get('title') or '?'}")
+        log(f"building documents for {config.who(slug)}: {req.get('company') or '?'} / {req.get('title') or '?'}")
         try:
             r = service.apply(slug, url=req.get("url") or None, jd_text=req.get("text") or None,
                               company=req.get("company") or None, title=req.get("title") or None,

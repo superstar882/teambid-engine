@@ -499,7 +499,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                     item[0] = max(0, min(100, int(item[0] + (sim - 0.55) * 40)))
                     why.append(f"meaning match {sim:.2f}")
     if fetched:
-        log(f"  {member['name']}: read {fetched} job posts")
+        log(f"  {config.who(member['slug'])}: read {fetched} job posts")
     stamp = str(today)
     new = best = 0
     for sc, why, job in uniq:
@@ -527,10 +527,10 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     gone = con.execute("DELETE FROM matches WHERE member_id=? AND status='new' AND job_id IN (SELECT id FROM rejected_now)",
                        (member["id"],)).rowcount
     if gone:
-        log(f"  {member['name']}: {gone} earlier matches no longer fit and were removed")
+        log(f"  {config.who(member['slug'])}: {gone} earlier matches no longer fit and were removed")
     total = sum(1 for sc, _, _ in uniq if sc >= min_score)
     write_member_report(con, member, stamp, reasons, total)
-    log(f"  {member['name']}: {total} matches ({new} new, {best} best)")
+    log(f"  {config.who(member['slug'])}: {total} matches ({new} new, {best} best)")
     return {"name": member["name"], "matches": total, "new": new, "best": best, "filtered": dict(reasons)}
 
 

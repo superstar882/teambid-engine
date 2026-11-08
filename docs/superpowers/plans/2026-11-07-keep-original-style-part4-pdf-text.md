@@ -172,7 +172,7 @@ Steps: failing tests → implement → `python -m unittest tests.test_keep_style
 
 ### Task 4: Prove it on the real PDFs, then ship (controller, owner-gated)
 
-- **Real plans:** rerun the real-PDF check (`scratchpad/run_wave2.py`, Arial standing in for the online fonts) with Claude's real plans for a member and a member (`diag_plan.py --new`, one Sonnet call each) and the saved readings of all 7.
+- **Real plans:** rerun the real-PDF check (`scratchpad/run_wave2.py`, Arial standing in for the online fonts) with Claude's real plans for two members (`diag_plan.py --new`, one Sonnet call each) and the saved readings of all 7.
   - Every member still builds.
   - Count the summaries, headlines and skill lines drawn.
   - Look at before and after pages by eye.
