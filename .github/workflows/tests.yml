@@ -25,5 +25,7 @@ jobs:
       - run: pip install -r requirements.txt
 
       - uses: ./.github/actions/doc-tools
+        with:
+          libreoffice: "true"
 
       - run: python tb.py test

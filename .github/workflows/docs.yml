@@ -84,6 +84,8 @@ jobs:
         if: steps.q.outputs.pending != '0'
         continue-on-error: true          # without LaTeX, .tex members get the RenderCV resume and a note
         uses: ./.github/actions/doc-tools
+        with:
+          libreoffice: "true"
 
       - name: Build documents
         if: steps.q.outputs.pending != '0'
