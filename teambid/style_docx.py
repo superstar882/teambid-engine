@@ -347,6 +347,8 @@ def _soffice_cmd(exe, name, out_dir):
         raise RuntimeError("Docker isn't available here for the LibreOffice sandbox")
     return ["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
+            # Ubuntu's sofficerc (and the rest of LibreOffice's setup) is a link into /etc/libreoffice
+            "-v", "/etc/libreoffice:/etc/libreoffice:ro",
             "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:24.04",
             "timeout", "-s", "KILL", str(TIMEOUT),
             "soffice", "--headless", "--norestore", "--convert-to", "pdf", "--outdir", "/work", f"/work/{name}.docx"

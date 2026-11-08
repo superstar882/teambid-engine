@@ -3,7 +3,11 @@
 # list below is installed by style_tex.compile_tex on first use. LaTeX itself runs inside a Docker sandbox, armed by
 # the first step below so a later failure (tlmgr, docker pull) can't leave it off.
 name: Document tools
-description: TinyTeX for building members' own LaTeX resumes
+description: TinyTeX for building members' own LaTeX resumes, LibreOffice for their Word ones
+inputs:
+  libreoffice:
+    description: "Install LibreOffice too (Word members' .docx): only where documents are built or tested"
+    default: "false"
 runs:
   using: composite
   steps:
@@ -13,6 +17,7 @@ runs:
         # armed FIRST, before any step that can fail (tlmgr update, docker pull): if this action stops early,
         # style_tex must still see the sandbox on rather than silently building a member's upload on the bare runner
         echo "TEAMBID_LATEX_SANDBOX=docker" >> "$GITHUB_ENV"
+        echo "TEAMBID_DOCX_SANDBOX=docker" >> "$GITHUB_ENV"     # LibreOffice opens a member's .docx only in Docker too
 
     - name: Fonts for members' own PDFs
       shell: bash
@@ -23,6 +28,14 @@ runs:
         { sudo apt-get update -qq && sudo apt-get install -y -qq fonts-crosextra-carlito fonts-crosextra-caladea \
             fonts-liberation fonts-roboto fonts-inter fonts-open-sans fonts-lato fonts-dejavu-core; } \
           || echo "fonts didn't install this run; reworded bullets fall back to DejaVu Sans"
+
+    - name: LibreOffice for members' own Word resumes
+      if: inputs.libreoffice == 'true'
+      shell: bash
+      run: |
+        # style_docx converts a member's tailored .docx to PDF with it, inside Docker (no network). Best-effort: without
+        # it a Word member gets the RenderCV resume, with a note
+        sudo apt-get install -y -qq --no-install-recommends libreoffice-writer-nogui           || echo "LibreOffice didn't install this run; Word members get the RenderCV resume"
 
     - name: This month
       id: month
