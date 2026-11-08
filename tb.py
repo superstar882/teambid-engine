@@ -151,7 +151,8 @@ def _run(a, ap):
             print("note:", n)
     elif a.cmd == "members":
         for m in service.team_overview()["members"]:
-            print(f"{m['slug']:<20} {m['name']:<24} {m['level'] or '-':<7} {','.join(m['lanes'] or []):<26} audit {m['audit']:>3}  new matches {m['new_matches']}")
+            # the code is how public logs name this member (config.who)
+            print(f"{m['slug']:<20} {m['name']:<24} {m['level'] or '-':<7} {','.join(m['lanes'] or []):<26} audit {m['audit']:>3}  new matches {m['new_matches']}  ({config.who(m['slug'])})")
     elif a.cmd == "audit":
         with storage.connect() as con:
             m = storage.member(con, a.member)
@@ -159,11 +160,11 @@ def _run(a, ap):
     elif a.cmd == "reparse":
         with storage.connect() as con:
             slugs = [m["slug"] for m in storage.members(con)] if a.member == "all" else [a.member]
-        for sl in slugs:
+        for sl in slugs:                     # the output lands in public Actions logs: codes, not names
             try:
-                print(service.reparse(sl))
+                print({**service.reparse(sl), "slug": config.who(sl)})
             except Exception as e:           # one member's file that can't be read must not stop the rest
-                print(f"{sl}: failed: {e}")
+                print(f"{config.who(sl)}: failed: {config.redact(e, sl)}")
     elif a.cmd == "vault":
         with storage.connect() as con:
             print(vault.build(con, storage.member(con, a.member))["folder"])
@@ -179,7 +180,8 @@ def _run(a, ap):
     elif a.cmd == "stop":
         print(service.stop_scan())
     elif a.cmd == "match":
-        print(service.rematch(a.member, a.days))
+        r = service.rematch(a.member, a.days)
+        print({**r, "name": config.who(a.member)} if isinstance(r, dict) else r)     # public Actions logs: no names
     elif a.cmd == "matches":
         for r in service.member_matches(a.member, tier=a.tier, new_only=a.new):
             print(f"#{r['job_id']:<7} {r['score']:>3} {r['tier']:<8} {r['status']:<11} {r['company'][:22]:<22} {r['title'][:50]:<50} {r['url']}")
@@ -240,7 +242,7 @@ def _run(a, ap):
         from teambid import export
         r = export.publish(a.repo)
         print(f"published: {r['url']}  (repo {r['repo']})")
-        print("members:", r["members"], "| first publish: GitHub Pages can take 1-2 minutes to go live")
+        print(f"members: {len(r['members'])} | first publish: GitHub Pages can take 1-2 minutes to go live")
     elif a.cmd == "cloud":
         from teambid import cloud
         if a.action == "setup":
