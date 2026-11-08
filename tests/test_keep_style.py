@@ -12,12 +12,14 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("TEAMBID_WORKSPACE", tempfile.mkdtemp(prefix="teambid-test-"))
 os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 
+import docx  # noqa: E402
 import fitz  # noqa: E402
+from docx.oxml.ns import qn  # noqa: E402
 
 from teambid import config, keep_style, llm, local_ai, resume_parse, service, storage, style_tex, tailor  # noqa: E402
-from teambid import style_pdf  # noqa: E402
+from teambid import style_docx, style_pdf  # noqa: E402
 from teambid.style_text import key  # noqa: E402
-from tests import pdf_samples  # noqa: E402
+from tests import docx_samples, pdf_samples  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
 
 local_ai.DISABLED = True
@@ -186,13 +188,16 @@ class LeftoverFiles(TempWorkspace):
     """A .tex left from an earlier upload never beats the resume the member uploaded last."""
     def test_only_the_stored_file_is_tailored(self):
         folder = config.member_dir("dana-left") / "resume"
-        (folder / "new.docx").write_bytes(b"PK\x03\x04")          # .docx isn't a handled extension yet
+        (folder / "new.txt").write_text(S.SAMPLE_TEXT, encoding="utf-8")       # a .txt has no style to keep
+        (folder / "new.docx").write_bytes(b"PK\x03\x04")
         (folder / "old.tex").write_text(S.SAMPLE, encoding="utf-8")
-        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.docx"}
+        member = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.txt"}
         with mock.patch.object(llm, "available", return_value=False), \
              mock.patch.object(llm, "read_resume", return_value=(None, "no")):
             self.assertIsNone(keep_style.source_file("dana-left", member))
             self.assertEqual(keep_style.tailor("dana-left", member, {}, {}, "", None, ".", "b"), {})
+        word = {"resume_file": "/home/runner/workspace/members/dana-left/resume/new.docx"}
+        self.assertEqual(keep_style.source_file("dana-left", word), folder / "new.docx")     # a Word upload counts
         windows = {"resume_file": r"C:\TeamBid\workspace\members\dana-left\resume\old.tex"}     # saved on the PC
         self.assertEqual(keep_style.source_file("dana-left", windows), folder / "old.tex")
 
@@ -471,7 +476,8 @@ class PageGuard(unittest.TestCase):
         def build(d, p, f, b):
             (f / f"{b}.pdf").write_bytes(b"%PDF-1.4")
             (f / f"{b}.tex").write_text("x", encoding="utf-8")
-            return {"pdf": str(f / f"{b}.pdf"), "source": str(f / f"{b}.tex"), "pages": 2}
+            (f / f"{b}.docx").write_bytes(b"PK")          # a Word member's edited file
+            return {"pdf": str(f / f"{b}.pdf"), "source": str(f / f"{b}.tex"), "docx": str(f / f"{b}.docx"), "pages": 2}
         handler = mock.Mock()
         handler.build.side_effect = build
         with self.assertRaises(ValueError):
@@ -778,6 +784,68 @@ class ApplyWithRulePiecesSkills(TempWorkspace):
         self.assertNotIn("headline reworded", r["resume_ai"])
         self.assertEqual(r["spec"]["headline"], pdf_samples.HEADLINE)
         self.assertEqual(r["spec"]["summary"], pdf_samples.pieces(True, True, True)["summary"])
+
+
+DOCX_JD = """Data Engineer
+Contoso builds data platforms for stores.
+Requirements
+- Python and SQL pipelines
+- Airflow
+Benefits
+- Health insurance
+"""
+
+
+class ApplyWithDocx(TempWorkspace):
+    """A member who uploaded a Word resume. Claude is mocked, and LibreOffice too (docx_samples.fake_pdf prints the
+    file's text into a PDF): the real converter's own tests are in test_style_docx."""
+    NEW = "Cut the nightly batch from 6 hours to 90 minutes by partitioning the biggest tables."
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        src = docx_samples.make(str(Path(tempfile.mkdtemp()) / "lena.docx"))
+        with mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "read_resume", return_value=(docx_samples.pieces(), "read")):
+            cls.slug = service.onboard("Lena Docx", resume_path=src)["slug"]
+
+    def _apply(self, reply, convert=docx_samples.fake_pdf):
+        with mock.patch.object(style_docx, "to_pdf", side_effect=convert), \
+             mock.patch.object(llm, "available", return_value=True), \
+             mock.patch.object(llm, "tailor_in_place", return_value=(reply, "ok")) as ask, \
+             mock.patch.object(llm, "write_letter", side_effect=lambda p, jd, c, t, letter, model: (letter, "kept")), \
+             mock.patch.object(llm, "rewrite_resume", side_effect=lambda spec, *a: (spec, "reworded")):
+            r = service.apply(self.slug, jd_text=DOCX_JD, company="Contoso", title="Data Engineer", ai="haiku")
+        return r, ask
+
+    def test_a_word_member_gets_their_own_style(self):
+        r, ask = self._apply({"order": {"r0": ["r0b1", "r0b0", "r0b2"]}, "bullets": {"r0b1": self.NEW}})
+        self.assertTrue(ask.called)
+        self.assertIn("Resume style: original (.docx). 1 of 5 bullets reworded", r["resume_ai"])
+        self.assertIn("order changed in", r["resume_ai"])
+        self.assertEqual(set(r["files"]) - {"letter_pdf", "letter_docx"}, {"pdf", "docx", "pages", "paper"})
+        out = Path(r["files"]["docx"])
+        self.assertEqual(out.parent, Path(r["folder"]))
+        d = docx.Document(str(out))                       # the member's own file, edited: their link is still there
+        body = [p.text for p in d.paragraphs]
+        self.assertIn(self.NEW, body)
+        self.assertEqual(body[0], docx_samples.NAME)
+        self.assertEqual(len(d.element.body.findall(f".//{qn('w:hyperlink')}")), 1)
+        self.assertLess(body.index(self.NEW), body.index(docx_samples.PIECES["jobs"][0]["bullets"][0]))
+        with fitz.open(r["files"]["pdf"]) as pdf:
+            self.assertIn(key(self.NEW), key(pdf[0].get_text()))
+        self.assertEqual(r["problems"], [])
+        self.assertIn("Resume style: original (.docx)", (Path(r["folder"]) / "report.md").read_text(encoding="utf-8"))
+
+    def test_without_libreoffice_the_member_gets_the_rendercv_resume_and_claude_isnt_asked(self):
+        def missing(docx_path, out_dir):
+            raise RuntimeError("LibreOffice isn't installed here, so a Word resume can't be built")
+        r, ask = self._apply({"bullets": {"r0b1": self.NEW}}, missing)
+        self.assertFalse(ask.called)                      # nothing is spent on a file that can't be built
+        self.assertIn("original style skipped: LibreOffice isn't installed here", r["resume_ai"])
+        self.assertNotIn("Resume style: original", r["resume_ai"])
+        self.assertTrue(Path(r["files"]["docx"]).exists())                  # the RenderCV resume's
+        self.assertNotIn(self.NEW, [p.text for p in docx.Document(r["files"]["docx"]).paragraphs])
 
 
 if __name__ == "__main__":
