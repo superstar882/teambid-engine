@@ -512,6 +512,32 @@ class Write(unittest.TestCase):
         self.assertEqual(text(files["docx"], at), "•" + NEW_BULLET)
         self.assertEqual(text(files["docx"], doc["headline"]["_at"]), "   " + NEW_HEADLINE)
 
+    def test_a_file_without_its_own_styles_stays_so(self):
+        path = DS.without_styles(made())
+        names = lambda p: sorted(zipfile.ZipFile(p).namelist())
+        self.assertNotIn("word/styles.xml", names(path))
+        before = parts(path)
+        new = "Moved 25 cron jobs into Airflow, ending missed nightly runs and every manual rerun."
+        doc, files = build(path, {"text": {"r1b0": new}})
+        self.assertFalse(bullet(doc, "r1b0")["fixed"])          # numbered on the paragraph itself: still a bullet
+        self.assertEqual(text(files["docx"], bullet(doc, "r1b0")["_at"]), new)
+        self.assertEqual(names(files["docx"]), names(path))     # no styles part of python-docx's own added
+        self.assertEqual(parts(files["docx"]), before)          # its relationships and content types as they were
+
+    def test_a_headline_partly_in_bold_stays_as_printed(self):
+        def change(d):
+            h = starting(d, DS.HEADLINE)
+            h.runs[0].text, h.runs[0].bold = "Data Platform", True
+            h.add_run(" Engineer")
+        path = edit(made(), change)
+        before = xml(path)
+        doc, files = build(path, {"headline": "Senior Data Platform Engineer"})
+        self.assertEqual(doc["headline"]["text"], DS.HEADLINE)
+        self.assertTrue(doc["headline"]["fixed"])
+        self.assertEqual(xml(files["docx"]), before)
+        whole = find(path=edit(made(), lambda d: setattr(starting(d, DS.HEADLINE).runs[0], "bold", True)))
+        self.assertFalse(whole["headline"]["fixed"])            # all of it bold: one look, may be reworded
+
     def test_a_sub_bullet_never_moves_away_from_its_bullet(self):
         path = edit(made(), lambda d: setattr(starting(d, "Cut the nightly"), "style", d.styles["List Bullet 2"]))
         before = xml(path)
