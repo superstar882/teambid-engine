@@ -91,6 +91,46 @@ class Find(unittest.TestCase):
         self.assertFalse(bullet(doc, "r0b0")["fixed"])        # holds **Kafka**
         self.assertFalse(job(doc, "r0")["reorder"])
 
+    def test_a_field_makes_its_bullet_fixed(self):
+        for odd in ("fldSimple", "fldChar"):
+            with self.subTest(odd=odd):
+                doc = find(odd=odd)
+                b = bullet(doc, "r0b0")
+                self.assertEqual(b["text"],              # the field's result reads as text, its code doesn't
+                                 "Built a streaming pipeline on **Kafka** that loads 40M events a day into the warehouse.")
+                self.assertTrue(b["fixed"])
+                self.assertFalse(job(doc, "r0")["reorder"])
+                self.assertFalse(bullet(doc, "r0b1")["fixed"])
+
+    def test_a_tracked_insertion_makes_its_bullet_fixed(self):
+        doc = find(odd="ins")
+        b = bullet(doc, "r0b0")
+        self.assertTrue(b["text"].endswith("into the warehouse."))
+        self.assertTrue(b["fixed"])
+        self.assertFalse(job(doc, "r0")["reorder"])
+
+    def test_a_tracked_deletion_is_left_out_of_the_text_and_fixed(self):
+        doc = find(odd="del")                    # the file holds "40M nightly events", "nightly " deleted
+        b = bullet(doc, "r0b0")
+        self.assertEqual(b["piece"], DS.PIECES["jobs"][0]["bullets"][0])
+        self.assertNotIn("nightly", b["text"])
+        self.assertTrue(b["fixed"])
+        self.assertFalse(job(doc, "r0")["reorder"])
+
+    def test_a_drawing_or_picture_makes_its_bullet_fixed(self):
+        for odd in ("drawing", "pict"):
+            with self.subTest(odd=odd):
+                doc = find(odd=odd)
+                self.assertEqual(bullet(doc, "r0b0")["piece"], DS.PIECES["jobs"][0]["bullets"][0])
+                self.assertTrue(bullet(doc, "r0b0")["fixed"])
+                self.assertFalse(job(doc, "r0")["reorder"])
+
+    def test_a_text_box_holds_no_pieces_and_fixes_its_paragraph(self):
+        doc = find(odd="textbox")               # r0b2 is only in a text box in r0b0's paragraph
+        self.assertEqual(ids(doc), [("r0", ["r0b0", "r0b1"]), ("r1", ["r1b0", "r1b1"])])
+        self.assertTrue(bullet(doc, "r0b0")["fixed"])
+        self.assertFalse(job(doc, "r0")["reorder"])
+
     def test_bullets_in_a_table_cell_are_found_and_may_move(self):
         for nested in (False, True):
             with self.subTest(nested=nested):
