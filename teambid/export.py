@@ -123,7 +123,7 @@ def build_data(include_skipped=True):
                                                   "avoid_companies", "target_companies", "exclude_words", "work_auth", "salary_min")},
                 "audit": {"score": audit["score"], "grade": audit["grade"], "findings": audit["findings"]},
                 "matches": rows, "best": sum(1 for r in rows if r["tier"] == "best"), "applications": apps})
-    return {"generated": config.now().strftime("%Y-%m-%d %H:%M %Z"), "last_scan": last_scan, "members": out}
+    return {"generated": config.shown_now().strftime("%Y-%m-%d %H:%M %Z"), "last_scan": last_scan, "members": out}
 
 
 def _with_progress(data, password):
