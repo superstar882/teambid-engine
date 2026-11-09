@@ -151,7 +151,8 @@ python tb.py test                             test suite
 | Variable | Default | Meaning |
 |---|---|---|
 | `TEAMBID_WORKSPACE` | `./workspace` | database and member folders |
-| `TEAMBID_TZ` | Asia/Tokyo | every time and date: the results page, documents (resume, cover letter), job dates, files and reports |
+| `TEAMBID_TZ` | Asia/Tokyo | every time and date: the results page, documents, job dates, files and reports |
+| `TEAMBID_LETTER_TZ` | America/Chicago | the cover letter's date |
 | `TEAMBID_FORM_MINUTES` | 30 | time box for reading application forms per scan |
 | `ANTHROPIC_API_KEY`, `TEAMBID_MODEL` | none, claude-sonnet-5-5 | Claude writing (the page chooses Haiku or Sonnet per request) |
 | `TEAMBID_TOKEN` | none | token when the local app is shared on a network |

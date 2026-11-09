@@ -136,8 +136,8 @@ def page_budget(region, years):
 
 
 def letter_date(prefs):
-    """Today in config.TZ (JST), like every date TeamBid writes, in the style of the job's region."""
-    d = config.now()
+    """Today in config.LETTER_TZ (US Central time: every cover letter is dated there), in the style of the job's region."""
+    d = config.now().astimezone(config.LETTER_TZ)
     if prefs.get("region") in ("EU", "UK", "LATAM", "other"):
         return f"{d.day} {d:%B %Y}"
     return f"{d:%B} {d.day}, {d.year}"
