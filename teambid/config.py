@@ -3,6 +3,7 @@
 Override with environment variables:
   TEAMBID_WORKSPACE   where the database and member folders live (default: <project>/workspace)
   TEAMBID_TZ          time zone of every time and date: the results page, documents, files and reports (default Asia/Tokyo)
+  TEAMBID_LETTER_TZ   time zone of the cover letter's date (default America/Chicago)
   TEAMBID_SCAN_TZ / TEAMBID_SCAN_HOUR   when the daily scan is due (default Asia/Tokyo 17:00)
   ANTHROPIC_API_KEY   optional: better resume parsing and writing through the Claude API
   TEAMBID_MODEL       Claude model for the optional API features (default claude-sonnet-5-5)
@@ -26,6 +27,7 @@ SEED_COMPANIES = DATA / "seed_companies.yaml"
 KNOWLEDGE = DATA / "knowledge"
 
 TZ = ZoneInfo(os.environ.get("TEAMBID_TZ", "Asia/Tokyo"))          # the team reads times in JST
+LETTER_TZ = ZoneInfo(os.environ.get("TEAMBID_LETTER_TZ", "America/Chicago"))   # cover letters are dated in US Central time
 SCAN_TZ = ZoneInfo(os.environ.get("TEAMBID_SCAN_TZ", "Asia/Tokyo"))
 SCAN_HOUR = int(os.environ.get("TEAMBID_SCAN_HOUR", "17"))   # 3 h after Quick Bid's 14:00 scan, so they never overlap
 if hasattr(time, "tzset"):     # Linux (GitHub Actions runs in UTC): local time, and the programs that build documents

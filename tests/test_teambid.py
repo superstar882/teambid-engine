@@ -243,21 +243,28 @@ class Storage(unittest.TestCase):
 
 
 class Times(unittest.TestCase):
-    """Every time and date is Japan time: the page, documents, job dates, and the programs that build documents."""
+    """Every time and date is Japan time (the page, documents, job dates, the programs that build documents), but a cover
+    letter is dated in Chicago time."""
 
     def test_the_page_says_when_it_was_updated_in_jst(self):
         from teambid import export
         self.assertEqual(config.TZ.key, os.environ.get("TEAMBID_TZ", "Asia/Tokyo"))
         self.assertTrue(export.build_data()["generated"].endswith(" JST"))
 
-    def test_the_letter_is_dated_in_jst(self):
+    def test_the_letter_is_dated_in_chicago_time(self):
         import datetime as dt
         from unittest import mock
+        from zoneinfo import ZoneInfo
         from teambid import region
-        late = dt.datetime(2026, 11, 10, 8, 0, tzinfo=config.TZ)          # still November 9 in the US
-        with mock.patch.object(config, "now", return_value=late):
-            self.assertEqual(region.letter_date({"region": "US", "timezone": "America/New_York"}), "November 10, 2026")
-            self.assertEqual(region.letter_date({"region": "EU"}), "10 November 2026")
+        self.assertEqual(config.LETTER_TZ.key, os.environ.get("TEAMBID_LETTER_TZ", "America/Chicago"))
+        morning = dt.datetime(2026, 11, 10, 8, 0, tzinfo=ZoneInfo("Asia/Tokyo"))     # 17:00 on November 9 in Chicago
+        evening = dt.datetime(2026, 11, 10, 16, 0, tzinfo=ZoneInfo("Asia/Tokyo"))    # 01:00 on November 10 in Chicago
+        with mock.patch.object(config, "LETTER_TZ", ZoneInfo("America/Chicago")):
+            with mock.patch.object(config, "now", return_value=morning):
+                self.assertEqual(region.letter_date({"region": "US", "timezone": "America/New_York"}), "November 9, 2026")
+                self.assertEqual(region.letter_date({"region": "EU"}), "9 November 2026")
+            with mock.patch.object(config, "now", return_value=evening):
+                self.assertEqual(region.letter_date({"region": "US"}), "November 10, 2026")
 
     def test_a_job_posted_late_at_night_in_utc_is_dated_the_next_day(self):
         from teambid.jobs import ats
