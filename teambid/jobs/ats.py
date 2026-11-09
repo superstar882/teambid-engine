@@ -45,15 +45,15 @@ def get(url, **kw):
 
 
 def iso(ts):
-    """Any timestamp -> 'YYYY-MM-DD' (UTC date) or None."""
+    """Any timestamp -> 'YYYY-MM-DD' (its date in config.TZ, JST, like every date TeamBid keeps) or None."""
     if ts in (None, ""):
         return None
     try:
         if isinstance(ts, (int, float)):
-            d = dt.datetime.fromtimestamp(ts / 1000 if ts > 1e11 else ts, dt.timezone.utc)
+            d = dt.datetime.fromtimestamp(ts / 1000 if ts > 1e11 else ts, config.TZ)
         else:
             d = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
-        return d.date().isoformat()
+        return (d.astimezone(config.TZ) if d.tzinfo else d).date().isoformat()
     except (ValueError, OverflowError, OSError):
         s = str(ts).strip()
         m = re.match(r"(\d{4}-\d{2}-\d{2})", s)
@@ -62,7 +62,7 @@ def iso(ts):
         try:                                     # RSS feeds: "Tue, 21 Oct 2026 09:15:00 +0200"
             from email.utils import parsedate_to_datetime
             d = parsedate_to_datetime(s)
-            return (d.astimezone(dt.timezone.utc) if d.tzinfo else d).date().isoformat()
+            return (d.astimezone(config.TZ) if d.tzinfo else d).date().isoformat()
         except (TypeError, ValueError, IndexError):
             pass
         m = re.match(r"(\d{1,2})[./](\d{1,2})[./](\d{4})$", s)       # "21.10.2026" (day first, European)
@@ -297,7 +297,7 @@ def _workday(slug, queries):
                 days = 31
             job = {"title": p.get("title", ""), "location": p.get("locationsText", ""),
                    "url": f"https://{tenant}.{wd}.myworkdayjobs.com/{site}{path}",
-                   "posted": (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).date().isoformat()}
+                   "posted": (config.today() - dt.timedelta(days=days)).isoformat()}
             if re.fullmatch(r"\d+ Locations", job["location"]) and TECH_TITLE.search(job["title"]):
                 try:
                     info = http().get(f"https://{tenant}.{wd}.myworkdayjobs.com/wday/cxs/{tenant}/{site}{path}",

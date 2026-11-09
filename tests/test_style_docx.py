@@ -24,7 +24,7 @@ from docx.oxml.ns import qn  # noqa: E402
 from docx.shared import Pt  # noqa: E402
 from lxml import etree  # noqa: E402
 
-from teambid import keep_style, style_docx, tailor  # noqa: E402
+from teambid import config, keep_style, style_docx, tailor  # noqa: E402
 from teambid.style_text import key  # noqa: E402
 from tests import docx_samples as DS  # noqa: E402
 
@@ -624,7 +624,7 @@ class Converter(unittest.TestCase):
                 "--user", "1001:118",
                 "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
                 "-v", "/etc/libreoffice:/etc/libreoffice:ro",
-                "-v", f"{self.tmp.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", "ubuntu:26.04",
+                "-v", f"{self.tmp.absolute()}:/work", "-e", "HOME=/tmp", "-e", f"TZ={config.TZ.key}", "--tmpfs", "/tmp", "ubuntu:26.04",
                 "timeout", "-s", "KILL", "90",
                 "soffice", "--headless", "--norestore", "-env:UserInstallation=file:///work/.libreoffice",
                 "--convert-to", "pdf", "--outdir", "/work", "/work/resume.docx"]

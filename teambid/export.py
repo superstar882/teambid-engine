@@ -86,6 +86,7 @@ def build_data(include_skipped=True):
         last_scan = con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
         from .jobs import company
         offices = company.lookup(con, last_scan) if last_scan else {}
+        scan_day = dt.date.fromisoformat(last_scan[:10]) if last_scan else config.today()   # post ages count from the scan
         out = []
         for i, m in enumerate(members):
             rows = [dict(r) for r in con.execute(
@@ -94,7 +95,7 @@ def build_data(include_skipped=True):
                 "LEFT JOIN applications a ON a.member_id=m.member_id AND a.job_id=m.job_id WHERE m.member_id=? AND j.last_seen=? AND m.last_matched>=j.last_seen "
                 "AND COALESCE(j.posted, j.first_seen) >= ?"
                 + ("" if include_skipped else " AND m.status != 'skipped'") + " ORDER BY m.score DESC",
-                (m["id"], last_scan, str(config.today() - dt.timedelta(days=max(1, int(m["prefs"].get("days", 2))) - 1))))]
+                (m["id"], last_scan, str(scan_day - dt.timedelta(days=max(1, int(m["prefs"].get("days", 2))) - 1))))]
             for r in rows:
                 r["offices"] = (offices.get(r["company"]) or {}).get("offices", [])[:4]
                 r["reasons"] = json.loads(r["reasons"] or "[]")
@@ -123,7 +124,7 @@ def build_data(include_skipped=True):
                                                   "avoid_companies", "target_companies", "exclude_words", "work_auth", "salary_min")},
                 "audit": {"score": audit["score"], "grade": audit["grade"], "findings": audit["findings"]},
                 "matches": rows, "best": sum(1 for r in rows if r["tier"] == "best"), "applications": apps})
-    return {"generated": config.shown_now().strftime("%Y-%m-%d %H:%M %Z"), "last_scan": last_scan, "members": out}
+    return {"generated": config.now().strftime("%Y-%m-%d %H:%M %Z"), "last_scan": last_scan, "members": out}
 
 
 def _with_progress(data, password):

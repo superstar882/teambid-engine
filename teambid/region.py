@@ -3,9 +3,7 @@
 US: Letter paper, 1 page (2 from ~8 years), "October 20, 2026".
 EU / UK: A4 paper, up to 2 pages from ~3 years (1-2 pages is the European norm), "20 October 2026".
 """
-import datetime as dt
 import re
-from zoneinfo import ZoneInfo
 
 from . import config
 
@@ -88,7 +86,7 @@ def detect(location):
         country = {"Asia/Kolkata": "India", "Asia/Tokyo": "Japan", "Asia/Singapore": "Singapore", "Australia/Sydney": "Australia",
                    "America/Toronto": "Canada", "America/Vancouver": "Canada"}.get(tz, "US")
         return {"region": "other", "countries": [country], "timezone": tz}
-    return {"region": "US", "countries": ["US"], "timezone": str(config.TZ)}
+    return {"region": "US", "countries": ["US"], "timezone": "America/Los_Angeles"}
 
 
 EU_PLACES = "|".join(pat for zone, pat in CITY_TZ.items() if zone.startswith("Europe/") and zone != "Europe/London")
@@ -137,19 +135,9 @@ def page_budget(region, years):
     return 2 if years >= 8 else 1
 
 
-def tz(prefs):
-    try:
-        return ZoneInfo(prefs.get("timezone") or str(config.TZ))
-    except Exception:
-        return config.TZ
-
-
-def today(prefs):
-    return dt.datetime.now(tz(prefs)).date()
-
-
 def letter_date(prefs):
-    d = dt.datetime.now(tz(prefs))
+    """Today in config.TZ (JST), like every date TeamBid writes, in the style of the job's region."""
+    d = config.now()
     if prefs.get("region") in ("EU", "UK", "LATAM", "other"):
         return f"{d.day} {d:%B %Y}"
     return f"{d:%B} {d.day}, {d.year}"
