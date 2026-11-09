@@ -352,6 +352,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     day = day or con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
     if not day:
         return {"name": member["name"], "matches": 0, "new": 0, "best": 0}
+    scan_day = dt.date.fromisoformat(day[:10])   # posts' ages count from the scan, so a match run later in the day agrees
     prefs = dict(default_prefs(member["profile"]), **{k: v for k, v in member["prefs"].items() if v not in (None, "")})
     if days:
         prefs["days"] = days
@@ -373,7 +374,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
             first = board.get(dedupe_key(job["company"], job["title"]))
             if first and first < job["posted"][:10]:
                 job["posted"] = first           # feeds re-date jobs they list again: the company's own board knows the real date
-        sc, why = score_job(job, member, lane_pats, today, known.get(job["id"]))
+        sc, why = score_job(job, member, lane_pats, scan_day, known.get(job["id"]))
         if sc is None:
             reasons[why] += 1
             if why != "old":
@@ -403,7 +404,7 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
             f = F.analyze(text, it[2]["title"])
             known[it[2]["id"]] = f
             new_facts.append((it[2]["id"], f))
-            sc, why = score_job(it[2], member, lane_pats, today, f)          # score again, now with the description
+            sc, why = score_job(it[2], member, lane_pats, scan_day, f)          # score again, now with the description
             if sc is None:
                 reasons[why] += 1
                 rejected.add(it[2]["id"])
