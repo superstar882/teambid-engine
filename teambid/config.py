@@ -2,14 +2,14 @@
 
 Override with environment variables:
   TEAMBID_WORKSPACE   where the database and member folders live (default: <project>/workspace)
-  TEAMBID_TZ          time zone for dates in files and reports (default America/Los_Angeles)
-  TEAMBID_SHOW_TZ     time zone of the times people read on the results page, like "updated" (default Asia/Tokyo)
+  TEAMBID_TZ          time zone of every time and date: the results page, documents, files and reports (default Asia/Tokyo)
   TEAMBID_SCAN_TZ / TEAMBID_SCAN_HOUR   when the daily scan is due (default Asia/Tokyo 17:00)
   ANTHROPIC_API_KEY   optional: better resume parsing and writing through the Claude API
   TEAMBID_MODEL       Claude model for the optional API features (default claude-sonnet-5-5)
 """
 import datetime as dt
 import os
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -25,10 +25,12 @@ BOARDS = DATA / "boards.json"
 SEED_COMPANIES = DATA / "seed_companies.yaml"
 KNOWLEDGE = DATA / "knowledge"
 
-TZ = ZoneInfo(os.environ.get("TEAMBID_TZ", "America/Los_Angeles"))
+TZ = ZoneInfo(os.environ.get("TEAMBID_TZ", "Asia/Tokyo"))          # the team reads times in JST
 SCAN_TZ = ZoneInfo(os.environ.get("TEAMBID_SCAN_TZ", "Asia/Tokyo"))
-SHOW_TZ = ZoneInfo(os.environ.get("TEAMBID_SHOW_TZ", "Asia/Tokyo"))  # the team reads times in JST
 SCAN_HOUR = int(os.environ.get("TEAMBID_SCAN_HOUR", "17"))   # 3 h after Quick Bid's 14:00 scan, so they never overlap
+if hasattr(time, "tzset"):     # Linux (GitHub Actions runs in UTC): local time, and the programs that build documents
+    os.environ["TZ"] = TZ.key  # (LaTeX's \today, LibreOffice), tell time in TZ too
+    time.tzset()
 
 KEY_FILE = WORKSPACE / ".anthropic-key"      # set with "tb.py claude-key"; never uploaded
 ANTHROPIC_KEY = os.environ.get("ANTHROPIC_API_KEY", "") or (KEY_FILE.read_text(encoding="utf-8").strip() if KEY_FILE.exists() else "")
@@ -43,12 +45,6 @@ def now():
 
 def today():
     return now().date()
-
-
-def shown_now():
-    """Now, for a time people read on the results page ("updated 2026-11-09 18:05 JST"). Dates of data and documents
-    keep TZ: a cover letter to a US job isn't dated a day ahead."""
-    return dt.datetime.now(SHOW_TZ)
 
 
 def ensure_dirs():

@@ -4,9 +4,9 @@ Checks are based on recruiter eye-tracking and ATS-parsing research (Ladders 201
 Greenhouse parsing guides: single column, standard headers, no tables or text in images; XYZ bullet formula; numbers
 in bullets). Every finding says what to change and why.
 """
-import datetime as dt
 import re
 
+from . import config
 from . import skills as SK
 from . import writing
 
@@ -100,7 +100,7 @@ def audit(profile, region="US"):
             "facts": {"roles": len(roles), "bullets": len(bullets), "bullets_with_numbers": with_num,
                       "skills_found": len(sk.get("all", [])), "years_experience": yrs, "level": profile.get("level"),
                       "lanes": profile.get("lanes", [])},
-            "checked": dt.date.today().isoformat()}
+            "checked": config.today().isoformat()}
 
 
 def to_markdown(name, res):

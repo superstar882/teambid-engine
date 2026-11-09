@@ -129,7 +129,7 @@ def unpack(raw, workspace=None, keep_backups=3):
                 bk = ws / "backups"
                 bk.mkdir(exist_ok=True)
                 # SQLite's backup API also copies changes still in the -wal file, which a plain file copy would miss
-                src, dst = sqlite3.connect(db, timeout=60), sqlite3.connect(bk / f"teambid-{time.strftime('%Y%m%d-%H%M%S')}.db")
+                src, dst = sqlite3.connect(db, timeout=60), sqlite3.connect(bk / f"teambid-{config.now():%Y%m%d-%H%M%S}.db")
                 src.backup(dst)
                 src.close(), dst.close()
                 for old in sorted(bk.glob("teambid-*.db"))[:-keep_backups]:

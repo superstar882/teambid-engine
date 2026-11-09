@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 os.environ.setdefault("TEAMBID_WORKSPACE", tempfile.mkdtemp(prefix="teambid-test-"))
 os.environ.setdefault("TEAMBID_LOCAL_AI", "off")
 
-from teambid import style_tex  # noqa: E402
+from teambid import config, style_tex  # noqa: E402
 from teambid.style_tex import to_plain, to_tex  # noqa: E402
 from teambid.style_text import key  # noqa: E402
 from tests import tex_samples as S  # noqa: E402
@@ -294,6 +294,7 @@ class BuildErrors(unittest.TestCase):
                 self.assertEqual(style_tex.compile_tex(S.SAMPLE, Path(tmp), "x")[1], 1)
             want = ["docker", "run", "--rm", "--network", "none", "--user", "1001:118",
                     "-v", f"{Path('/home/u/.TinyTeX')}:/opt/tex:ro", "-v", f"{Path(tmp).absolute()}:/work", "-w", "/work",
+                    "-v", "/usr/share/zoneinfo:/usr/share/zoneinfo:ro", "-e", f"TZ={config.TZ.key}",
                     "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var", "-e", "PATH=/opt/tex/bin/x86_64-linux:/usr/bin:/bin",
                     "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
                     "ubuntu:24.04", "timeout", "-s", "KILL", "60",
