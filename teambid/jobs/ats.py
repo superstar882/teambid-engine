@@ -163,6 +163,8 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
                                                                                          "on_site": " [On-site]"}.get(wt, ""),
                          "description": _plain(" ".join(str(j.get(k) or "") for k in ("description", "key_responsibilities",
                                                                                          "skills_knowledge_expertise")))})
+    elif ats == "zohorecruit":
+        jobs = _zohorecruit(s)
     elif ats == "icims":
         jobs = _icims(s)
     elif ats == "workday":
@@ -230,6 +232,34 @@ def _teamtailor(s):
         out.append({"title": it.findtext("title") or "", "url": (it.findtext("link") or "").strip(), "posted": iso(it.findtext("pubDate")),
                     "location": tag + where + {"hybrid": " [Hybrid]", "onsite": " [On-site]", "none": " [On-site]"}.get(rs, ""),
                     "description": _plain(it.findtext("description"))})
+    return out
+
+
+def _zohorecruit(s):
+    """Zoho Recruit careers page: the open jobs are a JSON list in the page (the hidden input "jobs"), with the date the
+    opening was first opened. s: the board's name on zohorecruit.com, or a whole host ("acme.zohorecruit.eu")."""
+    import html as H
+    import json
+    host = s if "." in s else f"{s}.zohorecruit.com"
+    try:
+        r = http().get(f"https://{host}/jobs/Careers", headers={"User-Agent": config.USER_AGENT}, timeout=TIMEOUT)
+        page = r.text if r.ok else ""
+    except requests.RequestException:
+        page = ""
+    m = re.search(r'<input[^>]*\bvalue="([^"]*)"[^>]*\bid="jobs"', page)
+    try:
+        data = json.loads(H.unescape(m[1])) if m else []
+    except ValueError:
+        data = []
+    out = []
+    for j in data if isinstance(data, list) else []:
+        title = (j.get("Posting_Title") or j.get("Job_Opening_Name") or "").strip()
+        if not title or j.get("Publish") is False or not j.get("id"):
+            continue
+        where = ", ".join(x for x in (j.get("City"), j.get("State"), j.get("Country")) if x)
+        out.append({"title": title, "url": f"https://{host}/jobs/Careers/{j['id']}/{re.sub(r'[^A-Za-z0-9]+', '-', title).strip('-')}",
+                    "posted": iso(j.get("Date_Opened")), "location": ("Remote " if j.get("Remote_Job") else "") + where,
+                    "description": _plain(j.get("Job_Description"))})
     return out
 
 
