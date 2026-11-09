@@ -53,10 +53,11 @@ class FactsTest(unittest.TestCase):
 
 
 class PostedWindowTest(unittest.TestCase):
-    def test_two_days_means_today_and_yesterday(self):
+    def test_two_days_means_the_scans_day_and_the_two_before(self):
+        # days are JST; while they were US Pacific (a day behind Japan) 2 days took in this much, and the team kept it
         m = {**MEMBER, "prefs": {**MEMBER["prefs"], "days": 2}}
         f = {"must": ["Python", "Go"], "years": 2}
-        for posted, ok in (("2026-10-21", True), ("2026-10-20", True), ("2026-10-19", False)):
+        for posted, ok in (("2026-10-21", True), ("2026-10-20", True), ("2026-10-19", True), ("2026-10-18", False)):
             sc, why = M.score_job(job("Backend Engineer", posted=posted), m, LANES, TODAY, f)
             self.assertEqual(sc is not None, ok, posted)
 
