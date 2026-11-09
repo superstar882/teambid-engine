@@ -32,6 +32,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from lxml import etree
 
+from . import config
 from .style_pdf import BULLETS, _marked, _skill_parts, _skill_spans, _spot
 from .style_tex import ENV_KEEP
 from .style_text import key
@@ -413,7 +414,7 @@ def _soffice_cmd(exe, name, out_dir):
             "-v", "/usr:/usr:ro", "-v", "/etc/fonts:/etc/fonts:ro", "-v", "/usr/share/fonts:/usr/share/fonts:ro",
             # Ubuntu's sofficerc (and the rest of LibreOffice's setup) is a link into /etc/libreoffice
             "-v", "/etc/libreoffice:/etc/libreoffice:ro",
-            "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "--tmpfs", "/tmp", _image(),
+            "-v", f"{out_dir.absolute()}:/work", "-e", "HOME=/tmp", "-e", f"TZ={config.TZ.key}", "--tmpfs", "/tmp", _image(),
             "timeout", "-s", "KILL", str(TIMEOUT),
             # its profile in the work folder, the one place it may write ("User installation could not be completed"
             # otherwise: the container's /tmp isn't the run's user's)

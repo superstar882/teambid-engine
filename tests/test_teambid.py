@@ -243,12 +243,34 @@ class Storage(unittest.TestCase):
 
 
 class Times(unittest.TestCase):
+    """Every time and date is Japan time: the page, documents, job dates, and the programs that build documents."""
+
     def test_the_page_says_when_it_was_updated_in_jst(self):
-        # the team reads times in Japan time; dates in files and documents keep config.TZ
         from teambid import export
-        self.assertEqual(config.SHOW_TZ.key, "Asia/Tokyo")
+        self.assertEqual(config.TZ.key, os.environ.get("TEAMBID_TZ", "Asia/Tokyo"))
         self.assertTrue(export.build_data()["generated"].endswith(" JST"))
-        self.assertEqual(config.TZ.key, os.environ.get("TEAMBID_TZ", "America/Los_Angeles"))
+
+    def test_the_letter_is_dated_in_jst(self):
+        import datetime as dt
+        from unittest import mock
+        from teambid import region
+        late = dt.datetime(2026, 11, 10, 8, 0, tzinfo=config.TZ)          # still November 9 in the US
+        with mock.patch.object(config, "now", return_value=late):
+            self.assertEqual(region.letter_date({"region": "US", "timezone": "America/New_York"}), "November 10, 2026")
+            self.assertEqual(region.letter_date({"region": "EU"}), "10 November 2026")
+
+    def test_a_job_posted_late_at_night_in_utc_is_dated_the_next_day(self):
+        from teambid.jobs import ats
+        self.assertEqual(ats.iso("2026-11-09T20:00:00Z"), "2026-11-10")
+        self.assertEqual(ats.iso("Mon, 09 Nov 2026 16:00:00 -0800"), "2026-11-10")
+        self.assertEqual(ats.iso(1794254400), "2026-11-10")              # 2026-11-09 20:00 UTC
+        self.assertEqual(ats.iso("2026-11-09"), "2026-11-09")             # a plain date stays
+
+    @unittest.skipUnless(hasattr(__import__("time"), "tzset"), "the process clock is set on Linux (GitHub Actions)")
+    def test_programs_that_build_documents_tell_time_in_jst(self):
+        import time
+        self.assertEqual(os.environ["TZ"], config.TZ.key)
+        self.assertEqual(time.strftime("%Z"), "JST")
 
 
 class Privacy(unittest.TestCase):

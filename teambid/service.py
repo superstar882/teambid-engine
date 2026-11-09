@@ -181,7 +181,7 @@ def apply(slug, job_id=None, url=None, jd_text=None, company=None, title=None, p
     # documents follow the job's location (a US job gets Letter / 1 page / US date); fall back to the member's region
     reg = RG.job_region(job_loc, jd_text, jd.get("salary", "")) or m["prefs"].get("region") or "US"
     date_prefs = dict(m["prefs"], region=reg)
-    day = str(RG.today(m["prefs"]))
+    day = str(config.today())
     safe = lambda s: re.sub(r"[^A-Za-z0-9]+", "-", s).strip("-")[:40]
     folder = config.member_dir(slug) / "applications" / f"{day}-{safe(company)}-{safe(title)}"
     folder.mkdir(parents=True, exist_ok=True)

@@ -12,6 +12,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
+from . import config
 from .style_text import key
 
 # control symbols that print one character (\% -> %); others (\\ line break, ...) make a piece move-only
@@ -381,7 +382,7 @@ def render_source(doc, plan):
 
 TIMEOUT = 60                             # seconds per LaTeX run
 FONTSPEC = re.compile(r"\\(?:usepackage|RequirePackage)\s*(?:\[[^\]]*\])?\s*\{[^}]*\bfontspec\b")
-ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT")     # SYSTEMROOT: Windows needs it
+ENV_KEEP = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "TZ")     # SYSTEMROOT: Windows needs it
 
 
 def _env():
@@ -407,6 +408,8 @@ def _latex_cmd(exe, engine, name, out_dir):
     bindir = Path(os.path.realpath(exe)).parent       # TinyTeX's own bin dir, past the ~/bin links its installer makes
     return ["docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
             "-v", f"{bindir.parents[1]}:/opt/tex:ro", "-v", f"{out_dir.absolute()}:/work", "-w", "/work",
+            # \today in TeamBid's time zone: the image has no zone data of its own
+            "-v", "/usr/share/zoneinfo:/usr/share/zoneinfo:ro", "-e", f"TZ={config.TZ.key}",
             "-e", "HOME=/work", "-e", "TEXMFVAR=/work/.texmf-var", "-e", f"PATH=/opt/tex/bin/{bindir.name}:/usr/bin:/bin",
             "-e", "openin_any=p", "-e", "openout_any=p", "-e", "shell_escape=f",
             os.environ.get("TEAMBID_LATEX_IMAGE", "ubuntu:24.04"), "timeout", "-s", "KILL", str(TIMEOUT),

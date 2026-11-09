@@ -247,6 +247,15 @@ async function fetchT(url, opts = {}, ms = 25000, tries = 3) {
   }
 }
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+// every time on the page is Japan time, wherever the viewer is ("2026-11-10 09:05 JST"; date: "2026-11-10")
+const JST_FMT = new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit",
+                                                   hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+const jst = (iso, date) => {
+  const t = Date.parse(iso || "");
+  if (isNaN(t)) return String(iso || "").replace("T", " ").slice(0, date ? 10 : 16);
+  const s = JST_FMT.format(t);
+  return date ? s.slice(0, 10) : s + " JST";
+};
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 let DATA, cur, sub = "Matches";
 // ---- team progress (Supabase, encrypted, append-only) ----
@@ -457,7 +466,7 @@ async function appsView(m, body) {
       const r = byKey[e.job] || {}, old = rows[e.job];
       if (!e.status || e.status === "skipped") { if (old && old.live) delete rows[e.job]; continue; }
       rows[e.job] = { company: e.company || r.company || old?.company, title: e.title || r.title || old?.title, url: r.url || e.url || old?.url,
-                      status: e.status, fit: old?.fit, note: e.note || "", by: e.by || "", when: (e.saved_at || e.at || "").slice(0, 10), live: true };
+                      status: e.status, fit: old?.fit, note: e.note || "", by: e.by || "", when: jst(e.saved_at || e.at, true), live: true };
     }
   }
   const order = ["offer", "interview", "applied", "saved", "drafting", "rejected", "withdrawn", "closed"];
@@ -548,7 +557,7 @@ async function copyText(t) {
   }
 }
 function docCard(d) {
-  const r = d.req, x = d.done, when = (r.at || "").replace("T", " ").slice(0, 16);
+  const r = d.req, x = d.done, when = jst(r.at);
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
     <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${!x ? '<span class="spin"></span>' : ""}${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
     <span class="muted" style="font-size:12px">${r.model ? esc(MODEL_NAME[r.model] || r.model) + " · " : ""}asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
@@ -988,7 +997,7 @@ function draw() {
         <td>${PG && PG.ok ? `<div class="prog"><select data-k="${esc(r.url_key)}" class="pst">${STATUSES.map(([v, l]) => `<option value="${v}" ${v === (e.status || "") ? "selected" : ""}>${l}</option>`).join("")}</select>
              <button class="b2 tl" data-k="${esc(r.url_key)}" title="Make a tailored resume + cover letter for this job">Tailor</button>
              <input data-k="${esc(r.url_key)}" class="pnote" placeholder="Note" value="${esc(e.note || "")}">
-             ${e.by || e.saved_at ? `<div class="muted who">${esc(e.by || "")} ${esc((e.saved_at || e.at || "").slice(0, 10))}</div>` : ""}</div>`
+             ${e.by || e.saved_at ? `<div class="muted who">${esc(e.by || "")} ${esc(jst(e.saved_at || e.at, true))}</div>` : ""}</div>`
            : esc(STATUSES.find(([v]) => v === (e.status || ""))?.[1] || "-")}</td>
         <td class="muted m-hide">${esc((r.reasons||[]).join("; "))}</td></tr>`).join("") || '<tr><td colspan=7 class="muted">No matches.</td></tr>';
       const byKey = Object.fromEntries(m.matches.map(r => [r.url_key, r]));
