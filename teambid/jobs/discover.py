@@ -20,13 +20,13 @@ REGISTRY = config.WORKSPACE / "found-boards.json"
 RETRY_DAYS = 30
 # most common first; Workday and iCIMS need a tenant + site name, which can't be guessed from the company name
 SYSTEMS = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "breezy", "bamboohr",
-           "teamtailor", "personio", "pinpoint")
+           "teamtailor", "personio", "pinpoint", "zohorecruit")
 CAREERS = {"greenhouse": "https://job-boards.greenhouse.io/{}", "lever": "https://jobs.lever.co/{}",
            "ashby": "https://jobs.ashbyhq.com/{}", "workable": "https://apply.workable.com/{}",
            "smartrecruiters": "https://jobs.smartrecruiters.com/{}", "recruitee": "https://{}.recruitee.com",
            "breezy": "https://{}.breezy.hr", "bamboohr": "https://{}.bamboohr.com/careers",
            "teamtailor": "https://{}.teamtailor.com/jobs", "personio": "https://{}.jobs.personio.de",
-           "pinpoint": "https://{}.pinpointhq.com"}
+           "pinpoint": "https://{}.pinpointhq.com", "zohorecruit": "https://{}.zohorecruit.com/jobs/Careers"}
 SUFFIX = re.compile(r"(?i)\b(inc|llc|ltd|limited|gmbh|corp|corporation|co|company|holdings?|group|plc|s\.?a|b\.?v|ag|"
                     r"technologies|technology|labs?|software|solutions)\b\.?")
 
@@ -89,9 +89,12 @@ def run(feed_jobs, covered, day, log=print, limit=200, workers=32):
         tried = reg["misses"].get(ck)
         if tried and (today - dt.date.fromisoformat(tried)).days < RETRY_DAYS:
             continue
-        t = todo.setdefault(ck, {"name": name, "titles": set(), "via": j.get("source")})
+        t = todo.setdefault(ck, {"name": name, "titles": set(), "via": j.get("source"), "newest": ""})
         t["titles"].add(tk)
-    items = sorted(todo.items(), key=lambda kv: -len(kv[1]["titles"]))[:limit]     # companies with most jobs first
+        t["newest"] = max(t["newest"], (j.get("posted") or "")[:10])
+    # the newest posts first: a job a feed dates today (maybe an old one listed again) is checked against the company's
+    # own board the day it shows up; then companies with the most jobs
+    items = sorted(todo.items(), key=lambda kv: (kv[1]["newest"], len(kv[1]["titles"])), reverse=True)[:limit]
     if not items:
         return []
     log(f"looking for the careers pages of {len(items):,} companies seen only on job feeds...")

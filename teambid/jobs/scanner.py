@@ -126,7 +126,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                     continue
             log(f"resuming: {len(saved):,} boards already done today (checkpoint)")
         out = open(ck, "a", encoding="utf-8")
-        lock, done, span, per_ats = threading.Lock(), [0], {}, Counter()
+        lock, done, span, scanned = threading.Lock(), [0], {}, Counter()      # scanned: boards per job system
         t0 = time.monotonic()
 
         def one(b):
@@ -149,7 +149,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                     out.write(json.dumps({"ats": b[0], "slug": b[1], "t": round(time.time()), "jobs": js}) + "\n")
                     out.flush()
                     done[0] += 1
-                    per_ats[b[0]] += 1
+                    scanned[b[0]] += 1
                     s = span.setdefault(b[0], [start, end])
                     s[0], s[1] = min(s[0], start), max(s[1], end)
                     if done[0] % 1000 == 0 or done[0] == len(boards):
@@ -182,7 +182,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                 problems.append(f"{name}: returned 0 jobs")
             timing[name] = time.monotonic() - t1
             all_jobs += _with_facts(js)
-        if not (only or per_ats or limit):
+        if not (only or per_ats or limit):          # a full scan (not a quick test of some boards)
             t1 = time.monotonic()
             try:
                 covered = {matcher.dedupe_key(j["company"], "")[0] for j in board_jobs}
@@ -231,7 +231,7 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
         secs = time.monotonic() - t_start
         by_ats = Counter(j.get("ats") for j in all_jobs)
         stats = {"boards": len(boards), "jobs": len(all_jobs), "by_ats": dict(by_ats),
-                 "by_source": dict(Counter(j.get("source") for j in all_jobs)), "boards_per_ats": dict(per_ats),
+                 "by_source": dict(Counter(j.get("source") for j in all_jobs)), "boards_per_ats": dict(scanned),
                  "secs_per_ats": {k: round(v[1] - v[0]) for k, v in span.items()},
                  "timing": {k: round(v) for k, v in timing.items()}, "problems": problems, "members": match_stats,
                  "internet_down_secs": down}
