@@ -273,6 +273,56 @@ class Times(unittest.TestCase):
         self.assertEqual(ats.iso(1794254400), "2026-11-10")              # 2026-11-09 20:00 UTC
         self.assertEqual(ats.iso("2026-11-09"), "2026-11-09")             # a plain date stays
 
+    def test_a_database_kept_in_pacific_time_moves_to_jst_once(self):
+        import json
+        import sqlite3
+        from unittest import mock
+        from zoneinfo import ZoneInfo
+        tmp = Path(tempfile.mkdtemp())
+        db = tmp / "teambid.db"
+        con = sqlite3.connect(db)
+        con.executescript(storage.SCHEMA.split("CREATE TABLE IF NOT EXISTS meta")[0])     # as it was before
+        con.execute("INSERT INTO members (slug, name, profile, created, updated) VALUES ('a', 'A', ?, ?, ?)",
+                    (json.dumps({"edited": "2026-11-06T06:31:00-08:00"}), "2026-10-20 07:33", "2026-11-10 04:07"))
+        con.execute("INSERT INTO jobs (url_key, url, company, title, posted, first_seen, last_seen) "
+                    "VALUES ('k', 'u', 'C', 'T', '2026-11-07', '2026-11-07', '2026-11-08')")
+        con.execute("INSERT INTO matches (member_id, job_id, score, tier, first_matched, last_matched) "
+                    "VALUES (1, 1, 90, 'best', '2026-11-07', '2026-11-10')")
+        con.execute("INSERT INTO applications (member_id, job_id, company, title, created, updated) "
+                    "VALUES (1, 1, 'C', 'T', '2026-11-08 21:58', '2026-11-10 04:07')")
+        con.execute("INSERT INTO runs (kind, started, finished) VALUES ('scan', '2026-11-08T21:01:34-08:00', "
+                    "'2026-10-31T23:05:53-07:00')")
+        con.commit()
+        con.close()
+        (tmp / "admin-applied.json").write_text(json.dumps({"r1": {"ok": True, "at": "2026-10-20T17:37:08-07:00"}}),
+                                                encoding="utf-8")
+        with mock.patch.object(config, "WORKSPACE", tmp), mock.patch.object(config, "DB_PATH", db), \
+             mock.patch.object(config, "TZ", ZoneInfo("Asia/Tokyo")):
+            for _ in range(2):                                        # the second time finds it done
+                with storage.connect() as c:
+                    got = {
+                        "member": tuple(c.execute("SELECT created, updated FROM members").fetchone()),
+                        "edited": json.loads(c.execute("SELECT profile FROM members").fetchone()[0])["edited"],
+                        "job": tuple(c.execute("SELECT posted, first_seen, last_seen FROM jobs").fetchone()),
+                        "match": tuple(c.execute("SELECT first_matched, last_matched FROM matches").fetchone()),
+                        "app": tuple(c.execute("SELECT created, updated FROM applications").fetchone()),
+                        "run": tuple(c.execute("SELECT started, finished FROM runs").fetchone()),
+                        "tz": c.execute("SELECT value FROM meta WHERE key='tz'").fetchone()[0]}
+                self.assertEqual(got, {
+                    "member": ("2026-10-20 23:33", "2026-11-10 04:07"),       # Pacific time -> JST; JST stays
+                    "edited": "2026-11-06T23:31:00+09:00",
+                    "job": ("2026-11-07", "2026-11-08", "2026-11-09"),        # a scan's day moves on a day; posted stays
+                    "match": ("2026-11-08", "2026-11-10"),
+                    "app": ("2026-11-09 14:58", "2026-11-10 04:07"),
+                    "run": ("2026-11-09T14:01:34+09:00", "2026-11-01T15:05:53+09:00"),
+                    "tz": "Asia/Tokyo"})
+        self.assertEqual(json.loads((tmp / "admin-applied.json").read_text(encoding="utf-8"))["r1"]["at"],
+                         "2026-10-21T09:37:08+09:00")
+
+    def test_a_new_database_is_marked_jst_and_nothing_moves(self):
+        with storage.connect() as c:
+            self.assertEqual(c.execute("SELECT value FROM meta WHERE key='tz'").fetchone()[0], config.TZ.key)
+
     @unittest.skipUnless(hasattr(__import__("time"), "tzset"), "the process clock is set on Linux (GitHub Actions)")
     def test_programs_that_build_documents_tell_time_in_jst(self):
         import time
