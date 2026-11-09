@@ -8,11 +8,14 @@ Tables
   applications  what a member is actually working on: tailored docs, status pipeline, notes
   events        history of status changes
   runs          one row per scan / match run with full stats as JSON
+  meta          settings of the database itself (tz: the time zone its dates and times are in)
 """
+import datetime as dt
 import json
 import re
 import sqlite3
 from contextlib import contextmanager
+from zoneinfo import ZoneInfo
 
 from . import config
 
@@ -88,6 +91,10 @@ CREATE TABLE IF NOT EXISTS runs (
   secs INTEGER,
   stats TEXT
 );
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 """
 
 
@@ -105,6 +112,8 @@ def connect():
     con.execute("PRAGMA journal_mode=WAL")      # the UI can read while a scan writes
     con.execute("PRAGMA foreign_keys=ON")
     con.executescript(SCHEMA)
+    if not con.execute("SELECT 1 FROM meta WHERE key='tz'").fetchone():
+        to_tz(con)
     try:
         yield con
         con.commit()
@@ -114,6 +123,61 @@ def connect():
 
 def stamp():
     return config.now().strftime("%Y-%m-%d %H:%M")
+
+
+PACIFIC = ZoneInfo("America/Los_Angeles")
+SWITCH = "2026-11-10"     # dates and times were US Pacific until 02:15 JST on 2026-11-10; everything written since is config.TZ
+
+
+def to_tz(con):
+    """Once per database: move the dates and times written while TeamBid kept US Pacific time to config.TZ (JST).
+    Times convert exactly. A day (the scan's day, when a job was first or last seen or matched) moves by as many days as
+    a scan's did: every scan ran at 21:00 Pacific, 14:00 JST the next day. Values written since the switch are later than
+    SWITCH and stay as they are, so it doesn't matter which run gets here first."""
+    def clock(s):                        # "2026-11-08 21:58" (Pacific) -> "2026-11-09 14:58"
+        try:
+            d = dt.datetime.strptime(s, "%Y-%m-%d %H:%M").replace(tzinfo=PACIFIC)
+        except (TypeError, ValueError):
+            return s
+        return d.astimezone(config.TZ).strftime("%Y-%m-%d %H:%M")
+
+    def iso(s):                          # "2026-11-08T21:01:34-08:00" -> "2026-11-09T14:01:34+09:00"
+        try:
+            d = dt.datetime.fromisoformat(s)
+        except (TypeError, ValueError):
+            return s
+        return d.astimezone(config.TZ).isoformat(timespec="seconds") if d.tzinfo else s
+
+    con.execute("BEGIN IMMEDIATE")          # one run converts; another waits here, then finds it done (dates move once)
+    if con.execute("SELECT 1 FROM meta WHERE key='tz'").fetchone():
+        con.rollback()
+        return
+    scan = dt.datetime(2026, 11, 8, 21, 1, tzinfo=PACIFIC)
+    shift = f"{(scan.astimezone(config.TZ).date() - scan.date()).days:+d} day"
+    for table, cols in (("jobs", ("first_seen", "last_seen")), ("matches", ("first_matched", "last_matched"))):
+        for c in cols:
+            con.execute(f"UPDATE {table} SET {c}=date({c}, ?) WHERE {c} < ?", (shift, SWITCH))
+    con.create_function("pacific_clock", 1, clock, deterministic=True)
+    for table, cols in (("members", ("created", "updated")), ("jd", ("fetched",)), ("events", ("at",)),
+                        ("applications", ("created", "updated"))):
+        for c in cols:
+            con.execute(f"UPDATE {table} SET {c}=pacific_clock({c}) WHERE {c} < ?", (SWITCH,))
+    con.create_function("pacific_iso", 1, iso, deterministic=True)
+    con.execute("UPDATE runs SET started=pacific_iso(started), finished=pacific_iso(finished)")
+    for r in con.execute("SELECT id, profile FROM members").fetchall():
+        p = json.loads(r["profile"] or "{}")
+        if p.get("edited") and iso(p["edited"]) != p["edited"]:
+            p["edited"] = iso(p["edited"])
+            con.execute("UPDATE members SET profile=? WHERE id=?", (json.dumps(p), r["id"]))
+    applied = config.WORKSPACE / "admin-applied.json"          # admin's log of the team's changes it carried out
+    if applied.exists():
+        log = json.loads(applied.read_text(encoding="utf-8"))
+        for v in log.values():
+            if isinstance(v, dict) and isinstance(v.get("at"), str):
+                v["at"] = iso(v["at"])
+        applied.write_text(json.dumps(log, indent=1), encoding="utf-8")
+    con.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('tz', ?)", (config.TZ.key,))
+    con.commit()
 
 
 # ---------- members ----------

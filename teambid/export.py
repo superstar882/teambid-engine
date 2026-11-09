@@ -95,7 +95,7 @@ def build_data(include_skipped=True):
                 "LEFT JOIN applications a ON a.member_id=m.member_id AND a.job_id=m.job_id WHERE m.member_id=? AND j.last_seen=? AND m.last_matched>=j.last_seen "
                 "AND COALESCE(j.posted, j.first_seen) >= ?"
                 + ("" if include_skipped else " AND m.status != 'skipped'") + " ORDER BY m.score DESC",
-                (m["id"], last_scan, str(scan_day - dt.timedelta(days=max(1, int(m["prefs"].get("days", 2))) - 1))))]
+                (m["id"], last_scan, str(scan_day - dt.timedelta(days=max(1, int(m["prefs"].get("days", 2)))))))]
             for r in rows:
                 r["offices"] = (offices.get(r["company"]) or {}).get("offices", [])[:4]
                 r["reasons"] = json.loads(r["reasons"] or "[]")
