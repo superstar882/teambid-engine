@@ -150,6 +150,17 @@ class Build(unittest.TestCase):
         self.assertFalse((tmp / "pwned").exists())
 
     @unittest.skipUnless(os.environ.get("TEAMBID_LATEX_SANDBOX") == "docker", "the LaTeX sandbox is on in the online Tests workflow")
+    def test_a_date_the_resume_prints_itself_is_jst(self):
+        # \today in the sandbox: the container has no zone data of its own, so without it LaTeX tells UTC
+        src = S.SAMPLE.replace("\\begin{document}", "\\begin{document}DATE\\the\\year-\\the\\month-\\the\\day.", 1)
+        tmp = Path(tempfile.mkdtemp())
+        pdf, _ = style_tex.compile_tex(src, tmp, "today")
+        with fitz.open(pdf) as d:
+            text = "".join("".join(p.get_text() for p in d).split())
+        d = config.now()
+        self.assertIn(f"DATE{d.year}-{d.month}-{d.day}.", text)
+
+    @unittest.skipUnless(os.environ.get("TEAMBID_LATEX_SANDBOX") == "docker", "the LaTeX sandbox is on in the online Tests workflow")
     def test_no_reading_outside_the_folder(self):
         # a file outside the build folder, like members' data or ~/.ssh: no way of reading it may reach the PDF
         secret = Path(tempfile.mkdtemp()) / "secret.txt"
