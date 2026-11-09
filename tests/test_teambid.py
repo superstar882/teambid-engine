@@ -242,6 +242,15 @@ class Storage(unittest.TestCase):
             con.execute("DELETE FROM members WHERE id=?", (mid,))
 
 
+class Times(unittest.TestCase):
+    def test_the_page_says_when_it_was_updated_in_jst(self):
+        # the team reads times in Japan time; dates in files and documents keep config.TZ
+        from teambid import export
+        self.assertEqual(config.SHOW_TZ.key, "Asia/Tokyo")
+        self.assertTrue(export.build_data()["generated"].endswith(" JST"))
+        self.assertEqual(config.TZ.key, os.environ.get("TEAMBID_TZ", "America/Los_Angeles"))
+
+
 class Privacy(unittest.TestCase):
     def test_logs_name_a_member_by_a_code_never_their_name(self):
         # the engine repo and its Actions logs are public
