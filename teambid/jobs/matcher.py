@@ -259,7 +259,9 @@ def score_job(job, member, lane_pats, today, facts=None):
             age = (today - dt.date.fromisoformat(posted[:10])).days
         except ValueError:
             age = None
-    window = max(1, int(prefs.get("days", 2))) - 1          # days=2: posted today or yesterday
+    # days=2: posted on the scan's day or the 2 before (JST). The range the team had while days were US Pacific, a day
+    # behind Japan: the 14:00 JST scan still takes in what US companies posted "yesterday" their time
+    window = max(1, int(prefs.get("days", 2)))
     if age is None and job.get("first_seen"):
         try:
             age = (today - dt.date.fromisoformat(job["first_seen"][:10])).days
