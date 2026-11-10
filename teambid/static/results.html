@@ -15,15 +15,16 @@
 :root { --brand:#10014b; --brand-text:#10014b; --brand-hover:#2a1a70; --brand-soft:#f3f1fb; --brand-tint:#e7e3f7; --brand-line:#dcd7f0;
         --bg:#fbfbfe; --card:#fff; --ink:#17142b; --muted:#6b6782; --line:#ebe8f4; --on-brand:#fff;
         --go:#12805a; --go2:#e3f6ed; --warn:#a35a00; --warn2:#fff2df; --bad:#b42318; --bad2:#fdebea;
-        --shadow:0 1px 2px rgba(16,1,75,.05), 0 6px 20px rgba(16,1,75,.06); --logo-filter:none; }
+        --shadow:0 1px 2px rgba(16,1,75,.05), 0 6px 20px rgba(16,1,75,.06); --logo-filter:none; --scroll:#cfc8ea; --scroll-hover:#9d92cf; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
         --brand:#5c4be0; --brand-text:#c8c0ff; --brand-hover:#6e5ff0; --brand-soft:#141127; --brand-tint:#241f47; --brand-line:#302a57;
         --bg:#0e0c1b; --card:#18152c; --ink:#ecebf6; --muted:#a39fbd; --line:#2a2646; --on-brand:#fff;
         --go:#4cc38a; --go2:#122a1f; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614;
-        --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25); --logo-filter:brightness(0) invert(1); } }
+        --shadow:0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25); --logo-filter:brightness(0) invert(1); --scroll:#383166; --scroll-hover:#5c4be0; } }
 :root[data-theme="dark"] { --brand:#5c4be0; --brand-text:#c8c0ff; --brand-hover:#6e5ff0; --brand-soft:#141127; --brand-tint:#241f47;
         --brand-line:#302a57; --bg:#0e0c1b; --card:#18152c; --ink:#ecebf6; --muted:#a39fbd; --line:#2a2646;
-        --go:#4cc38a; --go2:#122a1f; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614; --logo-filter:brightness(0) invert(1); }
+        --go:#4cc38a; --go2:#122a1f; --warn:#f0a83e; --warn2:#2b2111; --bad:#ff7a6e; --bad2:#2d1614; --logo-filter:brightness(0) invert(1);
+        --scroll:#383166; --scroll-hover:#5c4be0; }
 * { box-sizing:border-box; }
 html, body { height:100%; }
 body { margin:0; font:14px/1.5 Nunito, ui-rounded, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background:var(--bg); color:var(--ink); }
@@ -65,6 +66,12 @@ main.main { min-width:0; padding:26px 32px 40px; }
 .iconbtn { display:none; border:1px solid var(--line); background:var(--card); color:var(--ink); width:40px; height:40px; border-radius:12px; cursor:pointer; }
 .iconbtn svg { width:20px; height:20px; stroke:currentColor; fill:none; stroke-width:2; stroke-linecap:round; }
 .scrim { display:none; }
+/* scrollbars (sidebar, page, lists): a slim rounded thumb in the brand tint on a clear track, not the system's grey/white bar */
+::-webkit-scrollbar { width:10px; height:10px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--scroll); border:2px solid transparent; background-clip:padding-box; border-radius:999px; }
+::-webkit-scrollbar-thumb:hover { background-color:var(--scroll-hover); }
+@supports not selector(::-webkit-scrollbar) { * { scrollbar-width:thin; scrollbar-color:var(--scroll) transparent; } }
 
 /* cards, controls */
 .card { background:var(--card); border:1px solid var(--line); border-radius:18px; padding:18px 20px; margin-bottom:16px; box-shadow:var(--shadow); }
@@ -363,7 +370,7 @@ function renderMembers() {
       <span class="count" title="matches">${del.has(m.slug) || busy.has(m.slug) ? '<span class="spin"></span>' : m.matches.length}</span></button>`).join("") +
     adding.map(r => `<div class="navitem pending"><span class="av">${esc(initials(r.name))}</span><span class="nm"><b>${esc(r.name || "New member")}</b><small>Adding...</small></span>
       <span class="count"><span class="spin"></span></span></div>`).join("");
-  document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); });
+  document.querySelectorAll("#tabs .navitem").forEach(b => b.onclick = () => { closeMenu(); if (sub === "Add member" || sub === "Edit") sub = "Overview"; EDIT = null; pick(b.dataset.id); window.scrollTo(0, 0); });
 }
 async function unlock(pw, remember) {
   const say = t => { const el = document.getElementById("err"); el.className = "muted"; el.textContent = t; };
@@ -496,30 +503,48 @@ async function getJSON(u) {
   if (!r.ok) throw new Error("the job site answered " + r.status);
   return r.json();
 }
+// a board's company name as the scan saved it (a match from the same board), else its slug in title case, as the scan names boards
+function boardName(path, slug) {
+  const p = path.toLowerCase();
+  for (const mem of DATA.members) for (const r of mem.matches) if (r.company && (r.url || "").toLowerCase().includes(p)) return r.company;
+  return slug.replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+}
+// Ashby's posting API has no company name; the API behind its own job pages has (open to browsers; "" if it ever changes)
+async function ashbyName(board) {
+  try {
+    const r = await fetchT("https://jobs.ashbyhq.com/api/non-user-graphql?op=ApiOrganizationFromHostedJobsPageName", { method: "POST",
+      headers: { "Content-Type": "application/json" }, body: JSON.stringify({ variables: { n: board },
+      query: "query ApiOrganizationFromHostedJobsPageName($n: String!) { organization: organizationFromHostedJobsPageName(organizationHostedJobsPageName: $n, searchContext: JobBoard) { name } }" }) }, 10000);
+    return (await r.json())?.data?.organization?.name || "";
+  } catch (_) { return ""; }
+}
 async function fetchJobPost(url) {
   let m;
   if ((m = url.match(/greenhouse\.io\/(?:embed\/job_app\?for=)?([\w-]+)\/jobs\/(\d+)/))) {
     const j = await getJSON(`https://boards-api.greenhouse.io/v1/boards/${m[1]}/jobs/${m[2]}`);
-    return { title: j.title, location: j.location?.name, text: htmlText(htmlText(j.content)) };   // content is escaped HTML
+    return { company: j.company_name || boardName(`greenhouse.io/${m[1]}/`, m[1]), title: j.title, location: j.location?.name,
+             text: htmlText(htmlText(j.content)) };   // content is escaped HTML
   }
   if ((m = url.match(/jobs\.ashbyhq\.com\/([\w.-]+)\/([\w-]{36})/))) {
-    const b = await getJSON(`https://api.ashbyhq.com/posting-api/job-board/${m[1]}?includeCompensation=true`);
+    const [b, name] = await Promise.all([getJSON(`https://api.ashbyhq.com/posting-api/job-board/${m[1]}?includeCompensation=true`), ashbyName(m[1])]);
     const j = (b.jobs || []).find(x => x.id === m[2] || (x.jobUrl || "").includes(m[2]));
     if (!j) throw new Error("this posting is no longer on the board");
     const comp = j.compensation?.compensationTierSummary;
-    return { title: j.title, location: [j.location, j.workplaceType].filter(Boolean).join(" · "),
+    return { company: name || boardName(`jobs.ashbyhq.com/${m[1]}/`, m[1]), title: j.title, location: [j.location, j.workplaceType].filter(Boolean).join(" · "),
              text: (j.descriptionPlain || htmlText(j.descriptionHtml)) + (comp ? `\n\nCompensation: ${comp}` : "") };
   }
   if ((m = url.match(/jobs\.lever\.co\/([\w-]+)\/([\w-]{36})/))) {
-    const j = await getJSON(`https://api.lever.co/v0/postings/${m[1]}/${m[2]}`);
+    const j = await getJSON(`https://api.lever.co/v0/postings/${m[1]}/${m[2]}`);          // Lever gives no company name
     const parts = [j.descriptionPlain, ...(j.lists || []).map(l => l.text + "\n" + htmlText(l.content)), j.additionalPlain];
-    return { title: j.text, location: [j.categories?.location, j.workplaceType].filter(Boolean).join(" · "), text: parts.filter(Boolean).join("\n\n") };
+    return { company: boardName(`jobs.lever.co/${m[1]}/`, m[1]), title: j.text, location: [j.categories?.location, j.workplaceType].filter(Boolean).join(" · "),
+             text: parts.filter(Boolean).join("\n\n") };
   }
   if ((m = url.match(/jobs\.smartrecruiters\.com\/([\w-]+)\/(\d+)/))) {
     const j = await getJSON(`https://api.smartrecruiters.com/v1/companies/${m[1]}/postings/${m[2]}`);
     const sec = j.jobAd?.sections || {};
     const parts = ["companyDescription", "jobDescription", "qualifications", "additionalInformation"].map(k => sec[k] && ((sec[k].title ? sec[k].title + "\n" : "") + htmlText(sec[k].text)));
-    return { title: j.name, location: [j.location?.city, j.location?.country?.toUpperCase()].filter(Boolean).join(", "), text: parts.filter(Boolean).join("\n\n") };
+    return { company: j.company?.name || boardName(`smartrecruiters.com/${m[1]}/`, m[1]), title: j.name,
+             location: [j.location?.city, j.location?.country?.toUpperCase()].filter(Boolean).join(", "), text: parts.filter(Boolean).join("\n\n") };
   }
   return null;        // Workday, iCIMS, Workable and company sites block browser reads: the cloud reads the link instead
 }
@@ -583,7 +608,7 @@ async function docsView(m, body) {
     <div class="muted">Paste the job post (copying the whole page from the browser is fine), or give a link the tool can read.
       It's built in the cloud from ${esc(m.name.split(" ")[0])}'s real resume, fact-checked, usually in about 5 minutes.</div>
     <div class="row" style="margin-top:8px"><input id="d_url" placeholder="Job link" value="${esc(p.url || "")}" style="flex:2;min-width:220px">
-      <button class="b2" id="d_fetch" title="Read the job description from the link">Get description</button>
+      <button class="b2" id="d_fetch" title="Fill in the company, job title and description from the link">Get job details</button>
       <input id="d_co" placeholder="Company" value="${esc(p.company || "")}" style="flex:1;min-width:140px">
       <input id="d_ti" placeholder="Job title" value="${esc(p.title || "")}" style="flex:1;min-width:160px"></div>
     <textarea id="d_text" rows="10" placeholder="Job description. Filled in from the link when the job site allows it; otherwise paste it here (or leave it empty and the cloud reads the link)."
@@ -613,17 +638,19 @@ async function docsView(m, body) {
   const sel = document.getElementById("d_model");
   try { sel.value = localStorage.getItem("tb_model") || "haiku"; } catch (_) { sel.value = "haiku"; }
   sel.onchange = () => { try { localStorage.setItem("tb_model", sel.value); } catch (_) {} };
+  // what the link says replaces the company and title (a new link means another job; the board's own name beats the scan's guess)
   const fill = async () => {
     const url = document.getElementById("d_url").value.trim(), box = document.getElementById("d_text"), msg = document.getElementById("d_msg");
     if (!url) { msg.textContent = "Add the job link first."; return; }
     msg.innerHTML = spin("Reading the job post...");
     try {
       const j = await fetchJobPost(url);
-      if (!j) { msg.textContent = "This job site doesn't allow reading from the browser. Paste the description, or leave it empty and the cloud reads the link."; return; }
+      if (!j) { msg.textContent = "This job site doesn't allow reading from the browser. Fill in the company and title, and paste the description or leave it empty for the cloud to read the link."; return; }
       box.value = j.text || "";
-      if (j.title && !document.getElementById("d_ti").value) document.getElementById("d_ti").value = j.title;
-      msg.textContent = `Description loaded (${box.value.length.toLocaleString()} characters)` + (j.location ? ` · ${j.location}` : "") + ". Check it, then make the documents.";
-    } catch (err) { msg.textContent = "Couldn't read it (" + err.message + "). Paste the description instead."; }
+      if (j.company?.trim()) document.getElementById("d_co").value = j.company.trim();
+      if (j.title?.trim()) document.getElementById("d_ti").value = j.title.trim();
+      msg.textContent = `Company, title and description loaded (${box.value.length.toLocaleString()} characters)` + (j.location ? ` · ${j.location}` : "") + ". Check them, then make the documents.";
+    } catch (err) { msg.textContent = "Couldn't read it (" + err.message + "). Fill in the company and title, and paste the description instead."; }
   };
   document.getElementById("d_fetch").onclick = async e => { const restore = busyBtn(e.currentTarget, "Reading"); await fill(); restore(); };
   document.getElementById("d_url").onchange = () => { if (!document.getElementById("d_text").value.trim()) fill(); };
@@ -796,7 +823,7 @@ function overviewView(m, body) {
       || '<tr><td colspan=3 class="muted">Nothing major.</td></tr>'}</tbody></table></div>
     <div class="card"><div class="headrow"><h2>Remove from the team</h2><span class="sp"></span><button class="b2 danger" id="delmem">Delete member</button></div>
       <div class="muted">Deletes ${esc(m.name)}'s profile, resume file, matches and applications for everyone. This can't be undone.</div></div>`;
-  document.getElementById("edit1").onclick = () => { sub = "Edit"; draw(); };
+  document.getElementById("edit1").onclick = () => { sub = "Edit"; draw(); window.scrollTo(0, 0); };
   const pendingDel = waitingFor(m.slug, "delete").length, pendingEdit = waitingFor(m.slug, "edit").length;
   if (pendingDel) { const b = document.getElementById("delmem"); b.disabled = true; b.innerHTML = spin("Deleting"); document.getElementById("edit1").disabled = true; }
   else if (pendingEdit) { const b = document.getElementById("edit1"); b.disabled = true; b.innerHTML = spin("Saving changes"); }
@@ -829,7 +856,7 @@ function experienceView(m, body) {
       <div class="card"><h2>Education</h2>${(m.education || []).map(e => `<div style="margin-bottom:8px"><b>${esc(e.school)}</b><div class="muted">${esc([e.degree, e.field].filter(Boolean).join(", "))}${e.end ? " · " + esc(e.end) : ""}</div></div>`).join("") || '<span class="muted">-</span>'}
         <h2 style="margin-top:14px">Certifications</h2>${(m.certifications || []).map(x => `<span class="chip soft">${esc(x)}</span>`).join("") || '<span class="muted">-</span>'}</div>
     </div>`;
-  document.getElementById("edit2").onclick = () => { sub = "Edit"; draw(); };
+  document.getElementById("edit2").onclick = () => { sub = "Edit"; draw(); window.scrollTo(0, 0); };
 }
 
 let EDIT = null;          // working copy while editing
@@ -940,7 +967,7 @@ function addMemberView(body) {
     } catch (err) { msg.textContent = err.message; e.target.disabled = false; }
   };
 }
-document.getElementById("addmem").onclick = () => { sub = "Add member"; closeMenu(); draw(); };
+document.getElementById("addmem").onclick = () => { sub = "Add member"; closeMenu(); draw(); window.scrollTo(0, 0); };
 
 function draw() {
   setTimeout(() => enhanceSelects(document.getElementById("view")), 0);
@@ -949,7 +976,8 @@ function draw() {
   clearInterval(DOC_TIMER);
   const nav = document.getElementById("subnav");
   nav.innerHTML = subs.map(s => `<button class="navitem ${s === sub ? "on" : ""}" data-s="${s}"><svg viewBox="0 0 24 24">${ICONS[s]}</svg>${s}</button>`).join("");
-  nav.querySelectorAll(".navitem").forEach(b => b.onclick = () => { sub = b.dataset.s; EDIT = null; closeMenu(); draw(); });
+  // a view opened by a click starts at its top (the old scroll position put a shorter view at its bottom)
+  nav.querySelectorAll(".navitem").forEach(b => b.onclick = () => { sub = b.dataset.s; EDIT = null; closeMenu(); draw(); window.scrollTo(0, 0); });
   document.querySelectorAll("#tabs .navitem").forEach(b => b.classList.toggle("on", b.dataset.id === m.id && sub !== "Add member"));
   document.getElementById("addmem").classList.toggle("on", sub === "Add member");
   document.getElementById("who").textContent = sub === "Matches" ? m.name : `${m.name} · ${sub}`;
@@ -1014,7 +1042,7 @@ function draw() {
       document.querySelectorAll(".pst").forEach(el => el.onchange = () => save(el));
       enhanceSelects(document.getElementById("rows"));
       document.querySelectorAll(".pnote").forEach(el => el.onchange = () => save(el));
-      document.querySelectorAll(".tl").forEach(el => el.onclick = () => { DOC_PREFILL = byKey[el.dataset.k]; sub = "Documents"; draw(); });
+      document.querySelectorAll(".tl").forEach(el => el.onclick = () => { DOC_PREFILL = byKey[el.dataset.k]; sub = "Documents"; draw(); window.scrollTo(0, 0); });
     };
     ["q", "tier", "st"].forEach(id => document.getElementById(id).addEventListener(id === "q" ? "input" : "change", go));
     go();
