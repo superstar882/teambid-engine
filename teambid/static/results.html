@@ -490,6 +490,7 @@ async function appsView(m, body) {
 }
 // ---- Documents: tailored resume + cover letter, built in the cloud, encrypted files decrypted here ----
 let DOC_PREFILL = null, DOC_TIMER = null;
+const DOC_PAGE = 10;                   // requests shown at a time on the Documents tab
 const DOC_FILES = [["resume_pdf", "Resume PDF"], ["resume_docx", "Resume DOCX"], ["resume_src", "Resume source (.tex)"], ["letter_pdf", "Cover letter PDF"], ["letter_docx", "Cover letter DOCX"]];
 const MODEL_OPTS = [["haiku", "Claude Haiku 5.5 (fast, low cost)"], ["sonnet", "Claude Sonnet 5.5 (best writing)"], ["free", "Free template (no AI)"]];
 const MODEL_NAME = Object.fromEntries(MODEL_OPTS.map(([v, l]) => [v, l.split(" (")[0]]));
@@ -555,7 +556,9 @@ function docsFor(slug) {
     if (e.kind === "docreq") reqs[e.rid] = e;
     if (e.kind === "docdone") done[e.rid] = e;
   }
-  const all = Object.values(reqs).map(r => ({ req: r, done: done[r.rid] })).sort((a, b) => (b.req.at || "").localeCompare(a.req.at || ""));
+  // newest first by the database's save time: "at" is the sender's own clock, which can be hours off
+  const when = r => Date.parse(r.saved_at || r.at || "") || 0;
+  const all = Object.values(reqs).map(r => ({ req: r, done: done[r.rid] })).sort((a, b) => when(b.req) - when(a.req));
   // the same job asked for again (e.g. rebuilt after a fix): show the newest, count the older ones
   const seen = {}, out = [];
   for (const d of all) {
@@ -582,7 +585,7 @@ async function copyText(t) {
   }
 }
 function docCard(d) {
-  const r = d.req, x = d.done, when = jst(r.at);
+  const r = d.req, x = d.done, when = jst(r.saved_at || r.at);
   const head = `<div class="row"><b>${esc(x?.company || r.company || "Job")}</b><span>${esc(x?.title || r.title || "")}</span>
     <span class="pill ${x?.files ? "ready" : x?.error ? "fail" : "wait"}">${!x ? '<span class="spin"></span>' : ""}${x?.files ? "Ready" : x?.error ? "Failed" : "Building"}</span>
     <span class="muted" style="font-size:12px">${r.model ? esc(MODEL_NAME[r.model] || r.model) + " · " : ""}asked ${esc(when)}${r.by ? " by " + esc(r.by) : ""}${d.older ? ` · ${d.older} older version${d.older > 1 ? "s" : ""} hidden` : ""}</span></div>`;
@@ -618,9 +621,14 @@ async function docsView(m, body) {
       <button class="b" id="d_go">Make resume + cover letter</button><span id="d_msg" class="muted"></span>
       <span style="flex:1"></span><button class="b2" id="d_ref">Refresh</button></div></div>
     <div class="card"><h2>Requests</h2><div id="d_list"></div></div>`;
+  let shown = DOC_PAGE;       // the newest few; "Show older" adds a page at a time (kept through refreshes)
   const list = () => {
-    const items = docsFor(m.slug);
-    document.getElementById("d_list").innerHTML = items.map(docCard).join("") || '<div class="muted">Nothing yet.</div>';
+    const items = docsFor(m.slug), rest = items.length - shown;
+    document.getElementById("d_list").innerHTML = (items.slice(0, shown).map(docCard).join("") || '<div class="muted">Nothing yet.</div>') +
+      (rest > 0 ? `<div class="row doc"><span class="muted">Showing the newest ${shown} of ${items.length}</span>
+        <button class="b2" id="d_more">Show ${Math.min(DOC_PAGE, rest)} older</button></div>` : "");
+    const more = document.getElementById("d_more");
+    if (more) more.onclick = () => { shown += DOC_PAGE; list(); };
     const byRid = Object.fromEntries(items.filter(d => d.done).map(d => [d.done.rid, d.done]));
     document.querySelectorAll(".dl").forEach(el => el.onclick = async () => {
       const restore = busyBtn(el);

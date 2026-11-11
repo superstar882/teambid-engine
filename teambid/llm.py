@@ -30,13 +30,25 @@ def provider(prefer="auto"):
     return None
 
 
-def _call(system, user, max_tokens=1500, model=None, timeout=120):
+def _call(system, user, max_tokens=16000, model=None, timeout=300):
+    """max_tokens covers the model's thinking too (it thinks before it answers), so it is set well above the reply."""
     r = requests.post(API, timeout=timeout, headers={"x-api-key": config.ANTHROPIC_KEY, "anthropic-version": "2023-06-01",
                                                      "content-type": "application/json"},
                       json={"model": model or config.MODEL, "max_tokens": max_tokens, "system": system,
                             "messages": [{"role": "user", "content": user}]})
     r.raise_for_status()
-    return "".join(b.get("text", "") for b in r.json().get("content", []) if b.get("type") == "text")
+    data = r.json()
+    if data.get("stop_reason") == "max_tokens":     # half a letter or half the JSON: never used
+        raise RuntimeError(f"the reply was cut off at the {max_tokens:,}-token limit")
+    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+
+
+def _json(out):
+    """The JSON object in a reply (Claude may wrap it in ```json fences or a sentence)."""
+    found = re.search(r"\{.*\}", out, re.S)
+    if not found:
+        raise ValueError("no JSON in Claude's reply")
+    return json.loads(found.group(0))
 
 
 def _numbers(text):
@@ -139,8 +151,8 @@ def read_resume(text, model=None):
     if not available():
         return None, "no Claude API key"
     try:
-        out = _call(READ_RULES, f"RESUME TEXT:\n{text[:60000]}", 16000, model or MODELS["sonnet"][0], timeout=300)
-        return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "read by Claude"
+        out = _call(READ_RULES, f"RESUME TEXT:\n{text[:60000]}", 32000, model or MODELS["sonnet"][0], timeout=600)
+        return _json(out), "read by Claude"
     except Exception as e:
         return None, f"Claude reading skipped: {e}"
 
@@ -212,11 +224,11 @@ def write_letter(profile, jd_text, company, title, draft, model=None):
     user = (f"ROLE: {title} at {company}\n\nCANDIDATE FACTS (the only allowed facts):\n{_facts(profile)}\n\n"
             f"JOB POST:\n{jd_text[:12000]}")
     try:
-        out = _call(WRITE_RULES.replace("{company}", company), user, 2000, model).strip().strip("`").strip()
+        out = _call(WRITE_RULES.replace("{company}", company), user, model=model).strip().strip("`").strip()
         problems = guard(out, draft, profile, company, jd_text)
         if problems:
             out = _call(WRITE_RULES.replace("{company}", company), user + "\n\nYOUR LAST VERSION WAS REJECTED FOR: " +
-                        "; ".join(problems) + ". Fix exactly these problems.\n\nLAST VERSION:\n" + out, 2000, model).strip().strip("`").strip()
+                        "; ".join(problems) + ". Fix exactly these problems.\n\nLAST VERSION:\n" + out, model=model).strip().strip("`").strip()
             problems = guard(out, draft, profile, company, jd_text)
     except Exception as e:
         return draft, f"Claude error: {e}"
@@ -283,8 +295,7 @@ def rewrite_resume(spec, profile, jd_text, model=None):
                         for i, r in enumerate(spec["roles"]) if r["bullets"])
     user = f"JOB POST:\n{jd_text[:12000]}\n\nSUMMARY:\n{spec.get('summary', '')}\n\nBULLETS BY ROLE:\n{roles}"
     try:
-        out = _call(RESUME_RULES, user, 3000, model)
-        data = json.loads(re.search(r"\{.*\}", out, re.S).group(0))
+        data = _json(_call(RESUME_RULES, user, model=model))
     except Exception as e:
         return spec, f"Claude resume step skipped: {e}"
     have = set(profile.get("skills", {}).get("all", []))
@@ -355,7 +366,6 @@ def tailor_in_place(doc, jd_text, model=None):
         lines += [f"{l['id']}{' (fixed)' if l.get('fixed') else ''} - {l['label']}: {', '.join(l['items'])}"
                   for l in doc["skills"]]
     try:
-        out = _call(TAILOR_RULES, "\n".join(lines), 8000, model, timeout=300)
-        return json.loads(re.search(r"\{.*\}", out, re.S).group(0)), "ok"
+        return _json(_call(TAILOR_RULES, "\n".join(lines), 32000, model, timeout=600)), "ok"
     except Exception as e:
         return None, f"Claude resume step skipped: {e}"
