@@ -33,7 +33,8 @@ def queue(entries):
             if len(got) < int(e.get("parts", 0)):
                 continue                      # still uploading from the page; next run picks it up
             out.append({**e, "text": "".join(got[i] for i in sorted(got))})
-    return sorted(out, key=lambda e: e.get("at", ""))
+    # oldest first by the database's save time: "at" is the sender's own clock, which can be hours off
+    return sorted(out, key=lambda e: e.get("saved_at") or e.get("at", ""))
 
 
 def pending():
