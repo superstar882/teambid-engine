@@ -239,9 +239,10 @@ class ReadPrompt(unittest.TestCase):
             data, _ = llm.read_resume("x" * 20000)
         self.assertEqual(data, {"jobs": []})
         system, user, max_tokens, model = call.call_args[0]
-        self.assertEqual((system, max_tokens, model), (llm.READ_RULES, 16000, llm.MODELS["sonnet"][0]))
+        # the whole resume comes back word for word after Sonnet's thinking, which counts toward max_tokens too
+        self.assertEqual((system, max_tokens, model), (llm.READ_RULES, 32000, llm.MODELS["sonnet"][0]))
         self.assertIn("x" * 20000, user)
-        self.assertEqual(call.call_args[1]["timeout"], 300)
+        self.assertEqual(call.call_args[1]["timeout"], 600)
 
 
 JD_TEXT = """Senior Python Engineer
@@ -413,7 +414,9 @@ class TailorPrompt(unittest.TestCase):
             reply, _ = llm.tailor_in_place(doc, "We need Go.", "claude-haiku-5-5")
         self.assertEqual(reply, {"bullets": {}})
         system, user, max_tokens, model = call.call_args[0]
-        self.assertEqual((system, max_tokens, model), (llm.TAILOR_RULES, 8000, "claude-haiku-5-5"))
+        # room for the thinking and the whole reply: Haiku thought 7,272 tokens on a 45-bullet resume and 8,000 cut
+        # its JSON off mid-bullet
+        self.assertEqual((system, max_tokens, model), (llm.TAILOR_RULES, 32000, "claude-haiku-5-5"))
         # every free bullet comes back reworded, sized to fit the same lines (a "return it unchanged" let Claude skip
         # them all)
         self.assertIn("Return EVERY bullet not marked (fixed)", system)
