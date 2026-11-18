@@ -109,7 +109,19 @@ TZ_EVIDENCE = {
 }
 
 
-US_PLACE = re.compile(r"(?i)(\b(Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West Virginia|Wisconsin|Wyoming|District of Columbia)\b|\b(San Francisco|SF Bay Area|Bay Area|Silicon Valley|Palo Alto|Mountain View|San Jose|Sunnyvale|Menlo Park|Seattle|Bellevue|Redmond|Portland|Los Angeles|San Diego|Austin|Dallas|Houston|Denver|Boulder|Chicago|Boston|Cambridge, MA|Atlanta|Miami|Nashville|Raleigh|Durham|Charlotte|Pittsburgh|Philadelphia|Phoenix|Salt Lake City|Minneapolis|Detroit|NYC|Brooklyn|Manhattan)\b|^(US|USA)\b|\b[A-Z]{2}\s*-\s*(?=[A-Z])|,\s*(A[LKZR]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b)")
+US_STATES = (r"Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|"
+             r"Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|"
+             r"Montana|Nebraska|Nevada|New Hampshire|New Jersey|New Mexico|New York|North Carolina|North Dakota|Ohio|Oklahoma|"
+             r"Oregon|Pennsylvania|Rhode Island|South Carolina|South Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|"
+             r"West Virginia|Wisconsin|Wyoming|District of Columbia")
+US_CITIES = (r"San Francisco|SF Bay Area|Bay Area|Silicon Valley|Palo Alto|Mountain View|San Jose|Sunnyvale|Menlo Park|Seattle|"
+             r"Bellevue|Redmond|Portland|Los Angeles|San Diego|Austin|Dallas|Houston|Denver|Boulder|Chicago|Boston|"
+             r"Cambridge, MA|Atlanta|Miami|Nashville|Raleigh|Durham|Charlotte|Pittsburgh|Philadelphia|Phoenix|Salt Lake City|"
+             r"Minneapolis|Detroit|NYC|Brooklyn|Manhattan")
+US_PLACE = re.compile(r"(?i)(\b(" + US_STATES + r")\b|\b(" + US_CITIES + r")\b|^(US|USA)\b|\b[A-Z]{2}\s*-\s*(?=[A-Z])|,\s*(A[LKZR]|C[AOT]|D[CE]|FL|GA|HI|I[ADLN]|K[SY]|LA|M[ADEINOST]|N[CDEHJMVY]|O[HKR]|PA|RI|S[CD]|T[NX]|UT|V[AT]|W[AIVY])\b)")
+# a US state or city named in a post's text: case matters there (", or" is not Oregon), and Georgia is left out
+# (posts for Eastern Europe name the country)
+US_NAMED = re.compile(r"\b(" + US_STATES.replace("Georgia|", "") + "|" + US_CITIES + r")\b")
 
 
 def us_centred(offices):
@@ -118,6 +130,15 @@ def us_centred(offices):
         return False
     us = sum(1 for o in offices if US_PLACE.search(o) or US.search(o))
     return us / len(offices) >= 0.6
+
+
+def only_elsewhere(regions, allowed, offices=()):
+    """A read "Remote" post that names other places (Europe, CET, LATAM, ...) but none of the member's, nor the world,
+    from a company not based in the US -> those places, else []. Says nothing -> []: a member in the US keeps it."""
+    mine = set(allowed) | ({"Germany"} if "Europe" in allowed else set())
+    if "worldwide" in regions or any(c in regions or f"{c}_tz" in regions for c in mine) or us_centred(offices):
+        return []
+    return [c for c in COUNTRY if c in regions and c not in mine]
 
 def open_to(text, allowed):
     """What in a job post says people in `allowed` can take it -> short label or ''."""
@@ -400,8 +421,8 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     min_score = int(prefs.get("min_score", 40))
     need = [it for it in uniq[:enrich * 4] if it[2]["id"] not in known]
     need += [it for it in uniq[enrich * 4:] if it[0] >= min_score and it[2]["id"] not in known][:read_more]
-    if not us_ok:
-        need += [it for it in uniq[enrich * 4:] if it[2]["id"] not in known and unknown_place(it[2])][:geo_check]
+    # and the "Remote" jobs that don't say where, for every member: the post says who can apply
+    need += [it for it in uniq[enrich * 4:] if it[2]["id"] not in known and unknown_place(it[2])][:geo_check]
     fetched = _prefetch_jds(con, [it[2] for it in need])
     new_facts = []
     for it in need:
@@ -438,10 +459,8 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                 upd.append((j["id"], known[j["id"]]))
         if upd:
             F.save(con, upd, day)
-    offices = {}
-    if not us_ok:
-        from . import company
-        offices = company.lookup(con, day)
+    from . import company
+    offices = company.lookup(con, day)
     langs = {str(x).split()[0].title() for x in member["profile"].get("languages", []) or []} | {"English"}
     prof_text = " ".join(b["text"] for r in member["profile"].get("roles", [])[:3] for b in r["bullets"][:4])[:2000]
     prof_vec = local_ai.embed([prof_text], "document") if prof_text else None
@@ -481,12 +500,20 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                 continue
             if f.get("no_sponsor"):
                 why.append("says no visa sponsorship")
-        if not us_ok and unknown_place(job):
+        if unknown_place(job):
+            offs = (offices.get(job["company"]) or {}).get("offices", [])
+            if us_ok and not ok_here and f.get("us_only"):
+                ok_here = "US"
             if ok_here:
                 item[0] = min(100, item[0] + 5)
                 why.append(f"post says open to {ok_here}")
+            elif us_ok:
+                there = only_elsewhere(regions, allowed, offs)
+                if there and not US_NAMED.search(storage.get_jd(con, job["id"]) or ""):
+                    item[0] = 0
+                    why.append(f"post names only {', '.join(there[:3])}, not the US")
+                    continue
             else:
-                offs = (offices.get(job["company"]) or {}).get("offices", [])
                 if us_centred(offs):
                     item[0] = 0
                     why.append("post doesn't say it's open outside the US and most offices are in the US")
