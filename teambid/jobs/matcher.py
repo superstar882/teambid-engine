@@ -252,6 +252,11 @@ def score_job(job, member, lane_pats, today, facts=None):
     ok, kind = place_ok(job.get("location") or "", title, prefs)
     if not ok:
         return None, kind
+    nc = norm_countries(prefs.get("countries")) or ["US"]
+    # Djinni is a Ukrainian board: its "Remote" jobs want people in Europe, and US members' matches skip the
+    # "who can apply" check of the post (match_member), so they'd get them all
+    if job.get("source") == "Djinni" and "US" in nc and "Europe" not in nc:
+        return None, "abroad"
     posted = job.get("posted")
     age = None
     if posted:
@@ -297,7 +302,6 @@ def score_job(job, member, lane_pats, today, facts=None):
         reasons.append("senior title: a stretch")
     s += {0: 10, 1: 8, 2: 6}.get(age, 2 if age is not None and age <= 7 else 4 if age is None else 0)
     if kind == "remote":
-        nc = norm_countries(prefs.get("countries")) or ["US"]
         allowed = nc + (["Germany"] if "Europe" in nc else [])
         where = f"{job.get('location') or ''} {title}"
         if any(COUNTRY[c].search(where) for c in allowed if c in COUNTRY):

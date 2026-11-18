@@ -82,6 +82,16 @@ class BoardDateTest(unittest.TestCase):
         self.assertEqual(got[M.dedupe_key("Acme", "Software Engineer")], "2026-10-24")
 
 
+class DjinniTest(unittest.TestCase):
+    def test_djinni_jobs_skip_members_in_the_us(self):
+        f = {"must": ["Python", "Go"], "years": 2}
+        dj = job("Backend Engineer", location="Remote", source="Djinni")
+        self.assertEqual(M.score_job(dj, MEMBER, LANES, TODAY, f), (None, "abroad"))
+        eu = {**MEMBER, "prefs": {**MEMBER["prefs"], "countries": ["Poland"]}}
+        self.assertIsNotNone(M.score_job(dj, eu, LANES, TODAY, f)[0])
+        self.assertIsNotNone(M.score_job(job("Backend Engineer", location="Remote"), MEMBER, LANES, TODAY, f)[0])
+
+
 class ReposterTest(unittest.TestCase):
     def test_repost_sites_are_known(self):
         self.assertTrue(M.is_reposter("Lifelancer"))
