@@ -92,6 +92,22 @@ class DjinniTest(unittest.TestCase):
         self.assertIsNotNone(M.score_job(job("Backend Engineer", location="Remote"), MEMBER, LANES, TODAY, f)[0])
 
 
+class UsPlaceCheckTest(unittest.TestCase):
+    def test_remote_post_naming_only_other_places(self):
+        us = {"US"}
+        self.assertEqual(M.only_elsewhere({"Europe", "Germany"}, us), ["Germany", "Europe"])
+        self.assertEqual(M.only_elsewhere({"Europe", "US"}, us), [])            # "US or Europe"
+        self.assertEqual(M.only_elsewhere({"Europe", "worldwide"}, us), [])
+        self.assertEqual(M.only_elsewhere(set(), us), [])                       # says nothing: a US member keeps it
+        self.assertEqual(M.only_elsewhere({"UK"}, us, ["San Francisco, CA", "New York, NY"]), [])   # US company
+        self.assertEqual(M.only_elsewhere({"LATAM"}, us, ["Lisbon, Portugal"]), ["LATAM"])
+        self.assertEqual(M.only_elsewhere({"Germany"}, {"US", "Europe"}), [])
+
+    def test_us_state_or_city_in_the_text(self):
+        self.assertTrue(M.US_NAMED.search("Hubs in New York and London"))
+        self.assertFalse(M.US_NAMED.search("Python, or Go, in a team in Poland, Ukraine and Georgia"))
+
+
 class ReposterTest(unittest.TestCase):
     def test_repost_sites_are_known(self):
         self.assertTrue(M.is_reposter("Lifelancer"))
