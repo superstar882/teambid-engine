@@ -99,10 +99,12 @@ jobs:
       - name: Team changes from the results page
         continue-on-error: true          # never let a bad request block the scan
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes; only this step
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes
         run: python tb.py admin apply
 
       - name: Scan, match, publish
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads what each job that can be matched requires
         run: python tb.py scan
 
       - name: Push workspace
