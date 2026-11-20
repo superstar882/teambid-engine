@@ -8,11 +8,12 @@ The score is mostly the share of the post's requirements the member's resume sho
 requirement or low coverage drops the job. Lane, target title, level, freshness, place and target company add the rest.
 """
 import datetime as dt
+import difflib
 import json
 import re
 import threading
 import time
-from collections import Counter
+from collections import Counter, defaultdict
 
 from .. import config, storage
 from .. import skills as SK
@@ -440,7 +441,7 @@ def score_job(job, member, lane_pats, today, facts=None):
                 reasons.append(f"asks {req}+ years, you have {yrs:g}")
     elif not (lane_hit or tt):
         return None, "title"
-    if re.search(r"(?i)^(djinni employer|danish employer|empresa \(brasil\)|latam company)$", job["company"] or ""):
+    if UNNAMED.match((job["company"] or "").strip()):
         s -= 5                                  # the feed doesn't name the company: rank fully described jobs first
         reasons.append("company not named in the feed")
     return max(0, min(100, s + 20)), reasons
@@ -466,16 +467,24 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, read_ma
     known = F.load(con)                  # description facts, computed once per scan for every engineering job
     claude = RQ.available()
     board = board_dates(con, day)
+    feed_seen = feed_check(con, day)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
         if is_blocked(job["company"]):
             reasons["blocked company"] += 1
             rejected.add(job["id"])
             continue
-        if job.get("ats") == "feed" and is_reposter(job["company"]):
+        if is_reposter(job["company"]):          # on a feed or on its own board (Jobgether has a Lever board)
             reasons["reposted"] += 1
             rejected.add(job["id"])
             continue
+        if job.get("ats") == "feed":
+            verdict = "unnamed" if UNNAMED.match((job["company"] or "").strip()) else \
+                feed_seen.get(dedupe_key(job["company"], job["title"]))
+            if verdict:                          # the employer's own page decides, not a job board's copy
+                reasons[verdict] += 1
+                rejected.add(job["id"])
+                continue
         if job.get("ats") == "feed" and job.get("posted"):
             first = board.get(dedupe_key(job["company"], job["title"]))
             if first and first < job["posted"][:10]:
@@ -709,6 +718,43 @@ def is_blocked(company):
     return any(c.startswith(b) for b in BLOCKED)
 
 
+# what feeds put when the post doesn't name the employer (feeds.py)
+UNNAMED = re.compile(r"(?i)^(|djinni employer|danish employer|empresa \(brasil\)|latam company)$")
+_FEED_CHECK = {}
+
+
+def _similar(title_key, titles):
+    return bool(difflib.get_close_matches(title_key, titles, n=1, cutoff=0.8))
+
+
+def feed_check(con, day):
+    """Job-board copies the company's own careers page settles, per role (dedupe key) in this scan:
+    "company page": the company's own board lists the same role (or a near-identical title), so that posting is
+    matched instead, on what the employer itself says (remote or not, where);
+    "not on careers page": the company's board lists another role the feeds show too (so it is surely the same company)
+    but not this one: closed there, or an old post a feed lists again.
+    Feed roles of companies with no board in the scan aren't in it (kept). Computed once per scan day."""
+    if day not in _FEED_CHECK:
+        board = defaultdict(set)
+        for c, t in con.execute("SELECT company, title FROM jobs WHERE last_seen=? AND source='Company board'", (day,)):
+            ck, tk = dedupe_key(c, t)
+            board[ck].add(tk)
+        feed = defaultdict(set)
+        for c, t in con.execute("SELECT company, title FROM jobs WHERE last_seen=? AND ats='feed'", (day,)):
+            ck, tk = dedupe_key(c, t)
+            if ck in board:
+                feed[ck].add(tk)
+        out = {}
+        for ck, tks in feed.items():
+            titles = list(board[ck])
+            same = {tk for tk in tks if tk in board[ck] or _similar(tk, titles)}
+            for tk in tks:
+                out[(ck, tk)] = "company page" if tk in same else "not on careers page" if same else None
+        _FEED_CHECK.clear()
+        _FEED_CHECK[day] = out
+    return _FEED_CHECK[day]
+
+
 _BOARD_DATES = {}
 
 
@@ -753,7 +799,10 @@ REASON_TEXT = {"clearance": "Needs a security clearance", "title": "Title outsid
                "years": "Asks for many more years than you have", "unread": "Job post couldn't be read",
                "abroad": "Outside your countries", "place": "Not remote and not in your home area", "old": "Older than your date window",
                "duplicate": "Same job on another board", "low score": "Below your minimum score", "excluded word": "Has a word you excluded",
-               "avoided company": "Company you avoid", "blocked company": "Company the team removed"}
+               "avoided company": "Company you avoid", "blocked company": "Company the team removed",
+               "reposted": "A repost site's copy", "unnamed": "Job board post that doesn't name the employer",
+               "company page": "Shown from the company's own careers page instead",
+               "not on careers page": "No longer on the company's own careers page"}
 
 
 def write_member_report(con, member, day, reasons, total):

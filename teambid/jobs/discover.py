@@ -18,6 +18,7 @@ from .matcher import dedupe_key
 
 REGISTRY = config.WORKSPACE / "found-boards.json"
 RETRY_DAYS = 30
+PROBE_SINCE = "2026-11-21"     # board names tried since then include "acme-careers"-style ones: older misses are tried again
 # most common first; Workday and iCIMS need a tenant + site name, which can't be guessed from the company name
 SYSTEMS = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "breezy", "bamboohr",
            "teamtailor", "personio", "pinpoint", "zohorecruit", "rippling", "gem")
@@ -52,12 +53,15 @@ def boards():
 
 
 def slugs(name):
-    """Likely board names: "AutoRABIT Holding Inc." -> autorabitholdinginc, autorabit, autorabit-holding-inc, ..."""
+    """Likely board names: "AutoRABIT Holding Inc." -> autorabitholdinginc, autorabit, autorabit-holding-inc, ...,
+    then the careers-page forms companies often use (autorabitcareers, autorabit-careers, autorabithq)."""
     base = re.sub(r"\(.*?\)", "", name).replace("&", "and")
     words = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", base)]
     core = [w.lower() for w in re.findall(r"[A-Za-z0-9]+", SUFFIX.sub(" ", base))] or words
-    return [s for s in dict.fromkeys(["".join(core), "-".join(core), "".join(words), "-".join(words),
-                                      core[0] if core and len(core[0]) >= 4 else ""]) if s][:4]
+    plain = [s for s in dict.fromkeys(["".join(core), "-".join(core), "".join(words), "-".join(words),
+                                       core[0] if core and len(core[0]) >= 4 else ""]) if s][:4]
+    c, h = "".join(core), "-".join(core)
+    return plain + [s for s in dict.fromkeys([f"{c}careers", f"{h}-careers", f"{c}hq"]) if c and s not in plain]
 
 
 def _probe(name, titles):
@@ -73,7 +77,7 @@ def _probe(name, titles):
     return None
 
 
-def run(feed_jobs, covered, day, log=print, limit=200, workers=32):
+def run(feed_jobs, covered, day, log=print, limit=600, workers=32):
     """Look for the boards of feed companies whose names no scanned board carries today.
 
     covered: company keys (dedupe_key(...)[0]) seen on company boards in this scan. A board we already scan under
@@ -88,7 +92,7 @@ def run(feed_jobs, covered, day, log=print, limit=200, workers=32):
         if len(ck) < 2 or ck in covered or ck in reg["boards"]:
             continue
         tried = reg["misses"].get(ck)
-        if tried and (today - dt.date.fromisoformat(tried)).days < RETRY_DAYS:
+        if tried and tried >= PROBE_SINCE and (today - dt.date.fromisoformat(tried)).days < RETRY_DAYS:
             continue
         t = todo.setdefault(ck, {"name": name, "titles": set(), "via": j.get("source"), "newest": ""})
         t["titles"].add(tk)

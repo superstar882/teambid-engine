@@ -122,3 +122,47 @@ class BlockedCompanyTest(unittest.TestCase):
             self.assertTrue(M.is_blocked(name), name)
         for name in ("Microsoft", "Micron", "Remote", "", None):
             self.assertFalse(M.is_blocked(name), name)
+
+
+class EmployerPageTest(unittest.TestCase):
+    """A job board's copy gives way to what the company's own careers page says."""
+
+    def test_feed_copies_against_the_company_board(self):
+        import sqlite3
+        con = sqlite3.connect(":memory:")
+        con.execute("CREATE TABLE jobs (company, title, source, ats, last_seen)")
+        con.executemany("INSERT INTO jobs VALUES (?,?,?,?,?)", [
+            ("Acme", "Senior Backend Engineer", "Company board", "lever", "d1"),
+            ("Acme", "Senior Data Engineer", "Company board", "lever", "d1"),
+            ("Acme", "Senior Backend Engineer (Remote)", "Himalayas", "feed", "d1"),      # same role: the board's copy
+            ("Acme", "Sr. Data Engineer", "Jobicy", "feed", "d1"),                        # near-identical title
+            ("Acme", "Staff Frontend Engineer", "Himalayas", "feed", "d1"),               # not on Acme's board any more
+            ("Solo", "Platform Engineer", "Company board", "ashby", "d1"),
+            ("Solo", "iOS Engineer", "Himalayas", "feed", "d1"),                          # no shared role: can't tell
+            ("Nobody", "Backend Engineer", "Himalayas", "feed", "d1")])                   # no board: kept
+        M._FEED_CHECK.clear()
+        got = M.feed_check(con, "d1")
+        key = lambda c, t: M.dedupe_key(c, t)
+        self.assertEqual(got[key("Acme", "Senior Backend Engineer (Remote)")], "company page")
+        self.assertEqual(got[key("Acme", "Sr. Data Engineer")], "company page")
+        self.assertEqual(got[key("Acme", "Staff Frontend Engineer")], "not on careers page")
+        self.assertIsNone(got.get(key("Solo", "iOS Engineer")))
+        self.assertNotIn(key("Nobody", "Backend Engineer"), got)
+
+    def test_posts_that_dont_name_the_employer(self):
+        for name in ("Djinni employer", "Danish employer", "Empresa (Brasil)", "LATAM company", ""):
+            self.assertTrue(M.UNNAMED.match(name), name)
+        self.assertFalse(M.UNNAMED.match("Acme"))
+
+    def test_repost_sites_on_their_own_board(self):
+        self.assertTrue(M.is_reposter("Jobgether"))      # dropped from any source now, its Lever board too
+
+
+class CareersNamesTest(unittest.TestCase):
+    def test_careers_page_forms_are_tried_too(self):
+        from teambid.jobs import discover as D
+        got = D.slugs("Bjak")
+        self.assertEqual(got[0], "bjak")
+        for s in ("bjakcareers", "bjak-careers", "bjakhq"):
+            self.assertIn(s, got)
+        self.assertEqual(len(got), len(set(got)))

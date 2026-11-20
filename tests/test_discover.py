@@ -115,3 +115,16 @@ class FullScanTest(unittest.TestCase):
 
     def test_a_quick_scan_of_some_boards_does_not(self):
         self.scan(per_ats=1).assert_not_called()
+
+
+class OlderMissesTest(unittest.TestCase):
+    def test_misses_from_before_the_new_board_names_are_tried_again(self):
+        tmp = tempfile.TemporaryDirectory()
+        with mock.patch.object(D, "REGISTRY", Path(tmp.name) / "found-boards.json"):
+            D.save({"boards": {}, "misses": {"acme": "2026-11-15", "beta": D.PROBE_SINCE}})
+            feed = [{"company": n, "title": "Backend Engineer", "source": "Himalayas", "ats": "feed"} for n in ("Acme", "Beta")]
+            tried = []
+            with mock.patch.object(D, "_probe", side_effect=lambda name, titles: tried.append(name)):
+                D.run(feed, covered=set(), day="2026-11-25", log=lambda *_: None, workers=1)
+        tmp.cleanup()
+        self.assertEqual(tried, ["Acme"])
