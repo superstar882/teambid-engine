@@ -1,4 +1,4 @@
-"""Job-post text from a URL: Greenhouse, Lever, Ashby and Workday public APIs, then schema.org JobPosting data,
+"""Job-post text from a URL: Greenhouse, Lever, Ashby, Workday, Gem, Rippling and Oracle public APIs, then schema.org JobPosting data,
 then plain page text. LinkedIn/Indeed/Glassdoor block bots: paste the text instead."""
 import html
 import json
@@ -66,6 +66,45 @@ def workday(url):
             "text": strip_html(j.get("jobDescription", "")) + (f"\n\nPosted: {j['startDate']}" if j.get("startDate") else "")}
 
 
+def gem(url):
+    m = re.search(r"jobs\.gem\.com/([\w-]+)/([\w-]+)", url)
+    if not m:
+        return None
+    for j in requests.get(f"https://api.gem.com/job_board/v0/{m[1]}/job_posts/", headers=UA, timeout=20).json() or []:
+        if j.get("id") == m[2] or (j.get("absolute_url") or "").rstrip("/").endswith("/" + m[2]):
+            loc = j.get("location") if isinstance(j.get("location"), dict) else {}
+            return {"title": j.get("title", ""), "company": m[1], "location": loc.get("name", ""),
+                    "text": j.get("content_plain") or strip_html(j.get("content", ""))}
+    return None
+
+
+def rippling(url):
+    if not re.search(r"ats\.rippling\.com/[\w-]+/jobs/[\w-]+", url):
+        return None
+    from . import ats
+    p = ats._rippling_post(url)
+    if not p:
+        return None
+    d = p.get("description") or {}
+    parts = (d.get("role"), d.get("company")) if isinstance(d, dict) else (d,)
+    return {"title": p.get("name", ""), "company": p.get("companyName", ""), "location": ", ".join(p.get("workLocations") or []),
+            "text": strip_html("\n\n".join(str(x) for x in parts if x))}
+
+
+def oracle(url):
+    m = re.search(r"https://([\w.-]+\.oraclecloud\.com)/hcmUI/CandidateExperience/[\w-]+/sites/([\w-]+)/(?:job|requisitions/preview)/(\d+)", url)
+    if not m:
+        return None
+    host, site, rid = m.groups()
+    d = requests.get(f"https://{host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails", headers=UA, timeout=20,
+                     params={"expand": "all", "onlyData": "true", "finder": f'ById;Id="{rid}",siteNumber={site}'}).json()
+    j = (d.get("items") or [None])[0]
+    if not j:
+        return None
+    text = "\n\n".join(strip_html(j.get(k) or "") for k in ("ExternalDescriptionStr", "ExternalResponsibilitiesStr", "ExternalQualificationsStr"))
+    return {"title": j.get("Title", ""), "company": host.split(".")[0], "location": j.get("PrimaryLocation", ""), "text": text.strip()}
+
+
 def generic(url):
     r = requests.get(url, headers={"User-Agent": config.USER_AGENT}, timeout=20)
     r.raise_for_status()
@@ -86,7 +125,7 @@ def generic(url):
 def fetch(url):
     if any(b in url for b in BLOCKED):
         raise RuntimeError(f"{url.split('/')[2]} blocks automated reading. Paste the job text instead.")
-    for f in (greenhouse, lever, ashby, workday):
+    for f in (greenhouse, lever, ashby, workday, gem, rippling, oracle):
         try:
             if (res := f(url)):
                 return res

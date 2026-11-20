@@ -1,7 +1,9 @@
-"""Readers for 10 job systems' public job feeds (no login, no scraping of LinkedIn/Indeed/Google).
+"""Readers for 17 job systems' public job feeds (no login, no scraping of LinkedIn/Indeed/Google).
 
-Greenhouse, Ashby, Lever, SmartRecruiters, Workable, Recruitee, Breezy, BambooHR: public JSON feeds.
+Greenhouse, Ashby, Lever, SmartRecruiters, Workable, Recruitee, Breezy, BambooHR, Gem: public JSON feeds.
 Workday: the public CXS search API (keyword searches; multi-location jobs are opened to read every location).
+Oracle Recruiting Cloud: the public Candidate Experience API of one career site (keyword searches, like Workday).
+Rippling: the public job-board API, and each engineering job's own page for its date and post (robots.txt allows both).
 iCIMS: the public search page (HTML; about half of iCIMS sites use the layout this reader understands).
 
 Hardening learned in production (Quick Bid, 2026-10): one Session per thread (connection reuse), short connect
@@ -9,6 +11,7 @@ timeout, browser headers for Workday/iCIMS (older Chrome versions get 405/429), 
 month-first dates, and a per-board guard so one malformed board never stops a scan.
 """
 import datetime as dt
+import json
 import re
 import threading
 import time
@@ -22,7 +25,7 @@ WD_H = {"User-Agent": config.USER_AGENT, "Accept": "application/json", "Content-
 ICIMS_H = {"User-Agent": config.USER_AGENT, "Accept": "text/html", "Accept-Language": "en-US"}
 TIMEOUT = (5, 20)
 SYSTEMS = ("greenhouse", "ashby", "lever", "smartrecruiters", "workable", "recruitee", "breezy", "bamboohr", "icims", "workday",
-           "personio", "teamtailor", "pinpoint")
+           "personio", "teamtailor", "pinpoint", "rippling", "gem", "oracle")
 TECH_TITLE = re.compile(r"(?i)\b(engineer|developer|programmer|software|data|machine learning|ml|ai|scientist|analyst|devops|sre|"
                         r"architect|platform|cloud|security|qa|sdet|mobile|ios|android|frontend|backend|full[- ]?stack|web)\b")
 BLOCKED = {}
@@ -163,6 +166,17 @@ def fetch(slug, ats, queries=("software engineer", "data engineer", "machine lea
                                                                                          "on_site": " [On-site]"}.get(wt, ""),
                          "description": _plain(" ".join(str(j.get(k) or "") for k in ("description", "key_responsibilities",
                                                                                          "skills_knowledge_expertise")))})
+    elif ats == "gem":
+        d = get(f"https://api.gem.com/job_board/v0/{s}/job_posts/")
+        for j in d if isinstance(d, list) else []:
+            where = (j.get("location") or {}).get("name", "") if isinstance(j.get("location"), dict) else ""
+            jobs.append({"title": j.get("title", ""), "location": _workplace(j.get("location_type"), where), "url": j.get("absolute_url"),
+                         "posted": iso(j.get("first_published_at") or j.get("created_at")),
+                         "description": j.get("content_plain") or _plain(j.get("content"))})
+    elif ats == "rippling":
+        jobs = _rippling(s)
+    elif ats == "oracle":
+        jobs = _oracle(s, queries)
     elif ats == "zohorecruit":
         jobs = _zohorecruit(s)
     elif ats == "icims":
@@ -289,6 +303,92 @@ def _icims(s):
                 except ValueError:
                     posted = None
             jobs.append({"title": a[2], "location": where, "url": a[1], "posted": posted})
+    return jobs
+
+
+def _workplace(kind, where):
+    """A job system's remote / hybrid / on-site field + its locations -> the location text the matcher reads."""
+    k = re.sub(r"[^a-z]", "", str(kind or "").lower())
+    if "remote" in k:
+        return where if "remote" in where.lower() else f"Remote {where}".strip()
+    if "hybrid" in k:
+        return f"{where} [Hybrid]".strip()
+    if any(w in k for w in ("onsite", "office", "inperson")):
+        return f"{where} [On-site]".strip()
+    return where
+
+
+def _rippling_post(url):
+    """A Rippling job's own page carries what the board's list doesn't: when it was posted and the post (Next.js page
+    data, apiData.jobPost). -> {} when the page can't be read."""
+    try:
+        r = http().get(url, headers={"User-Agent": config.USER_AGENT, "Accept": "text/html"}, timeout=TIMEOUT)
+        m = re.search(r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>', r.text, re.S) if r.ok else None
+        data = json.loads(m.group(1)) if m else {}
+        return ((data.get("props") or {}).get("pageProps") or {}).get("apiData", {}).get("jobPost") or {}
+    except (requests.RequestException, ValueError, AttributeError):
+        return {}
+
+
+def _rippling(s):
+    jobs = []
+    for page in range(20):
+        d = get(f"https://ats.rippling.com/api/v2/board/{s}/jobs", params={"page": page, "pageSize": 100}) or {}
+        for j in d.get("items") or []:
+            locs = j.get("locations") or []
+            kinds = {(l.get("workplaceType") or "").upper() for l in locs}
+            kind = next((k for k in ("REMOTE", "HYBRID", "ON_SITE") if k in kinds), "")    # remote anywhere: remote
+            row = {"title": j.get("name", ""), "url": j.get("url"), "posted": None,
+                   "location": _workplace(kind, " / ".join(dict.fromkeys(l["name"] for l in locs if l.get("name"))))}
+            if TECH_TITLE.search(row["title"]) and row["url"]:
+                post = _rippling_post(row["url"])
+                desc = post.get("description") or {}
+                row["posted"] = iso(post.get("createdOn"))
+                row["description"] = _plain("\n\n".join(str(x) for x in ((desc.get("role"), desc.get("company"))
+                                                                     if isinstance(desc, dict) else (desc,)) if x))
+            jobs.append(row)
+        if page + 1 >= (d.get("totalPages") or 0):
+            break
+    return jobs
+
+
+DETAIL_DAYS = 14     # Oracle sites list up to a few hundred jobs: details only for engineering jobs posted lately
+
+
+def _oracle(slug, queries):
+    """slug: "host|site" ("hdhe.fa.em3.oraclecloud.com|CX"). Few sites fill in the workplace type in the list, so the
+    engineering jobs' details are read too: their type, and the post."""
+    host, _, site = slug.partition("|")
+    if not host or not site:
+        return []
+    api = f"https://{host}/hcmRestApi/resources/latest"
+    jobs, seen = [], set()
+    recent = (config.today() - dt.timedelta(days=DETAIL_DAYS)).isoformat()
+    for qi, q in enumerate(queries):
+        d = get(f"{api}/recruitingCEJobRequisitions", params={
+            "onlyData": "true", "expand": "requisitionList.secondaryLocations",
+            "finder": f'findReqs;siteNumber={site},facetsList=NONE,limit=50,offset=0,keyword="{q}",sortBy=POSTING_DATES_DESC'})
+        reqs = (((d or {}).get("items") or [{}])[0]).get("requisitionList") or []
+        if not reqs and qi == 0:
+            break
+        for r in reqs:
+            rid = str(r.get("Id") or "")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            where = " / ".join(dict.fromkeys(x for x in [r.get("PrimaryLocation")] +
+                                             [l.get("Name") for l in r.get("secondaryLocations") or []] if x))
+            kind = f"{r.get('WorkplaceTypeCode') or ''} {r.get('WorkplaceType') or ''}"
+            row = {"title": r.get("Title") or "", "url": f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{rid}",
+                   "posted": iso(r.get("PostedDate"))}
+            if TECH_TITLE.search(row["title"]) and (row["posted"] or "9") >= recent:     # older posts: read by link if needed
+                det = (((get(f"{api}/recruitingCEJobRequisitionDetails", params={
+                    "expand": "all", "onlyData": "true", "finder": f'ById;Id="{rid}",siteNumber={site}'}) or {}).get("items")) or [{}])[0]
+                kind += f" {det.get('WorkplaceTypeCode') or ''} {det.get('WorkplaceType') or ''}"
+                row["description"] = _plain("\n\n".join(str(det.get(k) or "") for k in
+                                                     ("ExternalDescriptionStr", "ExternalResponsibilitiesStr", "ExternalQualificationsStr")))
+            row["location"] = _workplace(kind.replace("None", ""), where)
+            jobs.append(row)
     return jobs
 
 

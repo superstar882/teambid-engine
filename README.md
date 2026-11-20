@@ -29,8 +29,8 @@ everyone on a team, and most of it can be automated, honestly.
 ```
  Every day                                    For each member                       When they want to apply
  ───────────────────────────────────────      ──────────────────────────────────    ──────────────────────────────
- 1 Download 630k open jobs from 52k     ──►   5 Keep engineering jobs posted   ──►  8 Click "Tailor" on a job
-   company career pages + 14 job feeds          yesterday or today, at the          9 Resume + cover letter are
+ 1 Download 630k open jobs from 53k+    ──►   5 Keep engineering jobs posted   ──►  8 Click "Tailor" on a job
+   company career pages + 15 job feeds          yesterday or today, at the          9 Resume + cover letter are
  2 Read every engineering job's                 right level                           written from their real
    description: skills, years, where          6 Keep only remote jobs open to        resume, fact-checked
    it's open to, hybrid or not                  their country                      10 Download, apply, mark
@@ -40,9 +40,11 @@ everyone on a team, and most of it can be automated, honestly.
 ```
 
 1. **Collect.** Each day at 14:00 (Japan time), on GitHub's servers, TeamBid downloads every open job from
-   **52,553 company career pages** (Greenhouse, Lever, Ashby, Workday, Workable, BambooHR, Personio, Teamtailor,
-   SmartRecruiters, Recruitee, Breezy, iCIMS, Pinpoint) and **14 job feeds** (Himalayas, Jobicy, We Work Remotely,
-   4dayweek, Djinni, Get on Board, Jobindex, JobTech and more).
+   **53,000+ company career pages** (Greenhouse, Lever, Ashby, Workday, Workable, BambooHR, Personio, Teamtailor,
+   SmartRecruiters, Recruitee, Breezy, iCIMS, Pinpoint, Zoho Recruit, Rippling, Gem, Oracle) and **15 job feeds**
+   (Himalayas, Jobicy, We Work Remotely, 4dayweek, Djinni, Get on Board, Jobindex, JobTech, Arbeitnow and more).
+   More career pages are found every day: in public lists of job links (Simplify's GitHub lists, the Common Crawl
+   index) and from the companies seen on job feeds, each one checked on its own job system before it is added.
 2. **Understand.** For every engineering job it reads the description: required and nice-to-have skills, years of
    experience, the countries or time zones it is open to, "US residents only" style limits, and office/hybrid wording.
    For every job that could reach someone's list, Claude also reads the post once and lists what it requires, quoting
@@ -67,7 +69,8 @@ everyone on a team, and most of it can be automated, honestly.
 - **No invented facts.** Every resume line and letter claim comes from the member's own resume. Generated text that
   adds a number, tool or result the resume doesn't have is rejected.
 - **Fair use of job sites.** Only official APIs and public feeds whose terms allow automated reading. Sites that forbid
-  it are not used (for example Ashby's application-form data, Gupy, JOIN, No Fluff Jobs, Just Join IT).
+  it are not used (for example Ashby's application-form data, Gupy, JOIN, No Fluff Jobs, Just Join IT, the
+  simplify.jobs site, Dover's API).
 - **Free to run.** GitHub Actions (public repo), GitHub Pages and Supabase's free tier. A Claude API key is optional
   (with one, reading the job posts costs about $1-2 a day with Claude Haiku).
 
@@ -87,8 +90,8 @@ everyone on a team, and most of it can be automated, honestly.
 
 | | |
 |---|---|
-| Company career pages | 52,553 on 13 job systems |
-| Job feeds | 14 |
+| Company career pages | 53,000+ on 17 job systems (more found every day) |
+| Job feeds | 15 |
 | Open jobs checked | ~630,000 |
 | Job descriptions analyzed | ~90,000 (new ones each day; each job once) |
 | Job posts read by Claude | ~850 a day (the new ones that could reach someone's list) |
@@ -104,7 +107,8 @@ everyone on a team, and most of it can be automated, honestly.
 | Part | Where | What |
 |---|---|---|
 | Daily scan | `.github/workflows/scan.yml`, `teambid/jobs/scanner.py` | Pulls the encrypted workspace, applies team changes, downloads all boards (32 workers, checkpointed), analyzes new descriptions on all cores, reads new forms (time-boxed), matches everyone, publishes, pushes the workspace back (plus a dated daily copy) |
-| Job systems | `teambid/jobs/ats.py`, `feeds.py` | 13 job systems (EU Lever host fallback, Personio language fallback, BambooHR detail for date and description) and 14 feeds |
+| Job systems | `teambid/jobs/ats.py`, `feeds.py` | 17 job systems (EU Lever host fallback, Personio language fallback, BambooHR and Rippling detail for date and description, Oracle details for recent engineering posts) and 15 feeds |
+| More career pages | `teambid/jobs/boardfind.py`, `discover.py` | Board addresses from public lists of job links (Simplify's GitHub lists daily, Common Crawl's index weekly) and from feed companies' names; each checked on its job system's API, kept when it lists open jobs (`found-boards.json`) |
 | Job facts | `teambid/jobs/facts.py` | Per job: must/nice skills, years, regions, work-rights limits, US-only wording, hybrid/office wording; kept as compact JSON (not the text) |
 | Job requirements | `teambid/jobs/reqs.py` | Claude Haiku reads each post that could be matched, once: required and preferred items with the terms a resume shows them by, core ones, years; only items quoted from the post are kept |
 | Forms | `teambid/jobs/forms.py` | Greenhouse API (`questions=true`), Lever `/apply` (1 request/s, its Crawl-delay), Workable `/api/v1/jobs/{code}/form` |
