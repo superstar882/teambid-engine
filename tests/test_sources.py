@@ -106,6 +106,14 @@ class BoardFinderTest(unittest.TestCase):
             self.assertEqual(BF._crawl_host("jobs.ashbyhq.com/*", week=1), {("ashby", "acme"), ("ashby", "beta")})
 
 
+class CrawlTest(unittest.TestCase):
+    def test_a_crawl_that_finds_nothing_is_tried_again_tomorrow(self):
+        with mock.patch.object(BF, "_newest_index", return_value="https://index/x"),              mock.patch.object(BF, "_crawl_host", return_value=set()):
+            self.assertIsNone(BF._crawl(week=1, log=lambda *_: None))
+        with mock.patch.object(BF, "_newest_index", return_value="https://index/x"),              mock.patch.object(BF, "_crawl_host", side_effect=[None, {("ashby", "acme")}] + [set()] * 30):
+            self.assertEqual(BF._crawl(week=1, log=lambda *_: None), {("ashby", "acme"): ""})
+
+
 class ReaderTest(unittest.TestCase):
     def test_rippling_board_and_its_job_pages(self):
         board = {"items": [{"id": "1", "name": "Senior Backend Engineer", "url": "https://ats.rippling.com/acme/jobs/1",
