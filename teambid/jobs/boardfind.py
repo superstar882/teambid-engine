@@ -148,23 +148,19 @@ def _crawl_host(pattern, week, api=None, pages=3):
 
 
 def _crawl(week, log, minutes=10):
-    """{(job system, board): ""} from the newest crawl index, or None when it didn't answer at all."""
+    """{(job system, board): ""} from the newest crawl index, or None when it gave none (busy, or no answer)."""
     api = _newest_index()
     if not api:
         return None
-    found, answered, stop = {}, False, time.monotonic() + minutes * 60
+    found, stop = {}, time.monotonic() + minutes * 60
     for pattern in CRAWL:
         if time.monotonic() > stop:
             break
-        got = _crawl_host(pattern, week, api)
-        if got is None:
-            continue
-        answered = True
-        for b in got:
+        for b in _crawl_host(pattern, week, api) or ():
             found.setdefault(b, "")
-    if answered:
-        log(f"crawl index: {len(found):,} boards in this week's part")
-    return found if answered else None
+    # nothing at all: the index answered the page count but not the pages (it did from GitHub, 2026-11-20): try tomorrow
+    log(f"crawl index: {len(found):,} boards in this week's part" if found else "crawl index: no answer, trying again tomorrow")
+    return found or None
 
 
 def run(day, log=print, workers=32, limit=800):
@@ -177,11 +173,11 @@ def run(day, log=print, workers=32, limit=800):
         if isinstance(x, dict) and (x.get("active") or (x.get("date_updated") or 0) >= fresh):
             if (b := board_of(x.get("url"))):
                 cands.setdefault(b, ((x.get("company_name") or "").strip(), "Simplify list"))
-    last = reg.get("crawl_day")
+    last = reg.get("crawl_done")
     if not last or (today - dt.date.fromisoformat(last)).days >= CRAWL_DAYS:
         got = _crawl(today.toordinal() // 7, log)
         if got is not None:
-            reg["crawl_day"] = day
+            reg["crawl_done"] = day       # (the old "crawl_day" was also set when the index gave nothing)
             for b in got:
                 cands.setdefault(b, ("", "Common Crawl"))
     have, todo = scanned(), []
