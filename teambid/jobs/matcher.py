@@ -2,19 +2,23 @@
 
 Filters (any one drops the job): title not in the member's lanes, wrong level for their experience, non-engineering
 or gig work, wrong place (not remote in an allowed country and not in their home area), too old, blocked company.
-Score 0-100 from: lane rank, target-title phrase, skills named in the title (theirs: +, not theirs: -), level fit,
-freshness, remote/home-area fit and target company. For the best matches the job description is fetched and the
-share of its skills the member has ("coverage") adjusts the score.
+Every job that passes is read before it is listed: its post (fetched when the board's list didn't bring it), then what
+it requires (Claude, reqs.py; the rules in tailor.analyze_jd without a key). A job whose post can't be read isn't listed.
+The score is mostly the share of the post's requirements the member's resume shows ("coverage"); a missing core
+requirement or low coverage drops the job. Lane, target title, level, freshness, place and target company add the rest.
 """
 import datetime as dt
 import json
 import re
+import threading
+import time
 from collections import Counter
 
 from .. import config, storage
 from .. import skills as SK
 from .. import local_ai
 from . import jd as JD
+from . import reqs as RQ
 
 NON_ENG = re.compile(r"(?i)\b(sales|account executive|account manager|recruiter|recruiting|talent|marketing|seo|copywriter|writer|"
                      r"designer|nurse|teacher|tutor\w*|instructor|trainer\w*|annotat\w*|rater\w*|label\w*|evaluator\w*|paid tasks|"
@@ -153,22 +157,86 @@ def open_to(text, allowed):
     return m.group(0) if m else ""
 
 
-def _prefetch_jds(con, jobs, workers=16):
-    """Fetch the missing job posts in parallel (cached in the jd table, shared by every member)."""
+READ_PAUSE = 2       # seconds before reading a post again (x3 the next time)
+PER_SITE = 2         # posts read at a time from one site: Workday answered 16 at once with errors
+MIN_POST = 300       # shorter than this, a page is a shell or an error message, not the post
+
+
+def _site(url):
+    return (url.split("/") + ["", "", ""])[2]
+
+
+def _prefetch_jds(con, jobs, workers=16, tries=3):
+    """Read the posts not read yet (kept in the jd table, shared by every member), a few at a time per site. A read that
+    fails is tried again after a pause; one that still fails is saved empty, so the next run tries it again.
+    -> (posts tried, Counter of sites whose posts couldn't be read)"""
     from concurrent.futures import ThreadPoolExecutor
-    todo = [j for j in jobs if j.get("ats") != "feed" and storage.get_jd(con, j["id"]) is None]
+    todo = [j for j in jobs if j.get("ats") != "feed" and not storage.get_jd(con, j["id"])]
+    gates, lock = {}, threading.Lock()
+
+    def gate(url):
+        with lock:
+            return gates.setdefault(_site(url), threading.Semaphore(PER_SITE))
 
     def get(j):
-        try:
-            res = JD.fetch(j["url"])
-            return j["id"], (res.get("text", "") if res else "")
-        except Exception:
-            return j["id"], ""
+        for attempt in range(tries):
+            if attempt:
+                time.sleep(READ_PAUSE * 3 ** (attempt - 1))
+            with gate(j["url"]):
+                try:
+                    text = (JD.fetch(j["url"]) or {}).get("text", "") or ""
+                except RuntimeError:              # closed, not public or a site that forbids reading: asking again won't help
+                    return j["id"], ""
+                except Exception:
+                    text = ""
+            if len(text.strip()) >= MIN_POST:
+                return j["id"], text
+        return j["id"], ""
+    failed = Counter()
     if todo:
         with ThreadPoolExecutor(workers) as ex:
-            for jid, text in ex.map(get, todo):
-                storage.save_jd(con, jid, text or "")
-    return len(todo)
+            for j, (jid, text) in zip(todo, ex.map(get, todo)):
+                storage.save_jd(con, jid, text)
+                if not text:
+                    failed[_site(j["url"])] += 1
+    return len(todo), failed
+
+
+def evidence(member):
+    """What a member's resume shows: their skills, and the resume's own words (lowercase) for requirements that no
+    skills list names (device drivers, asynchronous programming)."""
+    prof = member["profile"]
+    sk = prof.get("skills") or {}
+    have = set(sk.get("proven") or []) | set(sk.get("listed_only") or [])
+    text = prof.get("raw_text") or " ".join(b["text"] for r in prof.get("roles", []) for b in r.get("bullets", []))
+    return have, " ".join([text] + sorted(have)).lower()
+
+
+def shows(item, have, words):
+    """The term of a requirement ({"any": [...]}) that the member's resume shows, or "". A term counts as one of their
+    skills under any of its names (k8s is Kubernetes), or as the same words in their resume; words under 3 letters
+    ("AI") only as a skill."""
+    for term in item.get("any") or []:
+        name = SK.canonical(term)
+        if name and name in have:
+            return term
+        t = term.lower().strip()
+        if len(t) >= 3 and re.search(rf"(?<![\w+#.]){re.escape(t)}(?![\w+#])", words):
+            return term
+    return ""
+
+
+MIN_COVER = {"claude": 0.5, "rules": 0.4}     # posts asking 3+ things: below this share met, the job is dropped
+
+
+def requirements(facts):
+    """-> (required, preferred, years, by): what Claude read in the post when it found requirements there, else the
+    skills the rules found (each its own requirement)."""
+    req = facts.get("req") or {}
+    if req.get("required"):
+        return req["required"], req.get("preferred") or [], req.get("years"), "claude"
+    one = lambda names: [{"name": n, "any": [n]} for n in names or []]
+    return one(facts.get("must")), one(facts.get("nice")), facts.get("years"), "rules"
 
 
 ONSITE_ONLY = re.compile(r"(?i)\b(on-?site only|in-office|in office 5)\b")
@@ -340,23 +408,27 @@ def score_job(job, member, lane_pats, today, facts=None):
         s += 10
         reasons.append("target company")
     if facts:
-        # what the description requires vs. what this member's resume shows; the title counts less once that's known
-        s = int(s * 0.55)
-        must = facts.get("must") or []
-        got = [k for k in must if k in have]
-        miss = [k for k in must if k not in have]
-        if must:
-            cov = len(got) / len(must)
-            if len(must) >= 3 and cov < 0.4:
+        # what the post requires vs. what this member's resume shows; the title counts less once that's known
+        s = int(s * 0.4)
+        required, preferred, req_years, by = requirements(facts)
+        shown, words = member.get("_evidence") or evidence(member)
+        got = [it for it in required if shows(it, shown, words)]
+        miss = [it for it in required if it not in got]
+        if any(it.get("core") for it in miss):
+            return None, "core"               # the job is built around something their resume doesn't show
+        if required:
+            cov = len(got) / len(required)
+            if len(required) >= 3 and cov < MIN_COVER[by]:
                 return None, "skills"
-            s += int(40 * cov) - 12
-            reasons.append(f"has {len(got)} of {len(must)} required skills")
+            reasons.append(f"has {len(got)} of {len(required)} required skills")
             if miss:
-                reasons.append("missing: " + ", ".join(miss[:5]))
-        nice = [k for k in facts.get("nice") or [] if k in have]
-        if nice:
-            s += min(5, len(nice))
-        req, yrs = facts.get("years"), member["profile"].get("years_experience", 0) or 0
+                reasons.append("missing: " + ", ".join(it["name"] for it in miss[:5]))
+        else:
+            cov = 0.5                         # the post names no skills: neither a match nor a mismatch
+            reasons.append("post names no specific skills")
+        s += int(60 * cov) - 20
+        s += min(5, sum(1 for it in preferred if shows(it, shown, words)))
+        req, yrs = req_years, member["profile"].get("years_experience", 0) or 0
         if req:
             if yrs + 0.5 >= req:
                 s += 4
@@ -374,7 +446,9 @@ def score_job(job, member, lane_pats, today, facts=None):
     return max(0, min(100, s + 20)), reasons
 
 
-def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_check=400, read_more=300):
+def match_member(con, member, day=None, days=None, log=print, enrich=15, read_max=600, texts=None):
+    """texts: {url_key: post} the scan downloaded with the boards' lists, so Claude reads those posts without fetching them.
+    read_max: posts fetched at most (for the board, and again for Claude) in one run; the rest wait for the next run."""
     today = config.today()
     day = day or con.execute("SELECT max(last_seen) d FROM jobs WHERE source NOT IN ('manual','quickbid')").fetchone()["d"]
     if not day:
@@ -383,13 +457,14 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     prefs = dict(default_prefs(member["profile"]), **{k: v for k, v in member["prefs"].items() if v not in (None, "")})
     if days:
         prefs["days"] = days
-    member = dict(member, prefs=prefs)
+    member = dict(member, prefs=prefs, _evidence=evidence(member))
     lanes = prefs.get("lanes") or member["profile"].get("lanes") or ["backend"]
     lane_pats = _lane_pattern(lanes)
     reasons = Counter()
     hits, rejected = [], set()          # rejected: seen in this scan and failed a real test (not just the date window)
     from . import facts as F
     known = F.load(con)                  # description facts, computed once per scan for every engineering job
+    claude = RQ.available()
     board = board_dates(con, day)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
@@ -401,7 +476,10 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
             first = board.get(dedupe_key(job["company"], job["title"]))
             if first and first < job["posted"][:10]:
                 job["posted"] = first           # feeds re-date jobs they list again: the company's own board knows the real date
-        sc, why = score_job(job, member, lane_pats, scan_day, known.get(job["id"]))
+        f = known.get(job["id"])
+        if claude and f and "req" not in f:
+            f = dict(f, must=[], nice=[], years=None)   # Claude reads this post below: the rules' skills don't drop it first
+        sc, why = score_job(job, member, lane_pats, scan_day, f)
         if sc is None:
             reasons[why] += 1
             if why != "old":
@@ -416,30 +494,39 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
     def unknown_place(job):          # "Remote" with no country, region or "worldwide"
         t = f"{job.get('location') or ''} {job['title']}"
         return not any(p.search(t) for p in COUNTRY.values()) and not WORLDWIDE.search(t)
-    # jobs whose description didn't come with the board list (Workday, SmartRecruiters, ...): read every one that could
-    # make the list, so "remote" on the board is checked against the post itself (a hybrid job can carry a remote flag)
+    # every job that could make the list is read first: its post when the board's list didn't bring it (Workday,
+    # SmartRecruiters, ...), so "remote" on the board is checked against the post itself, then what the post requires
     min_score = int(prefs.get("min_score", 40))
-    need = [it for it in uniq[:enrich * 4] if it[2]["id"] not in known]
-    need += [it for it in uniq[enrich * 4:] if it[0] >= min_score and it[2]["id"] not in known][:read_more]
-    # and the "Remote" jobs that don't say where, for every member: the post says who can apply
-    need += [it for it in uniq[enrich * 4:] if it[2]["id"] not in known and unknown_place(it[2])][:geo_check]
-    fetched = _prefetch_jds(con, [it[2] for it in need])
-    new_facts = []
-    for it in need:
-        text = storage.get_jd(con, it[2]["id"])
+    need = [it[2] for it in uniq if it[2]["id"] not in known][:read_max]
+    fetched, failed = _prefetch_jds(con, need)
+    new_facts = {}
+    for j in need:
+        text = storage.get_jd(con, j["id"])
         if text:
-            f = F.analyze(text, it[2]["title"])
-            known[it[2]["id"]] = f
-            new_facts.append((it[2]["id"], f))
-            sc, why = score_job(it[2], member, lane_pats, scan_day, f)          # score again, now with the description
-            if sc is None:
-                reasons[why] += 1
-                rejected.add(it[2]["id"])
-                it[0] = -1
-            else:
-                it[0], it[1] = sc, why
+            known[j["id"]] = new_facts[j["id"]] = F.analyze(text, j["title"])
+    read = 0
+    if claude:                           # Claude reads what each post requires, once per job for every member
+        todo = [[it[2], (texts or {}).get(it[2].get("url_key") or storage.url_key(it[2]["url"])) or storage.get_jd(con, it[2]["id"])]
+                for it in uniq if it[2]["id"] in known and "req" not in known[it[2]["id"]]]
+        more = [j for j, text in todo if not text][:read_max]
+        if more:
+            _prefetch_jds(con, more)
+            todo = [[j, text or storage.get_jd(con, j["id"])] for j, text in todo]
+        got = RQ.read_all([(j["id"], j["title"], text) for j, text in todo if text])
+        for jid, r in got.items():
+            known[jid] = new_facts[jid] = dict(known[jid], req=r)
+        read = len(got)
     if new_facts:
-        F.save(con, new_facts, day)
+        F.save(con, list(new_facts.items()), day)
+    for it in uniq:                      # score again, now with what the posts say; a post that wasn't read isn't listed
+        f = known.get(it[2]["id"])
+        sc, why = score_job(it[2], member, lane_pats, scan_day, f) if f else (None, "unread")
+        if sc is None:
+            reasons[why] += 1
+            rejected.add(it[2]["id"])
+            it[0] = -1
+        else:
+            it[0], it[1] = sc, why
     uniq = sorted([it for it in uniq if it[0] >= 0], key=lambda x: -x[0])
     # application forms of the top candidates (Greenhouse API, Lever /apply; Ashby forbids it in robots.txt)
     from . import forms
@@ -533,12 +620,14 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, geo_che
                     item[0] = max(0, min(100, int(item[0] + (sim - 0.55) * 40)))
                     why.append(f"meaning match {sim:.2f}")
     if fetched:
-        log(f"  {config.who(member['slug'])}: read {fetched} job posts")
+        log(f"  {config.who(member['slug'])}: read {fetched} job posts" + (
+            f" ({sum(failed.values())} couldn't be read: " + ", ".join(f"{k} {v}" for k, v in failed.most_common(5)) + ")"
+            if failed else ""))
+    if read:
+        log(f"  {config.who(member['slug'])}: Claude read what {read} jobs require")
     stamp = str(today)
     new = best = 0
     for sc, why, job in uniq:
-        if job["id"] not in known and "remote" in place_ok(job.get("location") or "", job["title"], prefs)[1]:
-            why.append("post not read: open it to check it's really remote")
         if sc < min_score:
             reasons["low score"] += 1
             rejected.add(job["id"])
@@ -637,15 +726,17 @@ def _dedupe(hits, reasons):
     return out
 
 
-def match_all(days=None, log=print):
+def match_all(days=None, log=print, texts=None):
     out = []
     with storage.connect() as con:
         for m in storage.members(con):
-            out.append(match_member(con, m, days=days, log=log))
+            out.append(match_member(con, m, days=days, log=log, texts=texts))
     return out
 
 
 REASON_TEXT = {"clearance": "Needs a security clearance", "title": "Title outside your lanes", "level": "Wrong level for your experience", "type": "Not an engineering job",
+               "core": "Missing a core requirement", "skills": "Missing most of the required skills",
+               "years": "Asks for many more years than you have", "unread": "Job post couldn't be read",
                "abroad": "Outside your countries", "place": "Not remote and not in your home area", "old": "Older than your date window",
                "duplicate": "Same job on another board", "low score": "Below your minimum score", "excluded word": "Has a word you excluded",
                "avoided company": "Company you avoid"}

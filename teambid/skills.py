@@ -190,6 +190,17 @@ def find(text, with_counts=False, trusted=False):
     return found if with_counts else list(found)
 
 
+@lru_cache(maxsize=1)
+def _names():
+    return {a.lower(): name for name, (cat, aliases) in S.items() for a in [name] + aliases}
+
+
+def canonical(term):
+    """The skill a term names on its own ('golang' -> 'Go', 'k8s' -> 'Kubernetes'), or ''. 'Python native extensions'
+    is not Python: only the whole term counts."""
+    return _names().get((term or "").strip().lower(), "")
+
+
 def category(name):
     return S.get(name, ("other", []))[0]
 
