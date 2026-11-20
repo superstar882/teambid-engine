@@ -114,3 +114,11 @@ class ReposterTest(unittest.TestCase):
         self.assertTrue(M.is_reposter("Jobgether"))
         self.assertFalse(M.is_reposter("Veeva"))
         self.assertFalse(M.is_reposter(""))
+
+
+class BlockedCompanyTest(unittest.TestCase):
+    def test_companies_the_team_removed(self):
+        for name in ("RemoteJobsOne", "remotejobsone", "Micro1", "micro1", "micro1 Inc."):
+            self.assertTrue(M.is_blocked(name), name)
+        for name in ("Microsoft", "Micron", "Remote", "", None):
+            self.assertFalse(M.is_blocked(name), name)

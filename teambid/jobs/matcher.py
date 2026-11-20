@@ -468,6 +468,10 @@ def match_member(con, member, day=None, days=None, log=print, enrich=15, read_ma
     board = board_dates(con, day)
     for job in con.execute("SELECT * FROM jobs WHERE last_seen=?", (day,)):
         job = dict(job)
+        if is_blocked(job["company"]):
+            reasons["blocked company"] += 1
+            rejected.add(job["id"])
+            continue
         if job.get("ats") == "feed" and is_reposter(job["company"]):
             reasons["reposted"] += 1
             rejected.add(job["id"])
@@ -695,6 +699,16 @@ def is_reposter(company):
     return any(c.startswith(r) for r in REPOSTERS)
 
 
+# Companies never listed for anyone, from any source (the team's choice, 2026-11-20): a job-repost site and a
+# contract-talent marketplace, both through job feeds. A member's own "companies to avoid" is in their preferences.
+BLOCKED = ("remotejobsone", "micro1")
+
+
+def is_blocked(company):
+    c = re.sub(r"[^a-z0-9]", "", (company or "").lower())
+    return any(c.startswith(b) for b in BLOCKED)
+
+
 _BOARD_DATES = {}
 
 
@@ -739,7 +753,7 @@ REASON_TEXT = {"clearance": "Needs a security clearance", "title": "Title outsid
                "years": "Asks for many more years than you have", "unread": "Job post couldn't be read",
                "abroad": "Outside your countries", "place": "Not remote and not in your home area", "old": "Older than your date window",
                "duplicate": "Same job on another board", "low score": "Below your minimum score", "excluded word": "Has a word you excluded",
-               "avoided company": "Company you avoid"}
+               "avoided company": "Company you avoid", "blocked company": "Company the team removed"}
 
 
 def write_member_report(con, member, day, reasons, total):
