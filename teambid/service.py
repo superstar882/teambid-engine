@@ -85,7 +85,11 @@ def update_member(slug, profile=None, prefs=None):
 
 
 def rematch(slug, days=None):
+    """slug "all": the whole team in one process, so Claude's reading budget (reqs.RUN_MINUTES) is shared, not per member.
+    Results name members by their log code (the Actions logs are public)."""
     with storage.connect() as con:
+        if slug == "all":
+            return [{**matcher.match_member(con, m, days=days), "name": config.who(m["slug"])} for m in storage.members(con)]
         m = storage.member(con, slug)
         return matcher.match_member(con, m, days=days, log=lambda *_: None)
 

@@ -15,12 +15,22 @@ from . import local_ai
 from . import skills as SK
 from . import writing
 
-REQ_HEAD = re.compile(r"(?im)^\W*(requirements|required|qualifications|minimum qualifications|basic qualifications|what you('|’)ll (bring|need)|"
-                      r"what we('|’)re looking for|you have|must[- ]haves?|who you are|about you|skills|your experience)\W*$")
+# section headings, also with markdown around them ("#### **What you bring:**")
+REQ_HEAD = re.compile(r"(?im)^\W*(requirements|required|qualifications|(minimum|basic|key|required) qualifications|required skills|"
+                      r"required experience|what you('|’)ll (bring|need)|what you (will )?(bring|need)|you('|’)ll need|"
+                      r"what we('|’)re looking for|what we are looking for|what we look for|who we('|’)re looking for|"
+                      r"who we are looking for|what we need to see|you have|must[- ]haves?|who you are|about you|skills|"
+                      r"your (experience|expertise|profile|skills|background|qualifications)|is this you|"
+                      r"what makes you a (great|good|strong) (fit|match|candidate)|(you('|’)re|you are|you might be|you may be) a "
+                      r"(good |great |strong )?(fit|match)( if)?|(the )?ideal candidate( will have)?|"
+                      r"(skills|requirements|qualifications|experience) (and|&) (experience|qualifications|requirements|skills))\W*$")
 PREF_HEAD = re.compile(r"(?im)^\W*(preferred|nice[- ]to[- ]haves?|bonus( points)?|preferred qualifications|pluses|it('|’)s a plus|"
-                       r"good to have|desired|extra credit)\W*.*$")
-OTHER_HEAD = re.compile(r"(?im)^\W*(benefits|perks|about us|about the company|compensation|salary|equal opportunity|what we offer|"
-                        r"responsibilities|what you('|’)ll do|the role|about the role)\W*$")
+                       r"good to have|desired|extra credit|ways to stand out|what (will )?makes? you stand out|even better if|"
+                       r"it would be (great|nice|a plus))\W*.*$")
+OTHER_HEAD = re.compile(r"(?im)^\W*(benefits|perks|about us|about the (company|team|job|position)|compensation|salary|"
+                        r"(salary|pay) range|total rewards|equal opportunity|what we offer|(key |your )?responsibilities|"
+                        r"what you('|’)ll do|what you('|’)ll be doing|what you will (be )?do(ing)?|a typical day|the role|"
+                        r"about the role|who we are|why (join )?us|our (benefits|perks|culture|mission|values))\W*$")
 YEARS = re.compile(r"(?i)(\d{1,2})\s*(?:[-–]\s*\d{1,2})?\s*\+?\s*(?:years|yrs)")
 _CUR = r"(?:\$|€|£|USD|EUR|GBP|CHF)"
 SALARY = re.compile(rf"{_CUR}\s?\d{{2,3}}(?:[,.]\d{{3}})?\s?[kK]?\s?(?:-|–|to)\s?{_CUR}?\s?\d{{2,3}}(?:[,.]\d{{3}})?\s?[kK]?(?:\s?{_CUR})?|"

@@ -45,11 +45,14 @@ everyone on a team, and most of it can be automated, honestly.
    4dayweek, Djinni, Get on Board, Jobindex, JobTech and more).
 2. **Understand.** For every engineering job it reads the description: required and nice-to-have skills, years of
    experience, the countries or time zones it is open to, "US residents only" style limits, and office/hybrid wording.
+   For every job that could reach someone's list, Claude also reads the post once and lists what it requires, quoting
+   the post for each requirement, so a "What we need to see" section or "device drivers" is not missed.
 3. **Double-check.** Where the job system allows it, it also reads the application form, which often says what the
    post doesn't: "Are you legally authorized to work in the United States?", "Do you hold a work permit for France?",
    "Hybrid 3 days a week?", "Do you speak fluent French?".
 4. **Match.** For each member: engineering roles at their level, posted yesterday or today, remote and open to their
-   country, scored mostly on how many required skills their resume shows, then years and title. Duplicates from
+   country, scored mostly on how many of the post's requirements their resume shows, then years and title. A job whose
+   post couldn't be read, or that is built around something their resume doesn't show, is left out. Duplicates from
    several sources are merged.
 5. **Share.** Results go to a team web page, encrypted with the team password.
 6. **Apply.** On the page, a member clicks **Tailor**, picks the writer (Claude Haiku, Claude Sonnet or a free
@@ -65,7 +68,8 @@ everyone on a team, and most of it can be automated, honestly.
   adds a number, tool or result the resume doesn't have is rejected.
 - **Fair use of job sites.** Only official APIs and public feeds whose terms allow automated reading. Sites that forbid
   it are not used (for example Ashby's application-form data, Gupy, JOIN, No Fluff Jobs, Just Join IT).
-- **Free to run.** GitHub Actions (public repo), GitHub Pages and Supabase's free tier. A Claude API key is optional.
+- **Free to run.** GitHub Actions (public repo), GitHub Pages and Supabase's free tier. A Claude API key is optional
+  (with one, reading the job posts costs about $1-2 a day with Claude Haiku).
 
 ## Getting started
 
@@ -87,6 +91,7 @@ everyone on a team, and most of it can be automated, honestly.
 | Job feeds | 14 |
 | Open jobs checked | ~630,000 |
 | Job descriptions analyzed | ~90,000 (new ones each day; each job once) |
+| Job posts read by Claude | ~850 a day (the new ones that could reach someone's list) |
 | Application forms read | ~50,000 (new ones each day) |
 | Time | ~35-70 minutes in the cloud, nobody's computer needed |
 
@@ -101,8 +106,9 @@ everyone on a team, and most of it can be automated, honestly.
 | Daily scan | `.github/workflows/scan.yml`, `teambid/jobs/scanner.py` | Pulls the encrypted workspace, applies team changes, downloads all boards (32 workers, checkpointed), analyzes new descriptions on all cores, reads new forms (time-boxed), matches everyone, publishes, pushes the workspace back (plus a dated daily copy) |
 | Job systems | `teambid/jobs/ats.py`, `feeds.py` | 13 job systems (EU Lever host fallback, Personio language fallback, BambooHR detail for date and description) and 14 feeds |
 | Job facts | `teambid/jobs/facts.py` | Per job: must/nice skills, years, regions, work-rights limits, US-only wording, hybrid/office wording; kept as compact JSON (not the text) |
+| Job requirements | `teambid/jobs/reqs.py` | Claude Haiku reads each post that could be matched, once: required and preferred items with the terms a resume shows them by, core ones, years; only items quoted from the post are kept |
 | Forms | `teambid/jobs/forms.py` | Greenhouse API (`questions=true`), Lever `/apply` (1 request/s, its Crawl-delay), Workable `/api/v1/jobs/{code}/form` |
-| Matching | `teambid/jobs/matcher.py` | Level, posting window, place rules, skills coverage, years, duplicates, form and post limits |
+| Matching | `teambid/jobs/matcher.py` | Level, posting window, place rules, reading every candidate's post, requirements against the resume, years, duplicates, form and post limits |
 | Company offices | `teambid/jobs/company.py` | Where a company is based, from the offices in its job posts |
 | Team page | `teambid/static/results.html`, `export.py` | One encrypted file, decrypted in the browser (Web Crypto, PBKDF2 600k) |
 | Team progress and requests | `teambid/progress.py`, `admin.py`, `docs.py` | Append-only encrypted rows in Supabase: statuses, notes, add/edit/delete member, document requests |
@@ -116,9 +122,15 @@ everyone on a team, and most of it can be automated, honestly.
 - **Place:** remote only (unless on-site in a home city is allowed). Members who can't work in the US keep a
   "remote" job only if its post or form shows it is open to their region; posts or forms limited to other countries,
   hybrid or office work are dropped.
-- **Skills:** with a description, any engineering title can match; required skills on the resume carry most of the
-  score, and posts needing several skills the resume lacks (under 40% of 3+) are dropped. Without a description the
-  title must fit the member's lanes or target titles.
+- **Read first:** every job that could make the list is read before it is scored. Posts the board's list didn't bring
+  are fetched (2 at a time per site, retried); a job whose post still can't be read isn't listed and is read again on
+  the next run.
+- **Requirements:** with a Claude key, Claude lists what each post requires; without one (or when a reading fails) the
+  skills found under the post's requirement headings are used. Each requirement counts as met when the member's
+  skills or resume text show it (any one of its terms: "Rust, Python, Go or Node.js" needs one of the four).
+  A missing core requirement (what the job is built around, like its main language) drops the job, and so does
+  meeting under half of 3+ requirements (40% with the rules). Met requirements carry most of the score; any
+  engineering title can match on them.
 - **Years:** asking 3+ more years than the member has drops the job; a smaller gap lowers the score.
 - **Duplicates:** the same role from several sources or locations is shown once.
 

@@ -205,8 +205,11 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
         with storage.connect() as con:
             new_facts, kept = facts.build(con, all_jobs, day, log=log)
             facts.prune(con, day)
+        texts = {}                                   # the posts, for Claude to read what the matched jobs require
         for j in all_jobs:
-            j.pop("description", None)
+            text = j.pop("description", None)
+            if text and j.get("url"):
+                texts[storage.url_key(j["url"])] = text
         timing["facts"] = time.monotonic() - t1
         log(f"analyzed {new_facts:,} new job descriptions ({kept:,} known from earlier scans) in {timing['facts'] / 60:.1f} min")
         t1 = time.monotonic()
@@ -225,7 +228,8 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
         except Exception as e:                       # nice to have: never let it stop a scan
             problems.append(f"company offices: {type(e).__name__} {str(e)[:100]}")
         t1 = time.monotonic()
-        match_stats = matcher.match_all(days=days, log=log)
+        match_stats = matcher.match_all(days=days, log=log, texts=texts)
+        texts.clear()
         timing["match"] = time.monotonic() - t1
         down = net.stop()
         secs = time.monotonic() - t_start

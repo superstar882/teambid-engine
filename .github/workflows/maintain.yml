@@ -22,7 +22,7 @@ concurrency:
 jobs:
   maintain:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90           # rematch-all: Claude reads the jobs' posts (at most TEAMBID_REQ_MINUTES)
     env:
       TEAMBID_CLOUD: "1"
       GH_TOKEN: ${{ github.token }}
@@ -67,16 +67,17 @@ jobs:
       - name: Team changes from the results page
         continue-on-error: true          # never let a bad request block the scan
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes; only this step
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # Claude reads new members' resumes and their jobs' posts
         run: python tb.py admin apply
 
       - name: Run task
         env:
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # reparse-all: Claude reads each resume again
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}     # reparse-all: each resume again; rematch-all: the jobs' posts
+          TEAMBID_REQ_MINUTES: "30"      # the daily scan reads the rest, from the posts it downloads anyway
         run: |
           case "${{ inputs.task }}" in
             reparse-all) python tb.py reparse all ;;
-            rematch-all) for m in $(python tb.py members | awk '{print $1}'); do python tb.py match "$m"; done ;;
+            rematch-all) python tb.py match all ;;      # one process: one reading budget for the whole team
             publish|admin) true ;;
           esac
 

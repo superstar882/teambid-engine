@@ -11,11 +11,12 @@ the text (330k descriptions would not fit in the cloud copy). Every member is sc
   us_only       "US residents only", "US time zones", ...
   in_office / full_remote / no_sponsor
   form          set once the application form was read: {"questions": [...], "restrict": [...], "us_only": bool}
+  req           set once Claude read what the post requires (reqs.py); the matcher prefers it to must / nice
 """
 import json
 import re
 
-VERSION = 2          # bump when analyze() learns something new: facts from older versions are rebuilt when the post comes back
+VERSION = 3          # bump when analyze() learns something new: facts from older versions are rebuilt when the post comes back
 
 ENG_TITLE = re.compile(r"(?i)\b(engineer(ing)?|developer|programmer|architect|SRE|site reliability|devops|dev ?ops|"
                        r"data scientist|scientist|machine learning|ML|AI|analytics engineer|technical staff|tech lead|"
@@ -98,11 +99,12 @@ def build(con, jobs, day, log=print, processes=None):
         for r in con.execute(f"SELECT id, url_key FROM jobs WHERE url_key IN ({','.join('?' * len(part))})", part):
             ids[r["url_key"]] = r["id"]
     have, old = set(), {}
-    for job_id, v, form in con.execute("SELECT job_id, json_extract(data, '$.v'), json_extract(data, '$.form') FROM job_facts"):
+    for job_id, v, form, req in con.execute("SELECT job_id, json_extract(data, '$.v'), json_extract(data, '$.form'), "
+                                            "json_extract(data, '$.req') FROM job_facts"):
         if v == VERSION:
             have.add(job_id)
-        elif form:
-            old[job_id] = json.loads(form)        # keep what the application form said
+        elif form or req:                         # keep what the application form said and what Claude read
+            old[job_id] = {k: json.loads(x) for k, x in (("form", form), ("req", req)) if x}
     args = [(ids[k], todo[k]["description"], todo[k].get("title", "")) for k in keys if k in ids and ids[k] not in have]
     kept = sum(1 for k in keys if k in ids and ids[k] in have)
     if not args:
@@ -115,7 +117,6 @@ def build(con, jobs, day, log=print, processes=None):
         log(f"  (analysis in one process: {type(e).__name__})")
         rows = [r for r in map(_work, args) if r[1]]
     for job_id, f in rows:
-        if job_id in old:
-            f["form"] = old[job_id]
+        f.update(old.get(job_id, {}))
     save(con, rows, day)
     return len(rows), kept
