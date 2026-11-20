@@ -14,7 +14,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from .. import config, storage
-from . import ats, discover, facts, feeds, matcher
+from . import ats, boardfind, discover, facts, feeds, matcher
 
 LOCK = config.CACHE / "scan-running.txt"      # holds {"pid", "started"} while a scan runs
 MARK = config.CACHE / "last-scan.txt"
@@ -112,6 +112,13 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
         with storage.connect() as con:
             run_id = storage.start_run(con, "scan")
             queries = team_queries(con)
+        if not (only or per_ats or limit):          # more company boards from public lists of job links (boardfind.py)
+            t1 = time.monotonic()
+            try:
+                boardfind.run(day, log=log)
+            except Exception as e:                   # nice to have: never let it stop a scan
+                problems.append(f"board finder: {type(e).__name__} {str(e)[:100]}")
+            timing["board finder"] = time.monotonic() - t1
         boards = load_boards(only, per_ats)
         found_names = discover.boards()              # found boards carry the feed's company name, so copies compare
         if limit:
@@ -171,7 +178,8 @@ def run(days=2, only=None, limit=None, log=print, workers=32, per_ats=None):
                          ("Himalayas by country", lambda: feeds.himalayas_countries(queries)), ("Jobicy", feeds.jobicy),
                          ("4dayweek", feeds.fourdayweek), ("Working Nomads", feeds.workingnomads), ("Get on Board", feeds.getonboard),
                          ("Djinni", feeds.djinni), ("Jobindex DK", feeds.jobindex_dk), ("JobTech SE", feeds.jobtech_se),
-                         ("GitHub BR", feeds.github_br), ("We Work Remotely", feeds.weworkremotely)):
+                         ("GitHub BR", feeds.github_br), ("We Work Remotely", feeds.weworkremotely),
+                         ("Arbeitnow", feeds.arbeitnow)):
             t1 = time.monotonic()
             try:
                 js = fn()

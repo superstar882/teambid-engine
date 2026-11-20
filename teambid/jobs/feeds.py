@@ -257,3 +257,19 @@ def weworkremotely(cats=("remote-programming-jobs", "remote-full-stack-programmi
                         "url": url, "posted": iso(it.findtext("pubDate")), "description": _txt(it.findtext("description")),
                         "source": "We Work Remotely", "ats": "feed"})
     return out
+
+
+def arbeitnow(pages=10):
+    """arbeitnow.com free public API (jobs from companies' job systems, mostly Germany and Europe; they ask for no abuse
+    and a link back: every job keeps its Arbeitnow link). Remote jobs only: the rest are offices in Germany."""
+    out = []
+    for p in range(1, pages + 1):
+        d = get("https://www.arbeitnow.com/api/job-board-api", params={"page": p}) or {}
+        for j in d.get("data") or []:
+            if j.get("remote") and j.get("url"):
+                out.append({"company": j.get("company_name", ""), "title": j.get("title", ""),
+                            "location": f"Remote {j.get('location') or ''}".strip(), "url": j["url"], "posted": iso(j.get("created_at")),
+                            "description": _txt(j.get("description")), "source": "Arbeitnow", "ats": "feed"})
+        if not (d.get("links") or {}).get("next"):
+            break
+    return out

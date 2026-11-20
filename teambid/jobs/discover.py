@@ -20,13 +20,14 @@ REGISTRY = config.WORKSPACE / "found-boards.json"
 RETRY_DAYS = 30
 # most common first; Workday and iCIMS need a tenant + site name, which can't be guessed from the company name
 SYSTEMS = ("greenhouse", "lever", "ashby", "workable", "smartrecruiters", "recruitee", "breezy", "bamboohr",
-           "teamtailor", "personio", "pinpoint", "zohorecruit")
+           "teamtailor", "personio", "pinpoint", "zohorecruit", "rippling", "gem")
 CAREERS = {"greenhouse": "https://job-boards.greenhouse.io/{}", "lever": "https://jobs.lever.co/{}",
            "ashby": "https://jobs.ashbyhq.com/{}", "workable": "https://apply.workable.com/{}",
            "smartrecruiters": "https://jobs.smartrecruiters.com/{}", "recruitee": "https://{}.recruitee.com",
            "breezy": "https://{}.breezy.hr", "bamboohr": "https://{}.bamboohr.com/careers",
            "teamtailor": "https://{}.teamtailor.com/jobs", "personio": "https://{}.jobs.personio.de",
-           "pinpoint": "https://{}.pinpointhq.com", "zohorecruit": "https://{}.zohorecruit.com/jobs/Careers"}
+           "pinpoint": "https://{}.pinpointhq.com", "zohorecruit": "https://{}.zohorecruit.com/jobs/Careers",
+           "rippling": "https://ats.rippling.com/{}/jobs", "gem": "https://jobs.gem.com/{}"}
 SUFFIX = re.compile(r"(?i)\b(inc|llc|ltd|limited|gmbh|corp|corporation|co|company|holdings?|group|plc|s\.?a|b\.?v|ag|"
                     r"technologies|technology|labs?|software|solutions)\b\.?")
 

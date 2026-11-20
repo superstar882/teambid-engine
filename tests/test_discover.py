@@ -84,13 +84,14 @@ class FullScanTest(unittest.TestCase):
     def scan(self, **kw):
         tmp = Path(tempfile.mkdtemp())
         names = ("himalayas", "remoteok", "remotive", "hackernews", "himalayas_countries", "jobicy", "fourdayweek",
-                 "workingnomads", "getonboard", "djinni", "jobindex_dk", "jobtech_se", "github_br", "weworkremotely")
+                 "workingnomads", "getonboard", "djinni", "jobindex_dk", "jobtech_se", "github_br", "weworkremotely", "arbeitnow")
         feed = [{"company": "Acme", "title": "Backend Engineer", "url": "https://feed/1", "ats": "feed", "source": "Himalayas"}]
         patches = [
             mock.patch.object(config, "CACHE", tmp), mock.patch.object(config, "DB_PATH", tmp / "teambid.db"),
             mock.patch.object(scanner, "LOCK", tmp / "lock"), mock.patch.object(scanner, "MARK", tmp / "mark"),
             mock.patch.object(scanner, "load_boards", return_value=[("greenhouse", "other")]),
             mock.patch.object(scanner.discover, "boards", return_value={}),
+            mock.patch.object(scanner.boardfind, "run", return_value=0),
             mock.patch.object(scanner.ats, "fetch", return_value=[{"company": "Other", "title": "Data Engineer",
                                                                     "url": "https://b/1", "ats": "greenhouse"}]),
             mock.patch.multiple(scanner.feeds, **{n: mock.Mock(return_value=list(feed) if n == "himalayas" else []) for n in names}),
